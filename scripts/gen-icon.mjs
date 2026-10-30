@@ -6,8 +6,8 @@
  *   build/icon.ico  — Windows size ladder 16-256: BMP entries up to 128,
  *                     PNG-compressed 256 (the only size the ICO spec allows
  *                     as PNG)
- *   build/icon.icns — macOS size ladder 16-1024 incl. Retina @2x variants,
- *                     PNG-based (what iconutil itself emits)
+ *   build/icon.icns — macOS size ladder 16-1024 incl. Retina @2x variants:
+ *                     classic RLE RGB + mask at 16/32, PNG above
  *   installerHeader.bmp / installerSidebar.bmp — NSIS assisted-wizard art
  * Windows surfaces (Start menu previews, taskbar, UAC, the NSIS installer)
  * each request one specific size; the ico must carry that size natively or
@@ -28,8 +28,20 @@ const svg = readFileSync(join(root, "src", "assets", "brand", "bytune-icon.svg")
 
 /* ---------- render the badge artwork ---------- */
 
+/**
+ * The tile is near-black, so on dark taskbars, Docks, the installer sidebar
+ * and dark browser tabs it vanishes and only the white mark shows. A faint
+ * light rim keeps the tile's edge visible there; it is at least 1px so the
+ * small sizes keep it too.
+ */
+function withRim(height) {
+  const w = (Math.max(1, height / 96) * 512) / height; // SVG units (512 viewBox)
+  const rim = `<rect x="${w / 2}" y="${w / 2}" width="${512 - w}" height="${512 - w}" rx="${104 - w / 2}" fill="none" stroke="#fff" stroke-opacity="0.22" stroke-width="${w}"/>`;
+  return svg.replace("</svg>", `${rim}</svg>`);
+}
+
 function renderMark(height) {
-  const resvg = new Resvg(svg, {
+  const resvg = new Resvg(withRim(height), {
     fitTo: { mode: "height", value: height },
     background: "rgba(0,0,0,0)",
     // Pure-path artwork, no <text>: skipping the system font scan keeps a
@@ -46,6 +58,14 @@ function renderMark(height) {
   // exhausts memory.
   const rgba = Buffer.alloc(srcW * srcH * 4);
   rgba.set(rendered.pixels); // RGBA, width*height*4
+  // resvg hands back premultiplied alpha; every encoder below writes straight
+  // alpha, so undo it or anti-aliased edge pixels come out too dark.
+  for (let i = 0; i < rgba.length; i += 4) {
+    const a = rgba[i + 3];
+    if (a > 0 && a < 255) {
+      for (let c = 0; c < 3; c++) rgba[i + c] = Math.min(255, Math.round((rgba[i + c] * 255) / a));
+    }
+  }
   return { width: srcW, height: srcH, rgba };
 }
 
@@ -197,11 +217,17 @@ function buildICO() {
   return Buffer.concat([header, ...entries, ...images]);
 }
 
-/* ---------- ICNS: PNG chunks, incl. Retina @2x variants ---------- */
+/* ---------- ICNS: classic RLE 16/32 + PNG chunks incl. Retina @2x ---------- */
+
+// 16 and 32 px use the classic RGB + 8-bit mask pairs: as PNG (icp4/icp5)
+// they are valid ICNS but render scrambled when the icns is an app's icon —
+// the green noise ByTune showed in Force Quit, Finder list view and menus.
+const ICNS_LEGACY = [
+  ["is32", "s8mk", 16],
+  ["il32", "l8mk", 32],
+];
 
 const ICNS_TYPES = [
-  ["icp4", 16], // 16x16
-  ["icp5", 32], // 32x32
   ["ic07", 128], // 128x128
   ["ic08", 256], // 256x256
   ["ic09", 512], // 512x512
@@ -215,14 +241,48 @@ const ICNS_TYPES = [
 /** Apple's icon grid: the tile occupies 824 of the 1024px canvas. */
 const MAC_CONTENT = 824 / 1024;
 
+function icnsChunk(type, data) {
+  const head = Buffer.alloc(8);
+  head.write(type, 0, "ascii");
+  head.writeUInt32BE(8 + data.length, 4);
+  return Buffer.concat([head, data]);
+}
+
+/** icns PackBits: 0x80+(n-3) then a byte = that byte n (3-130) times; n-1 then n (1-128) literal bytes. */
+function packBits(bytes) {
+  const out = [];
+  let i = 0;
+  while (i < bytes.length) {
+    let run = 1;
+    while (i + run < bytes.length && run < 130 && bytes[i + run] === bytes[i]) run++;
+    if (run >= 3) {
+      out.push(0x80 + run - 3, bytes[i]);
+      i += run;
+      continue;
+    }
+    const start = i;
+    while (i < bytes.length && i - start < 128 && !(bytes[i] === bytes[i + 1] && bytes[i] === bytes[i + 2])) i++;
+    out.push(i - start - 1, ...bytes.subarray(start, i));
+  }
+  return Buffer.from(out);
+}
+
+/** RGB channels packed one after another, alpha as the uncompressed mask. */
+function legacyChunks(rgbType, maskType, size) {
+  const px = renderFit(size, MAC_CONTENT);
+  const n = size * size;
+  const plane = (c) => Buffer.from(Array.from({ length: n }, (_, p) => px[p * 4 + c]));
+  const rgb = Buffer.concat([0, 1, 2].map((c) => packBits(plane(c))));
+  // Readers take a payload of exactly size²·3 bytes as raw, uncompressed RGB.
+  if (rgb.length === n * 3) throw new Error(`${rgbType}: packed size collides with the raw size`);
+  return [icnsChunk(rgbType, rgb), icnsChunk(maskType, plane(3))];
+}
+
 function buildICNS() {
-  const chunks = ICNS_TYPES.map(([type, size]) => {
-    const data = encodePNG(size, size, renderFit(size, MAC_CONTENT));
-    const head = Buffer.alloc(8);
-    head.write(type, 0, "ascii");
-    head.writeUInt32BE(8 + data.length, 4);
-    return Buffer.concat([head, data]);
-  });
+  const chunks = [
+    ...ICNS_LEGACY.flatMap(([rgbType, maskType, size]) => legacyChunks(rgbType, maskType, size)),
+    ...ICNS_TYPES.map(([type, size]) => icnsChunk(type, encodePNG(size, size, renderFit(size, MAC_CONTENT)))),
+  ];
   const total = 8 + chunks.reduce((n, c) => n + c.length, 0);
   const header = Buffer.alloc(8);
   header.write("icns", 0, "ascii");
