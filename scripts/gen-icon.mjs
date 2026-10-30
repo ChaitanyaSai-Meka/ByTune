@@ -28,20 +28,8 @@ const svg = readFileSync(join(root, "src", "assets", "brand", "bytune-icon.svg")
 
 /* ---------- render the badge artwork ---------- */
 
-/**
- * The tile is near-black, so on dark taskbars, Docks, the installer sidebar
- * and dark browser tabs it vanishes and only the white mark shows. A faint
- * light rim keeps the tile's edge visible there; it is at least 1px so the
- * small sizes keep it too.
- */
-function withRim(height) {
-  const w = (Math.max(1, height / 96) * 512) / height; // SVG units (512 viewBox)
-  const rim = `<rect x="${w / 2}" y="${w / 2}" width="${512 - w}" height="${512 - w}" rx="${104 - w / 2}" fill="none" stroke="#fff" stroke-opacity="0.22" stroke-width="${w}"/>`;
-  return svg.replace("</svg>", `${rim}</svg>`);
-}
-
 function renderMark(height) {
-  const resvg = new Resvg(withRim(height), {
+  const resvg = new Resvg(svg, {
     fitTo: { mode: "height", value: height },
     background: "rgba(0,0,0,0)",
     // Pure-path artwork, no <text>: skipping the system font scan keeps a
