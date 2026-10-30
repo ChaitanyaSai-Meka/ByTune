@@ -9,10 +9,10 @@ notarized, Gatekeeper-clean macOS app — and what remains for the developer to 
 - **Targets**: `dmg` + `zip` for **arm64 and x64** (`npm run dist`), artifact names
   `ByTune-<version>-<arch>.dmg|.zip` in `release/`.
 - **Bundle**: `com.bytune.music`, category `public.app-category.music`,
-  dark mode supported, Retina (`NSHighResolutionCapable`), minimum macOS 11,
-  `bytune://` URL scheme declared in Info.plist.
-- **Icon**: `build/icon.png` (512×512) — electron-builder converts it to `.icns`
-  automatically at build time.
+  dark mode supported, Retina (`NSHighResolutionCapable`), minimum macOS 13
+  (the floor of the bundled Electron's binaries — CI fails a build whose
+  `LSMinimumSystemVersion` is lower), `bytune://` URL scheme declared in Info.plist.
+- **Icon**: `build/icon.icns`, generated with the other icons by `npm run icon`.
 - **Hardened Runtime** is enabled (`hardenedRuntime: true`) with a minimal
   entitlements file (`build/entitlements.mac.plist`):
   - `com.apple.security.cs.allow-jit` — required by V8 under Hardened Runtime
@@ -54,9 +54,12 @@ xcrun stapler validate release/ByTune-<version>-arm64.dmg
 codesign -dv --verbose=4 release/mac-arm64/ByTune.app
 ```
 
-Without the credentials the same command still produces **unsigned** DMG/ZIP
-artefacts — nothing is fabricated; users must bypass Gatekeeper manually
-(right-click → Open) and notarization is skipped with a warning.
+Without the credentials the same command still produces DMG/ZIP artefacts,
+**ad-hoc signed** by `scripts/after-pack.cjs` — nothing is fabricated;
+notarization is skipped with a warning and users allow the app once
+(macOS 15+: System Settings → Privacy & Security → Open Anyway; macOS 13–14:
+right-click → Open). Without that ad-hoc seal, a downloaded copy is rejected
+outright as "ByTune is damaged and can't be opened".
 
 ## Universal binary (optional)
 
@@ -71,7 +74,8 @@ the cost of download size.
 ## Testing the artefact on a clean machine (checklist)
 
 1. Copy `ByTune-<version>-arm64.dmg` to a Mac, open, drag ByTune → Applications.
-2. Launch from Finder: first-run Gatekeeper prompt (unsigned) or none (signed).
+2. Launch from Finder: first-run Gatekeeper prompt (ad-hoc signed, allowed once
+   as above — never "damaged") or none (Developer ID signed + notarized).
 3. Onboarding → Continue as guest → search → play → verify audio output.
 4. Media keys: play/pause/next from the keyboard; check the Now Playing widget
    in Control Centre shows title/artist/artwork.

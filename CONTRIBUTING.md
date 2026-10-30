@@ -7,7 +7,7 @@ Thanks for helping improve ByTune! This document covers what you need to get a d
 Prerequisites:
 
 - **Windows 10/11** to run and package the Windows edition (NSIS installer)
-- **macOS 11+** to run and package the macOS edition — `.dmg` artifacts can only be produced on macOS, and the Xcode Command Line Tools are needed for native build steps (`xcode-select --install`)
+- **macOS 13+** to run and package the macOS edition — `.dmg` artifacts can only be produced on macOS, and the Xcode Command Line Tools are needed for native build steps (`xcode-select --install`)
 - **Node.js** — an up-to-date LTS version
 - **Git**
 
@@ -42,7 +42,7 @@ Open a [GitHub issue](https://github.com/rishiteja21/ByTune/issues) and include:
 
 - What you did and what happened
 - The ByTune version (Settings → About, or the release tag)
-- Your OS and version (Windows 10/11, or macOS 11+ on Apple Silicon/Intel)
+- Your OS and version (Windows 10/11, or macOS 13+ on Apple Silicon/Intel)
 
 Playback issues are often upstream changes on YouTube's side — mention whether playback fails for everything or just some tracks.
 

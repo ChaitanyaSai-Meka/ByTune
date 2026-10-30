@@ -178,7 +178,7 @@ No. ByTune is an independent, open-source desktop player that uses YouTube Music
 
 **Which platforms does it run on?**
 
-Windows 10 and 11 (64-bit), and macOS 11 or later on Apple Silicon and Intel. The Windows edition is the more mature of the two; macOS builds are newer.
+Windows 10 and 11 (64-bit), and macOS 13 Ventura or later on Apple Silicon and Intel. The Windows edition is the more mature of the two; macOS builds are newer.
 
 **Can I save songs for offline listening?**
 
@@ -204,7 +204,20 @@ Yes — any track can be downloaded as a `.m4a` file, with your choice of folder
 
 Also available on the [website](https://bytune.space/) and the [releases page](https://github.com/rishiteja21/ByTune/releases).
 
-**macOS 11+ (Apple Silicon & Intel)** — the macOS edition is new. DMG and ZIP artifacts are attached to the [releases page](https://github.com/rishiteja21/ByTune/releases) as they're cut, and you can always build the current code yourself: `npm run dist:mac` produces `ByTune-<version>-arm64.dmg` / `ByTune-<version>-x64.dmg` in `release/`. On first launch of an unsigned build, right-click **ByTune.app** in Applications and choose **Open** (needed once). Signing and notarization steps live in [MAC_BUILD_AND_SIGNING.md](MAC_BUILD_AND_SIGNING.md), the distribution checklist in [DISTRIBUTION.md](DISTRIBUTION.md), and current caveats in [MAC_KNOWN_LIMITATIONS.md](MAC_KNOWN_LIMITATIONS.md).
+**macOS 13 Ventura or later (Apple Silicon & Intel)** — download the DMG for your Mac from the [releases page](https://github.com/rishiteja21/ByTune/releases) or the [website](https://bytune.space/): `-arm64` for Apple Silicon (M1 and newer), `-x64` for Intel. Not sure which you have? Apple menu → **About This Mac**: "Chip: Apple M…" is Apple Silicon, "Processor: …Intel…" is Intel. Open the DMG and drag **ByTune** into **Applications**.
+
+The app isn't notarized by Apple yet, so macOS blocks the first launch once:
+
+- **macOS 15 Sequoia and later:** open ByTune, click **Done** on the warning, then go to **System Settings → Privacy & Security**, scroll down to "ByTune was blocked…" and click **Open Anyway**.
+- **macOS 13–14:** right-click (Control-click) ByTune in Applications, choose **Open**, then **Open** again.
+
+If macOS instead says **"ByTune is damaged and can't be opened"** (builds up to v1.0.1), the download is fine — those builds weren't signed. Run this once in Terminal, then open ByTune normally:
+
+```bash
+xattr -cr /Applications/ByTune.app
+```
+
+To build it yourself, `npm run dist:mac` produces `ByTune-<version>-arm64.dmg` / `ByTune-<version>-x64.dmg` in `release/`. Signing and notarization steps live in [MAC_BUILD_AND_SIGNING.md](MAC_BUILD_AND_SIGNING.md), the distribution checklist in [DISTRIBUTION.md](DISTRIBUTION.md), and current caveats in [MAC_KNOWN_LIMITATIONS.md](MAC_KNOWN_LIMITATIONS.md).
 
 Run the installer, launch ByTune, and pick **Continue as guest** (data stays on this computer) or create an account for cloud backup.
 
@@ -230,7 +243,7 @@ Get-FileHash .\ByTune-Setup.exe -Algorithm SHA256
 shasum -a 256 ByTune-1.0.1-arm64.dmg
 ```
 
-The installers are unsigned (no code-signing certificate yet), so Windows SmartScreen and macOS Gatekeeper will warn on first run — the checksum table above is the way to confirm the file you downloaded is the one this project built.
+The installers aren't signed with a code-signing certificate yet, so Windows SmartScreen and macOS Gatekeeper ask for confirmation on first run (steps above) — the checksum table above is the way to confirm the file you downloaded is the one this project built.
 
 ### Development
 

@@ -18,9 +18,13 @@ Everything below is a deliberate, documented limitation — nothing is faked or 
    codebase either. (Windows parity.)
 
 ## macOS-specific, observed on the real Mac
-6. **Unsigned build (credential-gated).** No Apple Developer identity exists on the build
-   machine: electron-builder skipped signing, the binary is adhoc/linker-signed, and
-   `spctl -a -t exec` rejects the bundle. Users must right-click → Open on first launch.
+6. **Not Developer ID signed or notarized (credential-gated).** No Apple Developer identity
+   exists on the build machine. Up to v1.0.1 electron-builder skipped signing entirely, the
+   binaries were only adhoc/linker-signed with no bundle seal, and a downloaded copy was
+   rejected as "ByTune is damaged and can't be opened" (workaround:
+   `xattr -cr /Applications/ByTune.app`). Builds are now ad-hoc signed as a whole bundle
+   (`scripts/after-pack.cjs`), so users allow the app once instead: macOS 15+ via System
+   Settings → Privacy & Security → Open Anyway, macOS 13–14 via right-click → Open.
    Keychain-sealed session tokens still work; nothing about playback is affected.
 7. **Unexplained single pause (did not reproduce).** During the first Auto Mix deck-clock run,
    playback paused once at 31.7 s into the promoted track — no error, data fully buffered, no

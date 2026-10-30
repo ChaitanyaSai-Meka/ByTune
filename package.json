@@ -31,6 +31,7 @@
     "directories": {
       "output": "release"
     },
+    "afterPack": "scripts/after-pack.cjs",
     "files": [
       "dist/**",
       "dist-electron/**",
@@ -68,7 +69,7 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
-        "LSMinimumSystemVersion": "11.0.0",
+        "LSMinimumSystemVersion": "13.0",
         "NSHighResolutionCapable": true,
         "NSPrincipalClass": "NSApplication",
         "NSSupportsAutomaticGraphicsSwitching": true,
