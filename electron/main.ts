@@ -9,6 +9,7 @@ import * as canvas from "./canvas";
 import * as music from "./music-service";
 import { backupExport, backupImport } from "./backup";
 import * as locallib from "./local-library";
+import * as mediaControls from "./media-controls";
 import * as persist from "./persist";
 import * as pip from "./pip";
 import * as stats from "./stats";
@@ -625,9 +626,10 @@ function registerIpc(): void {
   ipc.handle("sync:backupNow", () => sync.backupNow());
   ipc.handle("sync:restoreNow", () => sync.restoreNow());
 
-  // macOS menu checkmarks + the Windows taskbar thumbbar glyph: the renderer
-  // pushes playback state; the menu is rebuilt so Shuffle/Repeat/Play-Pause
-  // always show the truth, and the thumbbar swaps its play/pause icon.
+  // macOS menu checkmarks + the Windows taskbar thumbbar glyph and media
+  // session: the renderer pushes playback state; the menu is rebuilt so
+  // Shuffle/Repeat/Play-Pause always show the truth, and the thumbbar swaps
+  // its play/pause icon.
   ipc.on("menu:push-state", (_e, s: unknown) => {
     if (!s || typeof s !== "object") return;
     const r = (s as { repeat?: unknown }).repeat;
@@ -638,7 +640,12 @@ function registerIpc(): void {
     };
     applyMenu();
     applyThumbar();
+    mediaControls.setPlaying(menuState.playing);
   });
+
+  // Windows media flyout (media-controls.ts): what's playing and where.
+  ipc.on("media:metadata", (_e, track: unknown) => mediaControls.setTrack(track));
+  ipc.on("media:position", (_e, position: unknown, duration: unknown) => mediaControls.setPosition(position, duration));
 }
 
 /**
@@ -681,6 +688,9 @@ const gotLock =
 if (!gotLock) {
   app.quit();
 } else {
+  // Windows: ByTune's own media session replaces Chromium's (full-size cover
+  // in the media flyout); the switch it sets only works before app ready.
+  mediaControls.init();
   let oauthReady = false;
   let pendingOAuthUrl: string | undefined;
   const oauthFromUrl = (url: string): void => {
@@ -780,6 +790,7 @@ if (!gotLock) {
       // Mark the real quit BEFORE the drain: the hide-on-close guard must
       // stand down for any close events that fire during shutdown.
       quitting = true;
+      mediaControls.stop();
       stats.flushSync();
       pip.savePipRect();
       // Kick off a final push, then persist sync-meta synchronously: quit
@@ -829,6 +840,12 @@ if (!gotLock) {
     stats.initStats();
     void startStreamProxy().catch((err) => console.warn("[bytune] stream proxy failed:", err));
     createWindow();
+    mediaControls.start({
+      onAction: (action) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("media:action", action);
+      },
+      readLocalArt: (thumb) => locallib.readLocalArtThumb(thumb)?.data ?? null,
+    });
     app.on("activate", () => {
       // macOS Dock re-open: bring the hidden main window back, recreate it
       // only if it was actually destroyed (real quit never reaches here).

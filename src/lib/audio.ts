@@ -1368,6 +1368,9 @@ function handleFailure(track: Track, err?: unknown): void {
 let lastPositionState = 0;
 
 function updateMediaSession(track: Track | null): void {
+  window.bytune?.mediaSetMetadata(
+    track ? { title: track.title, artist: track.artist, album: track.album || "ByTune", thumb: track.thumb } : null
+  );
   if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
   if (!track) {
     navigator.mediaSession.metadata = null;
@@ -1396,6 +1399,7 @@ function syncPositionState(): void {
   // Throttle: SMTC only needs coarse updates.
   if (Math.abs(a.currentTime - lastPositionState) < 0.75) return;
   lastPositionState = a.currentTime;
+  window.bytune?.mediaSetPosition(Math.min(a.currentTime, a.duration), a.duration);
   try {
     navigator.mediaSession.setPositionState({
       duration: a.duration,
@@ -1410,7 +1414,9 @@ function syncPositionState(): void {
 function setupMediaSession(): void {
   if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
   const ms = navigator.mediaSession;
+  const actions = new Map<string, MediaSessionActionHandler>();
   const set = (name: MediaSessionAction, fn: MediaSessionActionHandler): void => {
+    actions.set(name, fn);
     try {
       ms.setActionHandler(name, fn);
     } catch {
@@ -1462,6 +1468,11 @@ function setupMediaSession(): void {
     tap.cancelPending();
     if (details.seekTime != null) usePlayer.getState().seek(details.seekTime);
   });
+  // Windows: the flyout and media keys talk to ByTune's own session
+  // (electron/media-controls.ts) and land on these same handlers.
+  window.bytune?.onMediaAction((a) =>
+    actions.get(a.action)?.({ action: a.action, seekTime: a.seekTime } as MediaSessionActionDetails)
+  );
   window.setInterval(syncPositionState, 1000);
 }
 

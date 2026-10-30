@@ -17,7 +17,7 @@ Application state  (Zustand stores)
         │
 Audio engine  (src/lib/audio.ts)
   <audio> element ⇄ store, error recovery with stream-source rotation,
-  MediaSession (media keys + SMTC overlay), play-event logging
+  MediaSession (media keys + now-playing overlays), play-event logging
         │  IPC (contextBridge preload, electron/preload.ts)
 Main process  (Electron, electron/)
   main.ts           app lifecycle, window, IPC routing
@@ -25,6 +25,9 @@ Main process  (Electron, electron/)
                     lyrics + stream URL resolution
   po-token.ts       BotGuard PO-token minting (sandboxed JSDOM + bgutils-js)
   stream-proxy.ts   local 127.0.0.1 range-aware streaming proxy
+  media-controls.ts Windows media flyout + media keys via ByTuneMedia.exe
+                    (media-helper.cs): full-size cover instead of Chromium's
+                    150px copy
   downloads.ts      track downloader with progress events
   persist.ts        JSON persistence for renderer stores (+ legacy migration)
   sync-merge.ts     library merge for account sync

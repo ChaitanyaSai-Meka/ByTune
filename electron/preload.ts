@@ -180,6 +180,17 @@ const api = {
   menuPushState: (state: { playing: boolean; shuffle: boolean; repeat: "off" | "all" | "one" }) =>
     ipcRenderer.send("menu:push-state", state),
 
+  // Windows media flyout (media-controls.ts): what's playing goes out, flyout
+  // buttons and media keys come back as media-session actions. No-ops elsewhere.
+  mediaSetMetadata: (track: { title: string; artist: string; album: string; thumb: string } | null) =>
+    ipcRenderer.send("media:metadata", track),
+  mediaSetPosition: (position: number, duration: number) => ipcRenderer.send("media:position", position, duration),
+  onMediaAction: (cb: (a: { action: string; seekTime?: number }) => void): (() => void) => {
+    const listener = (_e: unknown, a: { action: string; seekTime?: number }): void => cb(a);
+    ipcRenderer.on("media:action", listener as never);
+    return () => ipcRenderer.removeListener("media:action", listener as never);
+  },
+
   // Filesystem helpers
   defaultDownloadDir: () => ipcRenderer.invoke("app:defaultDownloadDir"),
   pickFolder: () => ipcRenderer.invoke("app:pickFolder"),
