@@ -38,7 +38,14 @@ export const SETTINGS_KEYS = new Set([
   "filterNonMusicAudio",
   "dontRepeatSuggestions",
   "hideVolumeBar",
+  "eqEnabled",
+  "eqGains",
 ]);
+
+/** Equalizer band gains: one dB value per band (EQ_BANDS in src/lib/audio.ts has 10), within ±12. */
+export function eqGainsOk(v: unknown): boolean {
+  return Array.isArray(v) && v.length === 10 && v.every((g) => typeof g === "number" && Number.isFinite(g) && g >= -12 && g <= 12);
+}
 
 /** Inner state of a persisted store: unwraps the envelope, or passes a bare map through. */
 function stateOf(payload: unknown): Record<string, unknown> {
@@ -97,7 +104,8 @@ export function settingsFromBackup(incoming: unknown, currentEnvelope: unknown):
       if (k in cur) next[k] = cur[k];
       continue;
     }
-    if (k in inc) next[k] = inc[k];
+    // A malformed gains list would break the equalizer and the Settings page.
+    if (k in inc && (k !== "eqGains" || eqGainsOk(inc[k]))) next[k] = inc[k];
   }
   return next;
 }

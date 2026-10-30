@@ -88,6 +88,18 @@ for (const method of ["syncNow", "restoreNow"]) {
     assert.equal({}.polluted, undefined);
   });
 
+  test(`${method} keeps a valid equalizer and drops a malformed one`, async () => {
+    const bass = [6, 5, 4, 2, 0, 0, 0, 0, 0, 0];
+    const kept = await fixture([row({ state: { eqEnabled: true, eqGains: bass } }, "settings")]);
+    await kept.api[method]();
+    assert.deepEqual(plain(written(kept.writes, "settings")[1].state), { eqEnabled: true, eqGains: bass });
+    for (const eqGains of ["junk", [1, 2], [99, 0, 0, 0, 0, 0, 0, 0, 0, 0], [null, 0, 0, 0, 0, 0, 0, 0, 0, 0], Array(10).fill("1")]) {
+      const h = await fixture([row({ state: { eqEnabled: true, eqGains } }, "settings")]);
+      await h.api[method]();
+      assert.deepEqual(plain(written(h.writes, "settings")[1].state), { eqEnabled: true }, JSON.stringify(eqGains));
+    }
+  });
+
   test(`${method} sanitizes settings and listening rows instead of rejecting them`, async () => {
     const h = await fixture([
       row({ state: { downloadDir: "C:\\evil", autoplay: true, crossfadeSeconds: 999, hideVolumeBar: false } }, "settings"),

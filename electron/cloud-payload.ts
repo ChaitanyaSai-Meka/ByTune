@@ -1,5 +1,6 @@
 import { SYNCED_STORES } from "../src/lib/config";
 import { artworkUrlOk } from "../src/lib/artwork";
+import { eqGainsOk } from "./backup-transfer";
 
 export const MAX_CLOUD_PAYLOAD_BYTES = 8 * 1024 * 1024;
 const MAX_NODES = 200_000;
@@ -199,6 +200,8 @@ export function validateCloudPayload(name: string, payload: unknown): boolean {
         if (typeof v !== "string" || !allowed.includes(v)) { delete state[key]; sanitized = true; }
       } else if (key === "crossfadeSeconds" || key === "playbackSpeed") {
         if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > (key === "playbackSpeed" ? 2 : 30)) { delete state[key]; sanitized = true; }
+      } else if (key === "eqGains") {
+        if (!eqGainsOk(v)) { delete state[key]; sanitized = true; }
       } else if (typeof v !== "boolean") {
         // Unknown or non-conforming keys are dropped, not fatal: a value from
         // a different build must not be able to brick the whole account.

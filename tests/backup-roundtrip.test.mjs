@@ -13,6 +13,16 @@ import {
 // { state, version }; backup transforms must unwrap on export and re-wrap on
 // import, or settings and recent searches silently vanish from every backup.
 
+test("equalizer settings survive a backup; a malformed one is never imported", () => {
+  const vocal = [-2, -2, -1, 0, 2, 4, 4, 2, 0, -1];
+  const doc = settingsToBackup(envelope({ eqEnabled: true, eqGains: vocal }));
+  assert.deepEqual(doc, { eqEnabled: true, eqGains: vocal });
+  assert.deepEqual(settingsFromBackup(doc, envelope({})), { eqEnabled: true, eqGains: vocal });
+  for (const eqGains of ["junk", [1, 2], Array(10).fill(13), Array(10).fill(NaN)]) {
+    assert.deepEqual(settingsFromBackup({ eqEnabled: true, eqGains }, envelope({})), { eqEnabled: true }, String(eqGains));
+  }
+});
+
 test("settings and recent searches survive export → wipe → import", () => {
   // 1. A live store, in the envelope shape persist writes to disk.
   const settingsEnvelope = envelope({
