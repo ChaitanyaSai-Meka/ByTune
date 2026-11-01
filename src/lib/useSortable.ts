@@ -36,6 +36,7 @@ export interface SortableRowProps {
   onPointerMove: (e: PointerEvent<HTMLElement>) => void;
   onPointerUp: () => void;
   onPointerCancel: () => void;
+  onLostPointerCapture: () => void;
   onClickCapture: (e: MouseEvent<HTMLElement>) => void;
   onKeyDown: (e: KeyboardEvent<HTMLElement>) => void;
 }
@@ -65,7 +66,7 @@ export function useSortable(opts: {
 } {
   const [drag, setDrag] = useState<Drag | null>(null);
   const live = useRef<Drag | null>(null);
-  const press = useRef<{ i: number; x: number; y: number; el: HTMLElement } | null>(null);
+  const press = useRef<{ x: number; y: number; el: HTMLElement } | null>(null);
   const pointer = useRef({ startY: 0, startScroll: 0, y: 0 });
   const row = useRef<HTMLElement | null>(null);
   const raf = useRef(0);
@@ -81,11 +82,14 @@ export function useSortable(opts: {
     window.cancelAnimationFrame(raf.current);
     if (row.current) row.current.style.transform = "";
     row.current = null;
+    press.current = null; // the gesture is over: moving before the release must not start it again
     put(null);
   };
 
-  // The list changed under the pointer (a suggestion arrived, the song moved on).
+  // The list changed under the pointer (a suggestion arrived, the song moved on):
+  // a press or drag on the old list never carries over to the new one.
   useEffect(() => {
+    press.current = null;
     if (live.current && live.current.settleTo === null) end();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opts.signature]);
@@ -144,11 +148,19 @@ export function useSortable(opts: {
 
   const autoScroll = (): void => {
     const scroll = o.current.scrollRef.current;
-    if (!scroll || !live.current || live.current.settleTo !== null) return;
+    const list = o.current.listRef.current;
+    const d = live.current;
+    if (!scroll || !list || !d || d.settleTo !== null) return;
     const r = scroll.getBoundingClientRect();
     const y = pointer.current.y;
     const over = y < r.top + EDGE_PX ? y - r.top - EDGE_PX : y > r.bottom - EDGE_PX ? y - r.bottom + EDGE_PX : 0;
-    if (over) {
+    // Only while the farthest slot the row may take that way is still out of view.
+    const top = list.getBoundingClientRect().top;
+    const room =
+      over < 0
+        ? top + slotTop(d, o.current.clamp(d.from, 0)) < r.top
+        : top + slotTop(d, o.current.clamp(d.from, d.tops.length - 1)) + d.heights[d.from] > r.bottom;
+    if (over && room) {
       const before = scroll.scrollTop;
       scroll.scrollTop += Math.sign(over) * Math.min(18, Math.max(1, Math.round(Math.abs(over) / 3)));
       if (scroll.scrollTop !== before) update();
@@ -156,17 +168,22 @@ export function useSortable(opts: {
     raf.current = window.requestAnimationFrame(autoScroll);
   };
 
-  const begin = (p: { i: number; y: number; el: HTMLElement }): void => {
+  const begin = (p: { y: number; el: HTMLElement }): void => {
     const list = o.current.listRef.current;
     if (!list) return;
+    suppressClick.current = true; // the release is not a click on the row
+    const from = [...list.children].indexOf(p.el);
+    if (from < 0 || !o.current.canDrag(from)) {
+      press.current = null;
+      return;
+    }
     const base = list.getBoundingClientRect().top;
     const rects = [...list.children].map((c) => c.getBoundingClientRect());
     row.current = p.el;
-    suppressClick.current = true; // the release is not a click on the row
     pointer.current = { startY: p.y, startScroll: o.current.scrollRef.current?.scrollTop ?? 0, y: p.y };
     put({
-      from: p.i,
-      target: p.i,
+      from,
+      target: from,
       tops: rects.map((r) => r.top - base),
       heights: rects.map((r) => r.height),
       gap: rects.length > 1 ? Math.max(0, rects[1].top - rects[0].bottom) : 0,
@@ -210,7 +227,7 @@ export function useSortable(opts: {
       if (e.button !== 0 || live.current || !o.current.canDrag(i)) return;
       if ((e.target as HTMLElement).closest("button, a, input")) return; // the row's own buttons stay buttons
       e.currentTarget.setPointerCapture(e.pointerId);
-      press.current = { i, x: e.clientX, y: e.clientY, el: e.currentTarget };
+      press.current = { x: e.clientX, y: e.clientY, el: e.currentTarget };
     },
     onPointerMove: (e) => {
       const p = press.current;
@@ -229,6 +246,11 @@ export function useSortable(opts: {
     onPointerCancel: () => {
       press.current = null;
       if (live.current) settle(live.current.from);
+    },
+    // Capture lost without a release (the window lost the mouse): glide back, don't leave the row lifted.
+    onLostPointerCapture: () => {
+      press.current = null;
+      if (live.current?.settleTo === null) settle(live.current.from);
     },
     onClickCapture: (e) => {
       if (!suppressClick.current) return;

@@ -162,7 +162,9 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
   const listRef = useRef<HTMLDivElement>(null);
   // Songs dragged onto the queue join it (after your own upcoming songs).
   const queueDrop = useTrackDrop((track) => {
-    const added = usePlayer.getState().addToQueue([track]);
+    const s = usePlayer.getState();
+    if (track.id === s.queue[s.index]?.id) return; // e.g. the Now playing row dropped back on its own panel
+    const added = s.addToQueue([track]);
     useUI.getState().toast(added ? `Added "${track.title}" to the queue` : `"${track.title}" is already in your queue`);
   });
 
@@ -193,9 +195,11 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
         ? "AutoPlay is paused while repeat is on"
         : !isRadioSeed(queue[queue.length - 1]?.id)
           ? "AutoPlay isn't available after local files"
-          : loading
-            ? "AutoPlay is finding similar songs\u2026"
-            : "AutoPlay keeps the music going with similar songs";
+          : queue[queue.length - 1]?.episode
+            ? "AutoPlay doesn't continue after podcast episodes"
+            : loading
+              ? "AutoPlay is finding similar songs\u2026"
+              : "AutoPlay keeps the music going with similar songs";
   // Row keys must not depend on the current queue index: embedding `index`
   // shifted every key on each track advance, remounting the whole upcoming
   // list (new drag state, new <img> decode) per track. Key by id plus its

@@ -265,7 +265,8 @@ export const usePlayer = create<PlayerState>()(
         if (s.awaitingAutoplay) {
           set({
             queue,
-            index: index + 1 + tail,
+            // The first new song: with shuffle the one playing may sit anywhere, not at the end.
+            index: queue.length - tracks.length,
             autoplayCount: tail + tracks.length,
             playing: true,
             position: 0,

@@ -626,3 +626,31 @@ test("drag-reorder keeps your songs and AutoPlay's suggestions each on their own
     h.restore();
   }
 });
+
+test("with shuffle, the first song after the queue runs out is AutoPlay's first, not one already played", async () => {
+  const h = await boot({ autoplay: true, fadeSeconds: 0 });
+  try {
+    let release;
+    const gate = new Promise((r) => (release = r));
+    globalThis.__radio = async () => {
+      await gate;
+      return page(["s1", "s2"]);
+    };
+    globalThis.__home = [];
+    for (const n of ["a", "b", "c", "s1", "s2"]) h.setDuration(Y(n), 120);
+    const p = h.engine.usePlayer;
+    p.setState({ shuffle: true });
+    await play(h, [yt("a", 120), yt("b", 120), yt("c", 120)], 2);
+    await settle(h, 5);
+    p.getState().next(true);
+    p.getState().next(true); // a and b, in shuffled order
+    p.getState().next(true);
+    assert.equal(p.getState().awaitingAutoplay, true, "all three played: AutoPlay waits");
+    release();
+    await settle(h);
+    assert.equal(short(h), "s1");
+  } finally {
+    await settle(h);
+    h.restore();
+  }
+});
