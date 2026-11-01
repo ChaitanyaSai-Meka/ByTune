@@ -100,6 +100,16 @@ for (const method of ["syncNow", "restoreNow"]) {
     }
   });
 
+  test(`${method} keeps valid saved EQ presets and drops malformed ones`, async () => {
+    const eqPresets = [{ name: "Night", gains: [3, 2, 1, 0, 0, 0, 0, -1, -2, -3] }];
+    const kept = await fixture([row({ state: { eqPresets } }, "settings")]);
+    await kept.api[method]();
+    assert.deepEqual(plain(written(kept.writes, "settings")[1].state), { eqPresets });
+    const dropped = await fixture([row({ state: { eqPresets: [{ name: "x", gains: [99] }] } }, "settings")]);
+    await dropped.api[method]();
+    assert.deepEqual(plain(written(dropped.writes, "settings")[1].state), {});
+  });
+
   test(`${method} sanitizes settings and listening rows instead of rejecting them`, async () => {
     const h = await fixture([
       row({ state: { downloadDir: "C:\\evil", autoplay: true, crossfadeSeconds: 999, hideVolumeBar: false } }, "settings"),

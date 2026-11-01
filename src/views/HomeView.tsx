@@ -17,6 +17,7 @@ import { EyebrowHeader, MixCard, RadioCard } from "../components/recCards";
 import { Artwork, Shelf, ShelfScroller, ShelfSkeleton } from "../components/primitives";
 import { useHomeFeed } from "../lib/recs/feed";
 import { useDrag } from "../lib/dnd";
+import { historyMenuItems } from "../lib/trackActions";
 import type { HomeSection } from "../lib/recs/sections";
 import { usePlayer } from "../stores/player";
 import { tintHoverHandlers, useUI } from "../stores/ui";
@@ -48,6 +49,10 @@ function QuickTile({ track }: { track: Track }) {
           e.preventDefault();
           open();
         }
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        useUI.getState().openContextMenu(e.clientX, e.clientY, historyMenuItems(track));
       }}
       {...tintHoverHandlers(track.thumb)}
       {...drag.props}
@@ -125,7 +130,11 @@ function SectionView({ section }: { section: HomeSection }) {
           const key = `${section.id}-${item.style}-${i}`;
           switch (item.style) {
             case "track":
-              return <TrackCard key={key} track={item.track} />;
+              return section.id === "recently-played" ? (
+                <TrackCard key={key} track={item.track} menu={() => historyMenuItems(item.track)} />
+              ) : (
+                <TrackCard key={key} track={item.track} />
+              );
             case "album":
               return <AlbumCard key={key} album={item.album} />;
             case "artist":

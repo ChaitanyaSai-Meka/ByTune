@@ -20,3 +20,12 @@ export function fmtBytes(bytes: number): string {
 export function plural(n: number, one: string, many: string): string {
   return n === 1 ? `1 ${one}` : `${n} ${many}`;
 }
+
+/** A total running time in words: "45 min", "1 hr 2 min", "3 hr". */
+export function fmtTotal(sec: number): string {
+  const minutes = Math.max(1, Math.round(sec / 60));
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (!h) return `${m} min`;
+  return m ? `${h} hr ${m} min` : `${h} hr`;
+}

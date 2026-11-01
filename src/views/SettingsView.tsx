@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   Activity,
   AppWindow,
@@ -9,6 +9,10 @@ import {
   CloudUpload,
   Download,
   Droplets,
+  ExternalLink,
+  Globe,
+  Search,
+  Timer,
   FileDown,
   FileUp,
   FolderOpen,
@@ -33,12 +37,15 @@ import {
 } from "lucide-react";
 import {
   DOWNLOAD_QUALITY_LABEL,
+  LOUDNESS_LABEL,
   STREAM_QUALITY_LABEL,
   useSettings,
 } from "../stores/settings";
 import { useSession } from "../lib/session";
+import { describeLyricsShift } from "../lib/lyricsOffset";
 import { setOnboardingIntent } from "../lib/onboardingIntent";
 import { GuestDeleteModal } from "../components/AccountModals";
+import { Switch } from "../components/primitives";
 import { useUI, type MenuItem } from "../stores/ui";
 import { EQ_BANDS, listOutputDevices } from "../lib/audio";
 import type { OutputDeviceChoice } from "../lib/audio-output";
@@ -62,7 +69,7 @@ function SettingsGroup({
   children: ReactNode;
 }) {
   return (
-    <section className="animate-slide-up">
+    <section data-setting-group className="animate-slide-up">
       {header && (
         <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-dim px-5 pt-7 pb-2">
           {header}
@@ -76,38 +83,7 @@ function SettingsGroup({
 }
 
 function Divider() {
-  return <div className={`h-px bg-ink-hi/[0.08] ${TEXT_INSET}`} />;
-}
-
-function Switch({
-  checked,
-  onChange,
-  disabled,
-}: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={(e) => {
-        e.stopPropagation();
-        if (!disabled) onChange(!checked);
-      }}
-      className={`relative shrink-0 w-[42px] h-[26px] rounded-full transition-colors duration-200 disabled:opacity-40 ${
-        checked ? "bg-primary" : "bg-ink-hi/[0.16]"
-      }`}
-    >
-      <span
-        className={`absolute top-[3px] w-[20px] h-[20px] rounded-full transition-all duration-200 ${
-          checked ? "left-[19px] bg-on-primary" : "left-[3px] bg-white"
-        }`}
-      />
-    </button>
-  );
+  return <div data-setting-divider className={`h-px bg-ink-hi/[0.08] ${TEXT_INSET}`} />;
 }
 
 function Chevron() {
@@ -149,6 +125,7 @@ function SettingsRow({
   const interactive = onClick && !disabled;
   return (
     <div
+      data-setting-row
       onPointerDown={onPointerDown}
       onClick={interactive ? (e) => onClick(e) : undefined}
       className={`flex items-center min-h-[52px] py-3 ${ROW_INSET} ${
@@ -229,7 +206,7 @@ function SliderRow({
 }) {
   const frac = max > min ? Math.min(1, Math.max(0, (current - min) / (max - min))) : 0;
   return (
-    <div className={`${ROW_INSET} py-3`}>
+    <div data-setting-row className={`${ROW_INSET} py-3`}>
       <div className="flex items-center">
         <Icon className="w-[22px] h-[22px] shrink-0 text-ink-hi" />
         <div className="flex-1 min-w-0 ml-[14px]">
@@ -267,12 +244,42 @@ const EQ_PRESETS: Record<string, number[]> = {
 
 const bandLabel = (hz: number): string => (hz >= 1000 ? `${hz / 1000}k` : String(hz));
 
-/** 10-band graphic EQ: switch, presets, one vertical slider per band (±12 dB). */
+/** 10-band graphic EQ: switch, presets (built-in + your own), one vertical slider per band (±12 dB). */
 function EqualizerRows() {
   const enabled = useSettings((st) => st.eqEnabled);
   const gains = useSettings((st) => st.eqGains);
-  const { setEqEnabled, setEqGains } = useSettings.getState();
-  const preset = Object.keys(EQ_PRESETS).find((k) => EQ_PRESETS[k].every((g, i) => g === gains[i]));
+  const saved = useSettings((st) => st.eqPresets);
+  const autoHeadroom = useSettings((st) => st.eqAutoHeadroom);
+  const { setEqEnabled, setEqGains, saveEqPreset, renameEqPreset, deleteEqPreset, setEqAutoHeadroom } =
+    useSettings.getState();
+  const same = (curve: number[]): boolean => curve.every((g, i) => g === gains[i]);
+  const builtIn = Object.keys(EQ_PRESETS).find((k) => same(EQ_PRESETS[k]));
+  const mine = saved.find((p) => same(p.gains))?.name;
+  const preset = builtIn ?? mine;
+  const chip = (active: boolean): string =>
+    `text-[12px] rounded-full px-3 py-1 transition-colors ${
+      active ? "bg-primary text-on-primary" : "bg-ink-hi/[0.08] text-ink-hi hover:bg-ink-hi/[0.14]"
+    }`;
+  const askName = (title: string, initialValue: string, confirmLabel: string, done: (name: string) => void, except = ""): void =>
+    useUI.getState().openDialog({
+      title,
+      initialValue,
+      placeholder: "Preset name",
+      confirmLabel,
+      onConfirm: (value) => {
+        const name = value.trim().slice(0, 40);
+        if (!name) return;
+        if (EQ_PRESETS[name]) {
+          useUI.getState().toast(`"${name}" is a built-in preset — pick another name`, "error");
+          return;
+        }
+        if (name !== except && saved.some((p) => p.name === name)) {
+          useUI.getState().toast(`You already have a preset called "${name}"`, "error");
+          return;
+        }
+        done(name);
+      },
+    });
   return (
     <>
       <SettingsRow
@@ -286,16 +293,36 @@ function EqualizerRows() {
         <div className={`${TEXT_INSET} pr-4 pb-4`}>
           <div className="flex flex-wrap gap-1.5 mb-3">
             {Object.keys(EQ_PRESETS).map((name) => (
-              <button
-                key={name}
-                onClick={() => setEqGains(EQ_PRESETS[name])}
-                className={`text-[12px] rounded-full px-3 py-1 transition-colors ${
-                  name === preset ? "bg-primary text-on-primary" : "bg-ink-hi/[0.08] text-ink-hi hover:bg-ink-hi/[0.14]"
-                }`}
-              >
+              <button key={name} onClick={() => setEqGains(EQ_PRESETS[name])} className={chip(name === preset)}>
                 {name}
               </button>
             ))}
+            {saved.map((p) => (
+              <button
+                key={`mine-${p.name}`}
+                onClick={() => setEqGains(p.gains)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  useUI.getState().openContextMenu(e.clientX, e.clientY, [
+                    { label: "Rename…", action: () => askName("Rename preset", p.name, "Rename", (to) => renameEqPreset(p.name, to), p.name) },
+                    { label: "Update to current curve", disabled: same(p.gains), action: () => saveEqPreset(p.name, gains) },
+                    { label: "Delete", danger: true, separatorBefore: true, action: () => deleteEqPreset(p.name) },
+                  ]);
+                }}
+                title="Right-click to rename, update or delete"
+                className={chip(p.name === preset)}
+              >
+                {p.name}
+              </button>
+            ))}
+            {!preset && (
+              <button
+                onClick={() => askName("Save preset", "My preset", "Save", (name) => saveEqPreset(name, gains))}
+                className="text-[12px] rounded-full px-3 py-1 border border-dashed border-ink-hi/25 text-ink-hi/80 hover:text-ink-hi hover:border-ink-hi/45 transition-colors"
+              >
+                Save as preset…
+              </button>
+            )}
           </div>
           <div className="flex justify-between gap-1 max-w-[520px]">
             {EQ_BANDS.map((hz, i) => (
@@ -319,6 +346,15 @@ function EqualizerRows() {
               </label>
             ))}
           </div>
+          <label data-setting-row className="mt-4 flex items-center gap-3 max-w-[520px] cursor-pointer">
+            <span className="flex-1 min-w-0">
+              <span className="block text-[13px] text-ink-hi">Prevent clipping</span>
+              <span className="block text-[12px] text-ink-dim">
+                Lowers the level only when your boosts would distort at the current volume
+              </span>
+            </span>
+            <Switch checked={autoHeadroom} onChange={setEqAutoHeadroom} label="Prevent clipping" />
+          </label>
         </div>
       )}
     </>
@@ -615,6 +651,38 @@ export function SettingsView() {
   const session = useSession();
   const [guestDeleteOpen, setGuestDeleteOpen] = useState(false);
   const [folderSummary, setFolderSummary] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // "Search settings": show the rows whose words match (a group header match
+  // shows its whole group), after every render so conditional rows follow.
+  // Inline display, not [hidden]: utility display classes outrank [hidden].
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const q = filter.trim().toLowerCase();
+    const hits = (el: Element | null): boolean => !!el && (el.textContent ?? "").toLowerCase().includes(q);
+    const show = (el: HTMLElement, on: boolean): void => {
+      el.style.display = on ? "" : "none";
+    };
+    root.querySelectorAll<HTMLElement>("[data-setting-divider]").forEach((d) => show(d, !q));
+    let anyGroup = false;
+    root.querySelectorAll<HTMLElement>("[data-setting-group]").forEach((group) => {
+      const rows = [...group.querySelectorAll<HTMLElement>("[data-setting-row]")];
+      const headerHit = !!q && hits(group.querySelector("h2"));
+      let anyRow = false;
+      for (const row of rows) {
+        const on = !q || headerHit || hits(row);
+        show(row, on);
+        anyRow ||= on;
+      }
+      const on = !q || (rows.length ? anyRow : hits(group));
+      show(group, on);
+      anyGroup ||= on;
+    });
+    const empty = root.querySelector<HTMLElement>("[data-settings-empty]");
+    if (empty) show(empty, !!q && !anyGroup);
+  });
 
   const refreshFolderSummary = async (): Promise<void> => {
     const lib = await window.bytune?.localLibrary();
@@ -715,12 +783,34 @@ export function SettingsView() {
   };
 
   return (
-    <div className="max-w-2xl pb-14">
+    <div ref={rootRef} className="max-w-2xl pb-14">
       <h1 className="font-display text-[34px] font-extrabold tracking-[-0.03em] text-ink-hi px-5 pt-2 pb-3.5">
         Settings
       </h1>
+      <div className="mx-4 relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-dim pointer-events-none" />
+        <input
+          id="settings-filter"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && filter) {
+              e.stopPropagation();
+              setFilter("");
+            }
+          }}
+          placeholder="Search settings"
+          aria-label="Search settings"
+          className="w-full h-10 rounded-full bg-panel pl-9 pr-4 text-[14px] text-ink-hi placeholder:text-ink-dim outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+        />
+      </div>
+      <p data-settings-empty style={{ display: "none" }} className="px-5 pt-8 text-[14px] text-ink-dim">
+        No settings match “{filter.trim()}”.
+      </p>
 
-      <CloudAccountGroup />
+      <div data-setting-group>
+        <CloudAccountGroup />
+      </div>
 
       <SettingsGroup header="Audio quality">
         <SettingsRow
@@ -739,6 +829,19 @@ export function SettingsView() {
                 s.setStreamingQuality
               )
             )
+          }
+        />
+      </SettingsGroup>
+
+      <SettingsGroup header="Volume">
+        <SettingsRow
+          icon={Gauge}
+          title="Volume leveling"
+          subtitle="Bring every song to a similar loudness"
+          value={LOUDNESS_LABEL[s.loudnessLevel]}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) =>
+            toggleDropdownAt(e, qualityMenu(["off", "quiet", "normal", "loud"], LOUDNESS_LABEL, s.loudnessLevel, s.setLoudnessLevel))
           }
         />
       </SettingsGroup>
@@ -818,7 +921,7 @@ export function SettingsView() {
         <SettingsRow
           icon={InfinityIcon}
           title="Autoplay"
-          subtitle="Keep the music going when the queue ends"
+          subtitle="When your songs run out, keep playing music like them"
           trailing={<Switch checked={s.autoplay} onChange={s.setAutoplay} />}
           onClick={() => s.setAutoplay(!s.autoplay)}
         />
@@ -903,6 +1006,26 @@ export function SettingsView() {
               subtitle="Keep the spotlight on the current line"
               trailing={<Switch checked={s.blurUnfocusedLyrics} onChange={s.setBlurUnfocusedLyrics} />}
               onClick={() => s.setBlurUnfocusedLyrics(!s.blurUnfocusedLyrics)}
+            />
+            <Divider />
+            <SettingsRow
+              icon={Languages}
+              title="Romanized lyrics"
+              subtitle="Show a Latin-letters reading under lyrics in other scripts, like Hindi, Telugu or Korean"
+              trailing={<Switch checked={s.romanizeLyrics} onChange={s.setRomanizeLyrics} />}
+              onClick={() => s.setRomanizeLyrics(!s.romanizeLyrics)}
+            />
+            <Divider />
+            <SliderRow
+              icon={Timer}
+              title="Lyrics timing"
+              subtitle="On this device, for headphones that lag. [ and ] adjust one song while lyrics are open"
+              value={describeLyricsShift(s.lyricsOffset)}
+              min={-3}
+              max={3}
+              step={0.05}
+              current={s.lyricsOffset}
+              onChange={s.setLyricsOffset}
             />
           </>
         )}
@@ -990,6 +1113,16 @@ export function SettingsView() {
           subtitle="Keep the player bar free of the volume slider"
           trailing={<Switch checked={s.hideVolumeBar} onChange={s.setHideVolumeBar} />}
           onClick={() => s.setHideVolumeBar(!s.hideVolumeBar)}
+        />
+      </SettingsGroup>
+
+      <SettingsGroup header="About">
+        <SettingsRow
+          icon={Globe}
+          title="ByTune website"
+          subtitle="bytune.space — downloads, news and help"
+          trailing={<ExternalLink className="w-4 h-4 text-ink-dim" />}
+          onClick={() => window.open("https://bytune.space", "_blank", "noopener")}
         />
       </SettingsGroup>
 

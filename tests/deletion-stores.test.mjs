@@ -90,6 +90,65 @@ test("library public mutations persist adds/deletes atomically and later explici
   assert.deepEqual(mergeLibrary(h.snapshot(), history, {}).state.history.map((t) => t.id), ["new"]);
 });
 
+test("an import never overwrites a playlist with the same name, and its songs are stamped", async () => {
+  const h = await harness("library"), s = h.store.getState;
+  const mine = s().createPlaylist("Chill");
+  s().addToPlaylist(mine.id, track("mine"));
+  const imported = s().importPlaylist("chill ", [track("a"), track("b"), track("a")]);
+  assert.notEqual(imported.id, mine.id);
+  assert.equal(imported.name, "chill (2)", "a clash gets a number instead of replacing");
+  assert.deepEqual(plain(s().getPlaylist(mine.id).tracks.map((t) => t.id)), ["mine"], "the listener's playlist is untouched");
+  assert.deepEqual(plain(imported.tracks.map((t) => t.id)), ["a", "b"], "duplicates dropped");
+  const adds = h.writes.at(-1).state.deletionSync.adds;
+  assert.ok(adds[key("playlists", imported.id)], "the playlist is stamped");
+  assert.ok(adds[key("tracks", "a", imported.id)] && adds[key("tracks", "b", imported.id)], "every song is stamped");
+  const filed = s().importPlaylist("Road trip", [track("c")], "folder-1");
+  assert.equal(filed.folderId, "folder-1");
+  // A merge with an older copy (before the import) keeps the imported songs.
+  const before = h.snapshot();
+  const merged = mergeLibrary(h.snapshot(), before, {}).state.playlists;
+  assert.deepEqual(plain(merged.find((p) => p.id === imported.id).tracks.map((t) => t.id).sort()), ["a", "b"]);
+});
+
+test("a playlist keeps its order through a merge where both devices changed it", async () => {
+  const a = await harness("library"), sa = a.store.getState;
+  const p = sa().createPlaylist("Road trip");
+  for (const id of ["x", "y", "z"]) sa().addToPlaylist(p.id, track(id));
+  // Device B starts from A's copy, then each device adds a song of its own.
+  const b = await harness("library", a.snapshot()), sb = b.store.getState;
+  sa().addToPlaylist(p.id, track("fromA"));
+  sb().addToPlaylist(p.id, track("fromB"));
+  const order = (merged) => plain(merged.state.playlists.find((pl) => pl.id === p.id).tracks.map((t) => t.id));
+  const ab = order(mergeLibrary(a.snapshot(), b.snapshot(), {}));
+  const ba = order(mergeLibrary(b.snapshot(), a.snapshot(), {}));
+  assert.deepEqual(ab.slice(0, 3), ["x", "y", "z"], `not reversed: ${ab}`);
+  assert.deepEqual(ab, ba, "both devices converge on one order");
+  assert.deepEqual([...ab].sort(), ["fromA", "fromB", "x", "y", "z"]);
+});
+
+test("a manual reorder survives a merge; songs the other device added follow it", async () => {
+  const a = await harness("library"), sa = a.store.getState;
+  const p = sa().createPlaylist("Mix");
+  for (const id of ["x", "y", "z"]) sa().addToPlaylist(p.id, track(id));
+  const b = await harness("library", a.snapshot()), sb = b.store.getState;
+  sa().moveInPlaylist(p.id, 2, 0); // z, x, y on device A
+  sb().addToPlaylist(p.id, track("fromB"));
+  const order = (merged) => plain(merged.state.playlists.find((pl) => pl.id === p.id).tracks.map((t) => t.id));
+  const ab = mergeLibrary(a.snapshot(), b.snapshot(), {});
+  const ba = mergeLibrary(b.snapshot(), a.snapshot(), {});
+  assert.deepEqual(order(ab), ["z", "x", "y", "fromB"], "A's order wins and B's new song goes last");
+  assert.deepEqual(order(ab), order(ba), "both devices converge");
+  assert.deepEqual(order(mergeLibrary(plain(ab), plain(ab), {})), order(ab), "re-merging changes nothing");
+  // Imported songs share one add stamp; the import's own order still survives a merge.
+  const imported = sa().importPlaylist("Import", [track("c"), track("a"), track("b")]);
+  const importedOrder = mergeLibrary(a.snapshot(), b.snapshot(), {}).state.playlists.find((pl) => pl.id === imported.id);
+  assert.deepEqual(plain(importedOrder.tracks.map((t) => t.id)), ["c", "a", "b"], "the import order, not id order");
+  sa().moveInPlaylist(imported.id, 0, 0);
+  sa().moveInPlaylist(imported.id, 1, 2);
+  const merged = mergeLibrary(a.snapshot(), b.snapshot(), {}).state.playlists.find((pl) => pl.id === imported.id);
+  assert.deepEqual(plain(merged.tracks.map((t) => t.id)), ["c", "b", "a"]);
+});
+
 test("metadata edits are versioned independently from membership and duplicate adds are no-ops", async () => {
   const h = await harness("library"), s = h.store.getState;
   const p = s().createPlaylist("Before"), f = s().createFolder("Before");
@@ -187,4 +246,34 @@ test("search hydration replays removes and clear/add order, not accidental addit
   finish = h.restore(before);
   s().pushSearch("before"); s().clearSearches(); s().pushSearch("after"); await finish();
   assert.deepEqual(mergeRecentSearches(h.snapshot(), before).state.searches, ["after"]);
+});
+
+test("removing one song from Recently played syncs as a deletion and keeps the rest", async () => {
+  const h = await harness("library");
+  const s = () => h.store.getState();
+  s().pushHistory(track("a"));
+  s().pushHistory(track("b"));
+  s().pushHistory(track("c"));
+  const otherDevice = h.snapshot(); // still has a, b and c
+  s().removeFromHistory("b");
+  assert.deepEqual(plain(s().history.map((t) => t.id)), ["c", "a"]);
+  const merged = mergeLibrary(h.snapshot(), otherDevice, {}).state.history.map((t) => t.id);
+  assert.deepEqual(merged, ["c", "a"], "b stays gone and the other songs survive the merge");
+  s().pushHistory(track("b"));
+  assert.deepEqual(mergeLibrary(h.snapshot(), otherDevice, {}).state.history.map((t) => t.id), ["b", "c", "a"], "playing it again brings it back");
+});
+
+test("a reorder never undoes a rename from another device; deleting a playlist leaves one tombstone", async () => {
+  const a = await harness("library"), sa = a.store.getState;
+  const p = sa().createPlaylist("Road trip");
+  for (const id of ["x", "y", "z"]) sa().addToPlaylist(p.id, track(id));
+  const b = await harness("library", a.snapshot()), sb = b.store.getState;
+  sb().renamePlaylist(p.id, "Road trip 2026");
+  sa().moveInPlaylist(p.id, 0, 2);
+  const merged = mergeLibrary(a.snapshot(), b.snapshot(), {}).state.playlists.find((pl) => pl.id === p.id);
+  assert.equal(merged.name, "Road trip 2026", "the rename survives");
+  assert.deepEqual(plain(merged.tracks.map((t) => t.id)), ["y", "z", "x"], "and so does the new order");
+  sa().deletePlaylist(p.id);
+  const deletes = Object.keys(a.writes.at(-1).state.deletionSync.deletes);
+  assert.deepEqual(deletes, [key("playlists", p.id)], "one tombstone for the playlist, none per song");
 });

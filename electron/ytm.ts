@@ -11,7 +11,21 @@
  * Search filters use YouTube Music's own params, the same byte strings the
  * mobile app pins in `SearchFilter` (Models.kt).
  */
-import type { Album, Artist, BrowseItem, HomeItem, HomeShelf, RemotePlaylistPage, SearchPageResult, SearchRow, Track } from "../src/types";
+import type {
+  Album,
+  Artist,
+  BrowseItem,
+  HomeItem,
+  HomeShelf,
+  PodcastEpisode,
+  PodcastPage,
+  RadioPage,
+  RadioTrack,
+  RemotePlaylistPage,
+  SearchPageResult,
+  SearchRow,
+  Track,
+} from "../src/types";
 import { bestThumbUrl } from "./artwork";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -24,6 +38,7 @@ export const SEARCH_FILTER_PARAMS: Record<string, string | null> = {
   albums: "EgWKAQIYAWoKEAkQChAFEAMQBA==",
   artists: "EgWKAQIgAWoKEAkQChAFEAMQBA==",
   playlists: "EgWKAQIoAWoKEAkQChAFEAMQBA==",
+  podcasts: "EgWKAQJQAWoKEAkQChAFEAMQBA==",
 };
 
 /* ---------------- raw endpoint calls ---------------- */
@@ -39,6 +54,15 @@ export async function callSearch(yt: any, query: string, params: string | null):
 
 export async function callSearchContinuation(yt: any, token: string): Promise<any> {
   const res = await yt.actions.execute("search", {
+    continuation: token,
+    client: "YTMUSIC",
+  });
+  return res?.data ?? null;
+}
+
+/** The next page of a browse result (a long playlist or album shelf). */
+export async function callBrowseContinuation(yt: any, token: string): Promise<any> {
+  const res = await yt.actions.execute("browse", {
     continuation: token,
     client: "YTMUSIC",
   });
@@ -237,7 +261,8 @@ function seenAdd(seen: Set<string>, key: string): boolean {
 
 /* ---------------- shared parse vocabulary (mobile constants) ---------------- */
 
-const DURATION = /^\d+:\d{2}$/;
+/** "3:43", "61:23" or "1:02:33" — hour-long mixes print three fields. */
+const DURATION = /^\d+(?::\d{2}){1,2}$/;
 const YEAR = /^\d{4}$/;
 /** A counted quantity rather than a name — "12.4M plays", "13 songs". Narrow
  * enough to leave "21 Savage" and "50 Cent" alone, as in the mobile app. */
@@ -284,7 +309,7 @@ function isNotSquare(thumbnails: any): boolean {
 
 /* ---------------- credits ---------------- */
 
-interface Credits {
+export interface Credits {
   artistId?: string;
   artistName?: string;
   albumId?: string;
@@ -351,7 +376,10 @@ export function parseResponsiveListItem(renderer: any, fallback: Credits = {}): 
     .filter(Boolean);
   // A search row states its runtime in the subtitle; an album's own rows do
   // not — there the duration sits in a fixedColumns entry off to the right.
-  let duration = parts.find((p) => DURATION.test(p)) ?? "";
+  // The runtime is the subtitle's last segment; an album or artist named like
+  // a clock ("4:44") earlier in the line must not be read as one.
+  const last = parts[parts.length - 1] ?? "";
+  let duration = DURATION.test(last) ? last : "";
   if (!duration) {
     for (const column of a(renderer, "fixedColumns") ?? []) {
       const t = text(o(o(column, "musicResponsiveListItemFixedColumnRenderer"), "text")).trim();
@@ -367,9 +395,14 @@ export function parseResponsiveListItem(renderer: any, fallback: Credits = {}): 
   const artist = parts.find((p) => !DURATION.test(p) && !TYPE_WORDS.has(p.toLowerCase()) && !TALLY.test(p)) ?? "";
 
   // The artist/album names in the subtitle carry browse endpoints; pull them
-  // out so rows can link to those pages.
+  // out so rows can link to those pages. The runs live under the column's
+  // `text` (reading the renderer's own `runs` found nothing, so search and
+  // chart rows never got an artist or album id).
   const credits = creditsOf(
-    (columns ?? []).flatMap((column: any) => a(o(column, "musicResponsiveListItemFlexColumnRenderer"), "runs") ?? [])
+    (columns ?? []).flatMap((column: any) => {
+      const flex = o(column, "musicResponsiveListItemFlexColumnRenderer");
+      return a(o(flex, "text"), "runs") ?? a(flex, "runs") ?? [];
+    })
   );
 
   const thumbnails = rowThumbnails(renderer);
@@ -377,7 +410,9 @@ export function parseResponsiveListItem(renderer: any, fallback: Credits = {}): 
   return {
     id: videoId,
     title,
-    artist: credits.artistName || artist || fallback.artistName || "Unknown artist",
+    // The subtitle segment keeps every credited artist ("A & B"); the linked
+    // run is only the first, so it is the fallback, not the display name.
+    artist: artist || credits.artistName || fallback.artistName || "Unknown artist",
     artistId: credits.artistId ?? fallback.artistId,
     albumId: credits.albumId ?? fallback.albumId,
     album: credits.albumName ?? fallback.albumName,
@@ -400,10 +435,12 @@ export function parseBrowseItem(renderer: any): BrowseItem | null {
   if (!browseId) return null;
   const pageType = pageTypeOf(endpoint);
 
+  // List rows keep their words in flex columns; two-line cards (Explore,
+  // carousels) carry title/subtitle and a thumbnailRenderer of their own.
   const columns = a(renderer, "flexColumns") ?? [];
-  const title = text(o(o(columns[0], "musicResponsiveListItemFlexColumnRenderer"), "text"));
+  const title = text(o(o(columns[0], "musicResponsiveListItemFlexColumnRenderer"), "text")) || text(o(renderer, "title"));
   if (!title.trim()) return null;
-  const subtitle = text(o(o(columns[1], "musicResponsiveListItemFlexColumnRenderer"), "text"));
+  const subtitle = text(o(o(columns[1], "musicResponsiveListItemFlexColumnRenderer"), "text")) || text(o(renderer, "subtitle"));
   // A release billed as a video compilation would drop every row downstream —
   // skip the dead-end card rather than link to an empty page (mobile's rule).
   if (VIDEO_WORD.test(title) || VIDEO_WORD.test(subtitle)) return null;
@@ -412,8 +449,12 @@ export function parseBrowseItem(renderer: any): BrowseItem | null {
     browseId,
     title,
     subtitle,
-    thumb: bestThumb(rowThumbnails(renderer)),
-    type: pageType.includes("ALBUM")
+    thumb: bestThumb(
+      rowThumbnails(renderer) ?? o(o(o(renderer, "thumbnailRenderer"), "musicThumbnailRenderer"), "thumbnail")?.thumbnails ?? null
+    ),
+    type: pageType.includes("PODCAST")
+      ? "podcast"
+      : pageType.includes("ALBUM")
       ? "album"
       : pageType.includes("ARTIST")
         ? "artist"
@@ -438,7 +479,8 @@ function parseCardShelfSong(renderer: any): ParsedSong | null {
     .split(" • ")
     .map((p) => p.trim())
     .filter(Boolean);
-  const duration = parts.find((p) => DURATION.test(p)) ?? "";
+  const lastPart = parts[parts.length - 1] ?? "";
+  const duration = DURATION.test(lastPart) ? lastPart : "";
   const rowType = parts.find((p) => TYPE_WORDS.has(p.toLowerCase()));
   const credits = creditsOf(subtitleRuns);
   const artist = parts.find((p) => !DURATION.test(p) && !TYPE_WORDS.has(p.toLowerCase()) && !TALLY.test(p)) ?? "";
@@ -478,7 +520,9 @@ function parseCardShelfBrowse(renderer: any): BrowseItem | null {
       bestThumb(
         o(o(o(renderer, "thumbnail"), "musicThumbnailRenderer"), "thumbnail")?.thumbnails ?? null
       ),
-    type: pageType.includes("ALBUM")
+    type: pageType.includes("PODCAST")
+      ? "podcast"
+      : pageType.includes("ALBUM")
       ? "album"
       : pageType.includes("ARTIST")
         ? "artist"
@@ -498,6 +542,9 @@ function parseCardShelfBrowse(renderer: any): BrowseItem | null {
  * filter — the mixed page stays music-only.
  */
 export function parseSearchPage(response: any, includeVideos: boolean): SearchPageResult {
+  // Songs listed under an artist card print only "Song • 3:51" — the card
+  // itself says who they are by.
+  const billedTo = new Map<any, Credits>();
   const topResults: SearchRow[] = includeVideos
     ? []
     : collectRenderers(response, "musicCardShelfRenderer").flatMap((card): SearchRow[] => {
@@ -506,7 +553,13 @@ export function parseSearchPage(response: any, includeVideos: boolean): SearchPa
         // exclusively to the dedicated Videos tab.
         if (song) return song.isVideo ? [] : [{ kind: "top", song }];
         const browse = parseCardShelfBrowse(card);
-        return browse ? [{ kind: "browse", item: browse }] : [];
+        if (browse?.type === "artist") {
+          for (const row of a(card, "contents") ?? []) {
+            const item = o(row, "musicResponsiveListItemRenderer");
+            if (item) billedTo.set(item, { artistId: browse.browseId, artistName: browse.title });
+          }
+        }
+        return browse ? [{ kind: "browse", item: browse, top: true }] : [];
       });
 
   const rows = collectRenderers(response, "musicResponsiveListItemRenderer");
@@ -526,7 +579,7 @@ export function parseSearchPage(response: any, includeVideos: boolean): SearchPa
     if (browse) {
       if (seenAdd(seen, `b:${browse.browseId}`)) parsed.push({ kind: "browse", item: browse });
     } else {
-      const song = parseResponsiveListItem(renderer);
+      const song = parseResponsiveListItem(renderer, billedTo.get(renderer));
       if (song && song.isVideo === includeVideos && seenAdd(seen, `v:${song.id}`)) {
         parsed.push({ kind: "track", song });
       }
@@ -574,7 +627,7 @@ export function parseBrowseHeader(root: any): { title: string; subtitle: string;
 }
 
 /** Who a release page is billed to, off its own header (mobile pageCredit). */
-function pageCredit(root: any): Credits {
+export function pageCredit(root: any): Credits {
   const header = firstHeader(root);
   if (!header) return {};
   const lines = HEADER_CREDIT_LINES.map((key) => a(o(header, key), "runs") ?? []);
@@ -637,6 +690,24 @@ export function parsePlaylistShelf(root: any): { songs: ParsedSong[]; continuati
   return { songs, continuation: continuationToken(playlistScope) };
 }
 
+/**
+ * A later page of a playlist/album shelf. YouTube answers in one of two
+ * shapes: the legacy `continuationContents.musicPlaylistShelfContinuation`,
+ * or `onResponseReceivedActions` → `appendContinuationItemsAction` whose last
+ * item is a `continuationItemRenderer` carrying the next token. A later page
+ * has no header, so `credit` is the first page's (album rows print no artist).
+ */
+export function parsePlaylistContinuation(
+  response: any,
+  credit: Credits = {}
+): { songs: ParsedSong[]; continuation: string | null } {
+  const scope = o(o(response, "continuationContents"), "musicPlaylistShelfContinuation") ?? response;
+  const songs = collectRenderers(scope, "musicResponsiveListItemRenderer")
+    .map((r) => parseResponsiveListItem(r, credit))
+    .filter((t): t is ParsedSong => !!t);
+  return { songs, continuation: continuationToken(scope) };
+}
+
 /** The editorial blurb — "About the artist" / "About the album" (mobile parseDescription). */
 export function parseDescription(root: any): string | null {
   const shelf = text(o(collectRenderers(root, "musicDescriptionShelfRenderer")[0], "description"));
@@ -682,6 +753,43 @@ export function parseReleasePage(
     // YouTube writes blurbs for its own catalogue releases, not user playlists.
     description: playlist ? null : parseDescription(response),
   };
+}
+
+/* ---------------- podcasts ---------------- */
+
+/** Episode rows of a podcast page (or a later page of it). */
+export function parsePodcastEpisodes(
+  root: any,
+  show: { title: string; author: string; thumb: string }
+): { episodes: PodcastEpisode[]; continuation: string | null } {
+  const episodes: PodcastEpisode[] = [];
+  for (const r of collectRenderers(root, "musicMultiRowListItemRenderer")) {
+    const videoId = s(o(o(r, "onTap"), "watchEndpoint"), "videoId");
+    const title = text(o(r, "title"));
+    if (!videoId || !title.trim()) continue;
+    const subtitle = text(o(r, "subtitle"));
+    const description = text(o(r, "description"));
+    episodes.push({
+      id: videoId,
+      title,
+      artist: show.author || show.title,
+      album: show.title,
+      thumb: bestThumb(rowThumbnails(r)) || show.thumb,
+      duration: 0,
+      episode: true,
+      ...(subtitle ? { published: subtitle.split(" • ").pop()?.trim() } : {}),
+      ...(description ? { description: description.slice(0, 500) } : {}),
+    });
+  }
+  return { episodes, continuation: continuationToken(root) };
+}
+
+/** A podcast show page: header, blurb and its first page of episodes. */
+export function parsePodcastPage(response: any, id: string): PodcastPage & { continuation: string | null } {
+  const header = parseBrowseHeader(response);
+  const show = { title: header?.title ?? "Podcast", author: header?.subtitle ?? "", thumb: header?.thumb ?? "" };
+  const { episodes, continuation } = parsePodcastEpisodes(response, show);
+  return { id, ...show, description: parseDescription(response), episodes, continuation };
 }
 
 /* ---------------- artist page (mobile parseArtistPage) ---------------- */
@@ -826,15 +934,20 @@ function facepileName(header: any): string | null {
 }
 
 /** A remote (YouTube) playlist page's header + track list. */
-export function parseRemotePlaylistPage(response: any, playlistId: string): RemotePlaylistPage {
+export function parseRemotePlaylistPage(response: any, playlistId: string, moreTracks: Track[] = []): RemotePlaylistPage {
   void playlistId;
   const header = firstHeader(response);
   const shelf = parsePlaylistShelf(response);
   const pageThumb = bestThumb(o(collectRenderers(header, "musicThumbnailRenderer")[0], "thumbnail")?.thumbnails);
-  const tracks = (shelf?.songs ?? collectSongsDeep(response)).map((t) => ({
-    ...t,
-    thumb: t.thumb || pageThumb,
-  }));
+  // Later pages (moreTracks) join the first so the count and every action
+  // see the whole playlist, not its first ~100 songs.
+  const seen = new Set<string>();
+  const tracks = [...(shelf?.songs ?? collectSongsDeep(response)), ...moreTracks]
+    .filter((t) => (seen.has(t.id) ? false : (seen.add(t.id), true)))
+    .map((t) => ({
+      ...t,
+      thumb: t.thumb || pageThumb,
+    }));
   // The mobile DetailScreen splits the header's billing into two lines: the
   // credit ("Marie Liesegang, 105 views") and the uppercase metadata line
   // ("PLAYLIST • 7 TRACKS"). headerLines: year and the kind word drop out of
@@ -923,6 +1036,98 @@ export function parseQueueCredits(
     album: album || undefined,
     durationSec,
   };
+}
+
+/* ---------------- song radio (endless AutoPlay) ---------------- */
+
+/** "3:43" or "1:02:33" → seconds; 0 when it isn't a clock. */
+function clockSeconds(v: string): number {
+  const parts = v.trim().split(":").map((p) => parseInt(p, 10));
+  return parts.length >= 2 && parts.every(Number.isFinite) ? parts.reduce((acc, p) => acc * 60 + p, 0) : 0;
+}
+
+/** The artist credit off a queue row's byline: everything before the first bullet. */
+function bylineArtist(runs: any[]): string {
+  const byline = runs.map((run) => s(run, "text") ?? "");
+  const firstBullet = byline.findIndex((t) => t.includes("•"));
+  return (firstBullet === -1 ? byline.join("") : byline.slice(0, firstBullet).join("")).trim();
+}
+
+function radioVideoType(row: any, thumbnails: any): RadioTrack["videoType"] {
+  const type = s(
+    o(
+      o(o(o(row, "navigationEndpoint"), "watchEndpoint"), "watchEndpointMusicSupportedConfigs"),
+      "watchEndpointMusicConfig"
+    ),
+    "musicVideoType"
+  );
+  if (type === "MUSIC_VIDEO_TYPE_ATV") return "song";
+  if (type === "MUSIC_VIDEO_TYPE_UGC") return "upload";
+  if (type === "MUSIC_VIDEO_TYPE_PODCAST_EPISODE") return "episode";
+  if (type) return "video";
+  return isNotSquare(thumbnails) ? "video" : "song";
+}
+
+function radioRow(row: any): RadioTrack | null {
+  const videoId = s(row, "videoId") ?? s(o(o(row, "navigationEndpoint"), "watchEndpoint"), "videoId");
+  const title = text(o(row, "title")).trim();
+  if (!videoId || !title) return null;
+  const runs = a(o(row, "longBylineText"), "runs") ?? [];
+  const credits = creditsOf(runs);
+  const thumbnails = o(row, "thumbnail")?.thumbnails ?? null;
+  return {
+    id: videoId,
+    title,
+    artist: bylineArtist(runs) || credits.artistName || "Unknown artist",
+    artistId: credits.artistId,
+    album: credits.albumName,
+    albumId: credits.albumId,
+    duration: clockSeconds(text(o(row, "lengthText"))),
+    thumb: bestThumb(thumbnails),
+    explicit: hasExplicitBadge(row.badges) || undefined,
+    videoType: radioVideoType(row, thumbnails),
+  };
+}
+
+/**
+ * One page of a song's radio (`next` on playlist RDAMVM<id>, or a
+ * continuation of it). Wrapper rows pair a song with its music video — the
+ * song side is kept, so a recording never arrives twice. The seed row itself,
+ * unplayable rows and the automix preview are left out.
+ */
+export function parseRadioPage(response: any, seedId: string): RadioPage {
+  const panel =
+    o(o(response, "continuationContents"), "playlistPanelContinuation") ??
+    collectRenderers(response, "playlistPanelRenderer")[0] ??
+    null;
+  const tracks: RadioTrack[] = [];
+  let seed: RadioPage["seed"] = null;
+  for (const item of a(panel, "contents") ?? []) {
+    let row = o(item, "playlistPanelVideoRenderer");
+    const wrapper = o(item, "playlistPanelVideoWrapperRenderer");
+    if (wrapper) {
+      const sides = [
+        o(o(wrapper, "primaryRenderer"), "playlistPanelVideoRenderer"),
+        ...(a(wrapper, "counterpart") ?? []).map((c: any) =>
+          o(o(c, "counterpartRenderer"), "playlistPanelVideoRenderer")
+        ),
+      ].filter(Boolean);
+      row = sides.find((side: any) => radioRow(side)?.videoType === "song") ?? sides[0] ?? null;
+    }
+    if (!row || o(row, "unplayableText")) continue;
+    const track = radioRow(row);
+    if (!track) continue;
+    if (row.selected === true || track.id === seedId) {
+      seed ??= { artist: track.artist, artistId: track.artistId };
+      continue;
+    }
+    tracks.push(track);
+  }
+  const continuation = (a(panel, "continuations") ?? [])[0];
+  const next =
+    s(o(continuation, "nextRadioContinuationData"), "continuation") ??
+    s(o(continuation, "nextContinuationData"), "continuation");
+  return { tracks, next, seed };
 }
 
 /* ---------------- cards from browse rows ---------------- */

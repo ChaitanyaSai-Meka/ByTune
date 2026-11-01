@@ -12,6 +12,7 @@
  */
 import { usePlayer } from "../stores/player";
 import { useUI } from "../stores/ui";
+import { useSleepTimer } from "./sleepTimer";
 import type { RepeatMode } from "../stores/player";
 
 function runCommand(command: string): void {
@@ -56,6 +57,17 @@ function runCommand(command: string): void {
       el?.select();
       break;
     }
+    case "sleep-15":
+    case "sleep-30":
+    case "sleep-60":
+      useSleepTimer.getState().start(Number(command.slice("sleep-".length)));
+      break;
+    case "sleep-end":
+      useSleepTimer.getState().startEndOfSong();
+      break;
+    case "sleep-off":
+      useSleepTimer.getState().cancel();
+      break;
     default:
       break;
   }

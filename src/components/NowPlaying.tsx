@@ -35,7 +35,8 @@ import { useArtworkPalette, type ArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
 import { useDrag } from "../lib/dnd";
 import { useCanvas } from "../lib/canvas";
-import { requestLyricsAlignment, useLyricsAlign } from "../lib/lyricsOffset";
+import { requestLyricsAlignment, useLyricsOffset } from "../lib/lyricsOffset";
+import { LyricsTiming } from "./LyricsTiming";
 import type { LyricsResult } from "../types";
 
 /* ================================================================ backdrop */
@@ -323,7 +324,7 @@ export function NowPlaying() {
   }, [track?.id, open]);
 
   // 0 until the audio-anchored alignment lands, then lyrics re-sync to it.
-  const lyricsOffset = useLyricsAlign((s) => s.offsets[track?.id ?? ""] ?? 0);
+  const lyricsOffset = useLyricsOffset(track?.id);
 
   const [mode, setMode] = useState<"lyrics" | "queue">("lyrics");
 
@@ -523,7 +524,8 @@ export function NowPlaying() {
               </div>
               <div className="flex-1 min-h-0 mt-5 flex flex-col">
                 {mode === "lyrics" ? (
-                  <div ref={lyricsPanelRef} className="flex-1 min-h-0 flex">
+                  <div ref={lyricsPanelRef} className="group relative flex-1 min-h-0 flex">
+                    <LyricsTiming trackId={track.id} className="absolute right-0 top-0 z-10" />
                     {/* Same LyricsView the centre pane uses, hero scale —
                         keyed per track so the scroll position resets with the
                         song, exactly like LyricsCenter. The anchor keeps the

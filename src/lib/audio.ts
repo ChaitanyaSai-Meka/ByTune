@@ -48,6 +48,7 @@ import { emitPlayEvent } from "./playEvents";
 import { analyseTrackHead, detectEdgeSilence } from "./analysis";
 import { upgradeArtwork } from "./artwork";
 import { createMediaKeyTap } from "./media-key-tap";
+import { useSleepTimer } from "./sleepTimer";
 import {
   deviceChoices,
   outputChangeAction,
@@ -92,6 +93,9 @@ let fadeTimer: number | null = null;
 /** arming window: resolve/start the next track this long before the fade point */
 const ARM_LEAD_MS = 4000;
 let armed: { toId: string } | null = null;
+/** A blend whose incoming song failed. It isn't retried while the same song
+ *  plays: that song plays out and the normal end path loads the next one. */
+let failedBlend: { fromId: string | null; toId: string } | null = null;
 /**
  * Bumped whenever something invalidates an in-flight arming (a track change, a
  * completed or aborted transition). `beginFade` awaits several times before it
@@ -158,39 +162,65 @@ function isAbortError(err: unknown): boolean {
  * sample is ever pushed past full scale. Local library files are exempt —
  * they play at their original level.
  */
-const TARGET_LUFS = -14;
+/** Volume leveling targets (integrated loudness); "off" plays streams as mastered. */
+const LOUDNESS_TARGETS: Record<string, number> = { quiet: -19, normal: -14, loud: -11 };
 /**
  * Gain assumed for a track whose loudness hasn't landed yet. Typical YouTube
  * masters sit around -9 LUFS, whose normalisation gain is ≈0.56; the
  * measurement usually arrives with the first audio chunk, so this only
  * shapes the very start of a stream.
  */
-const FALLBACK_GAIN = 0.56;
+const FALLBACK_LUFS = -9;
 
-/** track id → normalisation gain, insertion-ordered as an LRU. */
-const loudnessGains = new Map<string, number>();
+/** track id → measured loudness (LUFS), or null for "play at its own level"
+ * (a local file without ReplayGain). Insertion-ordered as an LRU. */
+const loudnessLufs = new Map<string, number | null>();
 const GAINS_MAX = 600;
 
 /** Normalisation gain that moves a track measured at `lufs` to the target.
  * Attenuation-only: scaling a signal down is lossless, boosting would clip
  * peaks on masters that sit near full scale — quality comes first. */
-function gainForLufs(lufs: number): number {
-  return Math.min(1, Math.max(0.05, Math.pow(10, (TARGET_LUFS - lufs) / 20)));
+function gainForLufs(lufs: number, target: number): number {
+  return Math.min(1, Math.max(0.05, Math.pow(10, (target - lufs) / 20)));
 }
 
-function rememberGain(trackId: string, gain: number): void {
-  loudnessGains.delete(trackId);
-  loudnessGains.set(trackId, gain);
-  while (loudnessGains.size > GAINS_MAX) {
-    const first = loudnessGains.keys().next().value;
+function rememberLufs(trackId: string, lufs: number | null): void {
+  loudnessLufs.delete(trackId);
+  loudnessLufs.set(trackId, lufs);
+  while (loudnessLufs.size > GAINS_MAX) {
+    const first = loudnessLufs.keys().next().value;
     if (first === undefined) break;
-    loudnessGains.delete(first);
+    loudnessLufs.delete(first);
   }
 }
 
 function gainForTrack(trackId: string | null): number {
-  if (!trackId) return FALLBACK_GAIN * MASTER_TRIM;
-  return loudnessGains.get(trackId) ?? FALLBACK_GAIN * MASTER_TRIM;
+  const known = trackId ? loudnessLufs.get(trackId) : undefined;
+  if (known === null) return 1;
+  const target = LOUDNESS_TARGETS[useSettings.getState().loudnessLevel];
+  if (target === undefined) return MASTER_TRIM; // leveling off
+  return gainForLufs(known ?? FALLBACK_LUFS, target) * MASTER_TRIM;
+}
+
+let deviceRate: number | null = null;
+
+/** Live engine facts for the Audio details card. */
+export function audioEngineInfo(trackId: string): { levelingDb: number; limitingDb: number; outputRate: number | null } {
+  if (deviceRate === null && typeof AudioContext !== "undefined") {
+    try {
+      // The rate Chromium mixes at for this output; a throwaway context reads it.
+      const probe = new AudioContext();
+      deviceRate = probe.sampleRate;
+      void probe.close();
+    } catch {
+      deviceRate = 0;
+    }
+  }
+  return {
+    levelingDb: 20 * Math.log10(gainForTrack(trackId)),
+    limitingDb: getEqLimitingDb(),
+    outputRate: eqCtx?.sampleRate ?? (deviceRate || null),
+  };
 }
 
 /**
@@ -204,7 +234,7 @@ async function fetchLoudness(proxyUrl: string, trackId: string): Promise<void> {
     const data = (await res.json()) as { lufs?: unknown };
     const lufs = typeof data?.lufs === "number" && Number.isFinite(data.lufs) ? data.lufs : null;
     if (lufs === null) return;
-    rememberGain(trackId, gainForLufs(lufs) * MASTER_TRIM);
+    rememberLufs(trackId, lufs);
     // The track already playing (or being faded into) picks the gain up now.
     const state = usePlayer.getState();
     if (state.queue[state.index]?.id === trackId || fade?.toId === trackId || fade?.fromId === trackId) {
@@ -326,12 +356,15 @@ function refreshVolumes(): void {
  */
 function applyElementVolumes(mainGain: number, standbyGain: number): void {
   if (!elements) return;
-  const v = userVolume();
+  const v = userVolume() * useSleepTimer.getState().level;
   const state = usePlayer.getState();
   const mainId = state.queue[state.index]?.id ?? null;
   const standbyId = fade?.toId ?? null;
   const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
   elements[mainIdx].volume = clamp01(v * mainGain * gainForTrack(mainId));
+  // The steady level, not the volume slider or the sleep fade: headroom tied
+  // to those cancelled them out whenever a boost needed room.
+  applyHeadroom(clamp01(gainForTrack(mainId)));
   elements[mainIdx === 0 ? 1 : 0].volume = clamp01(v * standbyGain * gainForTrack(standbyId));
 }
 
@@ -364,7 +397,14 @@ function applySink(): void {
   if (eqCtx) {
     const ctx = eqCtx as AudioContext & { sinkId?: string; setSinkId?: (id: string) => Promise<void> };
     if (typeof ctx.setSinkId === "function" && ctx.sinkId !== target) {
-      ctx.setSinkId(target).catch(() => ctx.setSinkId!("").catch(() => undefined));
+      // Same transient-rejection retry as the element path below: with the EQ
+      // on, a Bluetooth reconnect used to bounce playback to the default device.
+      ctx.setSinkId(target).catch(() => {
+        if (!target) return;
+        window.setTimeout(() => {
+          ctx.setSinkId!(target).catch(() => ctx.setSinkId!("").catch(() => undefined));
+        }, 300);
+      });
     }
     return;
   }
@@ -394,11 +434,73 @@ export const EQ_BANDS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 let eqCtx: AudioContext | null = null;
 let eqFilters: BiquadFilterNode[] = [];
 let eqLimiter: DynamicsCompressorNode | null = null;
-let eqLimited = false;
+let eqPreGain: GainNode | null = null;
+/** Peak of the current EQ curve in dB (0 with no boost). */
+let eqPeakDb = 0;
+
+const LIMIT_THRESHOLD_DB = -0.5;
+const LIMIT_RATIO = 20;
 
 /**
- * Both decks → 10 biquads → (limiter while any band is boosted) → speakers. Element volume is applied
- * before a MediaElementSource (verified on Electron's Chromium), so the
+ * The makeup gain the Web Audio compressor adds on its own (spec: (1 /
+ * fullRangeGain)^0.6, hard knee). Cancelled after the limiter so it only ever
+ * touches peaks and never lifts the whole signal.
+ */
+export function compressorMakeupDb(thresholdDb: number, ratio: number): number {
+  const fullRangeDb = thresholdDb + (0 - thresholdDb) / ratio;
+  return -0.6 * fullRangeDb;
+}
+
+/**
+ * Auto headroom: how far to pull the signal down before the limiter so EQ
+ * boosts don't clip — only by what the boost would push past full scale at
+ * this input level (element volume × loudness gain, applied before the graph).
+ */
+export function headroomDb(peakDb: number, level: number): number {
+  if (!(level > 0) || !Number.isFinite(peakDb) || peakDb <= 0) return 0;
+  return Math.max(0, peakDb + 20 * Math.log10(Math.min(1, level)));
+}
+
+/** Peak of the combined band response, from throwaway filters set to the target gains. */
+function eqResponsePeakDb(ctx: BaseAudioContext, gains: number[]): number {
+  if (!gains.some((g) => g > 0)) return 0;
+  const freqs = new Float32Array(96);
+  // Below Nyquist: a 16/24 kHz context (Bluetooth hands-free) answers NaN above it.
+  const top = Math.min(20000, ctx.sampleRate / 2 - 1);
+  for (let i = 0; i < freqs.length; i++) freqs[i] = 20 * Math.pow(top / 20, i / (freqs.length - 1));
+  const total = new Float32Array(freqs.length);
+  const mag = new Float32Array(freqs.length);
+  const phase = new Float32Array(freqs.length);
+  EQ_BANDS.forEach((freq, i) => {
+    const f = ctx.createBiquadFilter();
+    f.type = i === 0 ? "lowshelf" : i === EQ_BANDS.length - 1 ? "highshelf" : "peaking";
+    f.frequency.value = freq;
+    f.Q.value = 1.41;
+    f.gain.value = gains[i] ?? 0;
+    f.getFrequencyResponse(freqs, mag, phase);
+    for (let k = 0; k < freqs.length; k++) total[k] += 20 * Math.log10(Math.max(1e-6, mag[k]));
+  });
+  const peak = Math.max(0, ...total);
+  return Number.isFinite(peak) ? peak : 0;
+}
+
+/** Re-aim the headroom pre-gain for the steady level of the playing deck. */
+function applyHeadroom(level: number): void {
+  if (!eqCtx || !eqPreGain) return;
+  const db = useSettings.getState().eqAutoHeadroom ? headroomDb(eqPeakDb, level) : 0;
+  eqPreGain.gain.setTargetAtTime(Math.pow(10, -db / 20), eqCtx.currentTime, 0.05);
+}
+
+/** Limiter gain reduction right now (dB, 0 when idle) — for an Audio details readout. */
+export function getEqLimitingDb(): number {
+  return eqLimiter ? Math.min(0, eqLimiter.reduction) : 0;
+}
+
+/**
+ * Both decks → 10 biquads → headroom pre-gain → limiter → makeup cancel →
+ * speakers. The limiter is always last, so crossfades and boosts can't clip;
+ * below its threshold it passes the signal untouched. Element volume is
+ * applied before a MediaElementSource (verified on Electron's Chromium), so the
  * gain/fade/normalisation logic above keeps working through the graph.
  * Built on first enable only: a deck can never be detached from its source
  * node again, so turning the EQ off afterwards just flattens the bands
@@ -411,16 +513,18 @@ function applyEq(): void {
     if (!eqEnabled) return;
     const ctx = new AudioContext();
     eqCtx = ctx;
-    // Brick-wall-ish limiter instead of a preamp: a preamp pulled the whole
-    // signal down by the largest boost, so every boost made playback quieter.
-    // This only touches the peaks a boost pushes past full scale.
+    // A limiter instead of a fixed preamp: a preamp pulled the whole signal
+    // down by the largest boost, so every boost made playback quieter. Auto
+    // headroom only lowers the level when a boost would clip at this volume.
     eqLimiter = ctx.createDynamicsCompressor();
-    eqLimiter.threshold.value = -0.5;
+    eqLimiter.threshold.value = LIMIT_THRESHOLD_DB;
     eqLimiter.knee.value = 0;
-    eqLimiter.ratio.value = 20;
+    eqLimiter.ratio.value = LIMIT_RATIO;
     eqLimiter.attack.value = 0.002;
     eqLimiter.release.value = 0.15;
-    eqLimiter.connect(ctx.destination);
+    const makeup = ctx.createGain();
+    makeup.gain.value = Math.pow(10, -compressorMakeupDb(LIMIT_THRESHOLD_DB, LIMIT_RATIO) / 20);
+    eqPreGain = ctx.createGain();
     eqFilters = EQ_BANDS.map((freq, i) => {
       const f = ctx.createBiquadFilter();
       f.type = i === 0 ? "lowshelf" : i === EQ_BANDS.length - 1 ? "highshelf" : "peaking";
@@ -430,21 +534,17 @@ function applyEq(): void {
     });
     for (const e of elements) ctx.createMediaElementSource(e).connect(eqFilters[0]);
     for (let i = 1; i < eqFilters.length; i++) eqFilters[i - 1].connect(eqFilters[i]);
-    eqFilters[eqFilters.length - 1].connect(ctx.destination);
+    eqFilters[eqFilters.length - 1].connect(eqPreGain);
+    eqPreGain.connect(eqLimiter);
+    eqLimiter.connect(makeup);
+    makeup.connect(ctx.destination);
     applySink();
   }
   const gains = eqEnabled ? eqGains : [];
   const t = eqCtx.currentTime;
   eqFilters.forEach((f, i) => f.gain.setTargetAtTime(gains[i] ?? 0, t, 0.02));
-  // The limiter sits in the path only while something is boosted, so a flat
-  // or cut-only EQ (and EQ off) stays bit-transparent.
-  const limit = gains.some((g) => g > 0);
-  if (limit !== eqLimited) {
-    const last = eqFilters[eqFilters.length - 1];
-    last.disconnect();
-    last.connect(limit ? eqLimiter! : eqCtx.destination);
-    eqLimited = limit;
-  }
+  eqPeakDb = eqResponsePeakDb(eqCtx, gains);
+  refreshVolumes();
   if (eqCtx.state === "suspended") void eqCtx.resume();
 }
 
@@ -556,6 +656,7 @@ function planFadeStart(nextId: string, fadeMs: number): { delayMs: number; smart
 
 function maybeArmTransition(): void {
   if (fade || armed) return;
+  if (useSleepTimer.getState().endOfSong) return; // the music stops when this song ends
   const fadeMs = fadeMsForNext();
   if (fadeMs < 500) return;
   const state = usePlayer.getState();
@@ -570,6 +671,8 @@ function maybeArmTransition(): void {
 
   const nextTrack = state.queue[state.index + 1];
   if (!nextTrack) return;
+  if (failedBlend?.fromId !== loadedId) failedBlend = null;
+  if (failedBlend?.toId === nextTrack.id) return;
   armed = { toId: nextTrack.id };
   void beginFade(nextTrack, fadeMs);
 }
@@ -580,10 +683,15 @@ async function beginFade(nextTrack: Track, fadeMs: number): Promise<void> {
   /** The arming this continuation belongs to is still the live one. */
   const stale = (): boolean => token !== transitionToken;
   try {
-    const url = await requireBridge().getStreamUrl(nextTrack.id, false, useSettings.getState().streamingQuality);
+    // Local files load through their own route; streams through the proxy.
+    const local = !!nextTrack.localPath || nextTrack.id.startsWith("local:");
+    const url = local
+      ? await requireBridge().localTrackUrl(nextTrack.id)
+      : await requireBridge().getStreamUrl(nextTrack.id, false, useSettings.getState().streamingQuality);
+    if (!url) throw new Error("next track has no source");
     // The fade's standby element carries the incoming track's own loudness
     // gain; the load-time prefetch usually already did this — cheap retry.
-    void fetchLoudness(url, nextTrack.id);
+    if (!local) void fetchLoudness(url, nextTrack.id);
     // The world may have moved on while we resolved.
     const cur = usePlayer.getState().queue[usePlayer.getState().index];
     if (stale() || !armed || armed.toId !== nextTrack.id || fade || cur?.id === nextTrack.id) {
@@ -638,11 +746,12 @@ async function beginFade(nextTrack: Track, fadeMs: number): Promise<void> {
     if (plan.smart) {
       useUI.getState().toast(`Automix: ${plan.reason}`, "info");
     }
-    try {
-      void stand.play();
-    } catch {
-      /* fade falls back below if the standby refuses */
-    }
+    // A refused or failed start drops the blend (see the standby error listener).
+    stand.play().catch((err: unknown) => {
+      if (isAbortError(err) || fade?.toId !== nextTrack.id) return;
+      failedBlend = { fromId: loadedId, toId: nextTrack.id };
+      abortFade(false);
+    });
     stopPpRamp();
     applyElementVolumes(1, 0);
     driveFade();
@@ -704,7 +813,11 @@ function stopFadeTimer(): void {
  * element is kept as-is: same src, same playback position, still running.
  * Nothing is reloaded and `currentTime` is never rewritten.
  */
-function completeTransition(reason: "blend-complete" | "outgoing-ended" | "incoming-ended"): void {
+function completeTransition(
+  reason: "blend-complete" | "outgoing-ended" | "incoming-ended",
+  /** where the store already put the incoming track (a Next pressed mid-blend) */
+  knownIndex?: number
+): void {
   if (settling) return;
   const f = fade;
   if (!f) return;
@@ -714,7 +827,15 @@ function completeTransition(reason: "blend-complete" | "outgoing-ended" | "incom
   stopFadeTimer();
   try {
     const state = usePlayer.getState();
-    const ni = state.queue.findIndex((t) => t.id === f.toId);
+    // The incoming track sits right after the outgoing one. An earlier copy of
+    // the same id (a song replayed further back) must not win, or the index
+    // jumps back and everything after it plays again.
+    const ni =
+      knownIndex !== undefined && state.queue[knownIndex]?.id === f.toId
+        ? knownIndex
+        : state.queue[state.index + 1]?.id === f.toId
+          ? state.index + 1
+          : state.queue.findIndex((t) => t.id === f.toId);
     if (ni < 0) {
       // The incoming track left the queue mid-blend (it was removed, or the
       // queue was truncated). Nothing owns that deck any more, so stop it —
@@ -729,6 +850,8 @@ function completeTransition(reason: "blend-complete" | "outgoing-ended" | "incom
         /* ignore */
       }
       applyElementVolumes(1, 0);
+      // The outgoing deck already ended: nothing else would move the queue on.
+      if (reason === "outgoing-ended") usePlayer.getState().next(false);
       return;
     }
     // Role swap FIRST: the standby element IS the session player now, and the
@@ -864,7 +987,7 @@ function armSilenceTail(tailSec: number): void {
     if (transitioning()) return;
     const cur = el();
     if (!Number.isFinite(cur.duration)) return;
-    if (cur.currentTime >= cur.duration - tailSec - 0.05) {
+    if (cur.currentTime >= cur.duration - tailSec - 0.05 && !sleepStopsHere()) {
       usePlayer.getState().next(false);
     }
   };
@@ -889,7 +1012,9 @@ function requestSilenceAnalysis(track: Track): void {
   const s = useSettings.getState();
   if (!s.skipSilence) return;
   if (silenceTrims.has(track.id) || silenceAnalysing.has(track.id)) return;
-  if (!track.duration || track.duration < 10) return;
+  // The whole stream is downloaded and decoded in memory: hour-long mixes
+  // (whose lengths now parse) would cost hundreds of MB.
+  if (!track.duration || track.duration < 10 || track.duration > 20 * 60) return;
   const isLocal = !!track.localPath || track.id.startsWith("local:");
   silenceAnalysing.add(track.id);
   void (async () => {
@@ -981,7 +1106,17 @@ export function initAudioEngine(): void {
     // Errors and natural ends must be caught on BOTH elements: after a
     // crossfade the other element becomes the session player.
     e.addEventListener("error", () => {
-      if (i !== mainIdx) return;
+      if (i !== mainIdx) {
+        // The standby deck failed while blending in: drop the blend so the
+        // outgoing song plays out and the normal end path loads the next one.
+        // Otherwise the music faded to silence and a dead deck was promoted.
+        const toId = fade?.toId ?? armed?.toId;
+        if (toId) {
+          failedBlend = { fromId: loadedId, toId };
+          abortFade(false);
+        }
+        return;
+      }
       const cur = usePlayer.getState().queue[usePlayer.getState().index];
       if (!cur || loadedId !== cur.id) return;
       handleFailure(cur);
@@ -1010,7 +1145,7 @@ export function initAudioEngine(): void {
       // tear down a deck the listener is already hearing and replay it from
       // the top. Promote it instead: it becomes active once, where it is.
       if (fade && cur && cur.id === fade.toId) {
-        completeTransition("outgoing-ended");
+        completeTransition("outgoing-ended", state.index);
         return;
       }
       // Anything else is the user (or a settings/queue change) steering to a
@@ -1026,8 +1161,15 @@ export function initAudioEngine(): void {
 
     if (fade) {
       // Manual interference during a fade: anything other than pure play-state
-      // changes on the same track aborts the blend.
-      if (state.seekNonce !== prev.seekNonce) abortFade(false);
+      // changes on the same track aborts the blend. So does a queue edit that
+      // changes what comes next (a song added in front of the one fading in,
+      // or that song removed): the blend would land on the wrong track.
+      if (
+        state.seekNonce !== prev.seekNonce ||
+        (state.queue !== prev.queue && state.queue[state.index + 1]?.id !== fade.toId)
+      ) {
+        abortFade(false);
+      }
     }
 
     if (state.queue !== prev.queue && cur && cur.id === prevCur?.id && state.position === 0 && prev.position > 3) {
@@ -1036,6 +1178,13 @@ export function initAudioEngine(): void {
       } catch {
         /* ignore */
       }
+    }
+
+    // A new song became next under the playing one (an AutoPlay refill, Play
+    // next): warm it the way loadTrack does, so a skip or blend never waits.
+    if (state.queue !== prev.queue && cur && loadedId === cur.id) {
+      const upNext = state.queue[state.index + 1] ?? null;
+      if (upNext && upNext.id !== prev.queue[prev.index + 1]?.id) prefetchLoudness(upNext);
     }
 
     if (state.playing !== prev.playing) {
@@ -1107,11 +1256,30 @@ export function initAudioEngine(): void {
   useSettings.subscribe(() => applySink());
   applyEq();
   useSettings.subscribe((st, prev) => {
-    if (st.eqEnabled !== prev.eqEnabled || st.eqGains !== prev.eqGains) applyEq();
+    if (st.eqEnabled !== prev.eqEnabled || st.eqGains !== prev.eqGains || st.eqAutoHeadroom !== prev.eqAutoHeadroom) applyEq();
+  });
+  // Volume leveling level changes apply at once.
+  useSettings.subscribe((st, prev) => {
+    if (st.loudnessLevel !== prev.loudnessLevel) refreshVolumes();
+  });
+  // The sleep timer's closing fade.
+  useSleepTimer.subscribe((s, prev) => {
+    if (s.level !== prev.level) refreshVolumes();
+    if (s.endOfSong && !prev.endOfSong && (fade || armed)) abortFade(false);
   });
 
   setupMediaSession();
   setupAudioOutputWatch();
+}
+
+/** The sleep timer's "end of this song": stop instead of moving on (no
+ *  repeat, no next song, no AutoPlay). True when it stopped playback. */
+function sleepStopsHere(): boolean {
+  const sleep = useSleepTimer.getState();
+  if (!sleep.endOfSong) return false;
+  sleep.cancel();
+  usePlayer.getState().setPlaying(false);
+  return true;
 }
 
 function onTrackEnded(): void {
@@ -1132,66 +1300,18 @@ function onTrackEnded(): void {
     completeTransition("outgoing-ended");
     return;
   }
-  if (state.repeat === "one") {
+  if (sleepStopsHere()) return;
+  // Repeat-one — and repeat-all on a one-song queue, where the next song is
+  // this song again and the store sees no change to act on.
+  if (state.repeat === "one" || (state.repeat === "all" && state.queue.length === 1)) {
     const a = el();
     a.currentTime = 0;
     void a.play().catch(() => undefined);
     return;
   }
-  // Queue exhausted with repeat off: keep the music going if the user has
-  // AutoPlay on by pulling one more suggestion into the queue.
-  const atEnd = state.index >= state.queue.length - 1;
-  if (atEnd && state.repeat === "off" && useSettings.getState().autoplay) {
-    void autoplayNext();
-    return;
-  }
+  // At the end of the queue the store's next() hands over to AutoPlay
+  // (lib/autoplay.ts), which normally has the next song queued already.
   state.next(false);
-}
-
-/** Guards against overlapping AutoPlay fetches when tracks end back-to-back. */
-let autoplaying = false;
-
-/**
- * AutoPlay: the queue ran out, so fetch the home feed and append one track the
- * listener hasn't heard this session, then jump straight to it.
- */
-async function autoplayNext(): Promise<void> {
-  if (autoplaying) return;
-  autoplaying = true;
-  try {
-    const shelves = await requireBridge().getHome();
-    const pool: Track[] = [];
-    for (const shelf of shelves ?? []) {
-      for (const item of shelf.items ?? []) {
-        if (item.kind === "track" && item.track) pool.push(item.track);
-      }
-    }
-    const state = usePlayer.getState();
-    // Never append a track the queue already holds — the old unconditional
-    // pool[0] pick repeated one song forever once the queue drained.
-    // "Don't repeat suggestions" additionally keeps everything from recent
-    // history out of the pick.
-    const heard = new Set(state.queue.map((t) => t.id));
-    if (useSettings.getState().dontRepeatSuggestions) {
-      for (const t of useLibrary.getState().history) heard.add(t.id);
-    }
-    const pick = pool.find((t) => !heard.has(t.id)) ?? pool[0];
-    if (!pick) {
-      usePlayer.setState({ playing: false });
-      return;
-    }
-    state.addToQueue(pick);
-    usePlayer.setState({
-      index: usePlayer.getState().queue.length - 1,
-      playing: true,
-      position: 0,
-      error: null,
-    });
-  } catch {
-    usePlayer.setState({ playing: false });
-  } finally {
-    autoplaying = false;
-  }
 }
 
 /** Called once after persisted state has been rehydrated. */
@@ -1249,8 +1369,15 @@ async function loadUrl(track: Track, autoplay: boolean, forceRotate: boolean): P
       // and the IPC lookup is a local roundtrip.
       const src = await requireBridge().localTrackUrl(track.id);
       if (!src) throw new Error("Local file is missing on disk");
-      // Local files play at their original level — no normalisation, no trim.
-      rememberGain(track.id, 1);
+      // Local files play at their own level unless they carry ReplayGain,
+      // which levels them like streams (reference ≈ -18 LUFS).
+      rememberLufs(track.id, null);
+      void (async () => {
+        const d = await requireBridge().audioDetails(track.id);
+        if (typeof d?.gainDb !== "number") return;
+        rememberLufs(track.id, -18 - d.gainDb);
+        if (usePlayer.getState().queue[usePlayer.getState().index]?.id === track.id) refreshVolumes();
+      })().catch(() => undefined);
       // Apply immediately: without this the element keeps the PREVIOUS
       // track's gain (streams land their own via fetchLoudness, locals
       // would otherwise never get a volume write).
@@ -1329,6 +1456,9 @@ function handleFailure(track: Track, err?: unknown): void {
   if (!state.playing) return;
   if (retryCount < 1) {
     retryCount += 1;
+    // Resume where the song was, not from 0:00 (a stream dying mid-song).
+    const at = el().currentTime;
+    pendingSeek = at > 1 ? at : usePlayer.getState().position;
     void loadUrl(track, true, true);
     return;
   }

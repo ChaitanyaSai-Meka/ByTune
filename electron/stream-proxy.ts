@@ -157,10 +157,24 @@ function serveLocalFile(id: string, range: string | undefined, res: http.ServerR
   stream.pipe(res);
 }
 
-function fetchUpstream(streamUrl: string, range: string | undefined): Promise<Response> {
+/** Waiting this long for headers, or for the next chunk mid-song, means the stream is dead. */
+const UPSTREAM_TIMEOUT_MS = 20_000;
+
+/** The upstream request plus its abort switch (also used by the idle watchdog). */
+async function fetchUpstream(
+  streamUrl: string,
+  range: string | undefined,
+  ctl = new AbortController()
+): Promise<Response> {
   const headers: Record<string, string> = { "User-Agent": UA };
   if (range) headers.Range = range;
-  return fetch(streamUrl, { headers });
+  // A timeout on headers only: the body of a long song streams for minutes.
+  const timer = setTimeout(() => ctl.abort(new Error("upstream timed out")), UPSTREAM_TIMEOUT_MS);
+  try {
+    return await fetch(streamUrl, { headers, signal: ctl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -204,13 +218,15 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
 
     let stream = await resolveStream(trackId as string, forceRotate, maxKbps);
-    let upstream = await fetchUpstream(stream.url, range);
+    let ctl = new AbortController();
+    let upstream = await fetchUpstream(stream.url, range, ctl);
 
     // Self-heal: a URL that just went bad gets one more resolution.
     if (upstream.status === 403 && trackId) {
       console.warn(`[bytune] proxy upstream 403 for ${trackId}, rotating client`);
       stream = await resolveStream(trackId, true, maxKbps);
-      upstream = await fetchUpstream(stream.url, range);
+      ctl = new AbortController();
+      upstream = await fetchUpstream(stream.url, range, ctl);
     }
 
     if (!upstream.ok || !upstream.body) {
@@ -234,21 +250,52 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     req.on("close", () => {
       void reader.cancel().catch(() => undefined);
     });
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value && value.length > 0 && !res.write(value)) {
-        await new Promise<void>((resolve) => res.once("drain", () => resolve()));
+    // Idle watchdog: an upstream that stops sending mid-song is aborted, so
+    // the player gets an error (and retries) instead of buffering forever.
+    let idle = setTimeout(() => ctl.abort(new Error("upstream stalled")), UPSTREAM_TIMEOUT_MS);
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        clearTimeout(idle);
+        if (done || res.destroyed) break;
+        if (value && value.length > 0 && !res.write(value)) {
+          // Wait for room, or for the player to hang up (a seek or skip
+          // closes the request; waiting on `drain` alone never returned).
+          await new Promise<void>((resolve) => {
+            const settle = (): void => {
+              res.off("drain", settle);
+              res.off("close", settle);
+              resolve();
+            };
+            res.once("drain", settle);
+            res.once("close", settle);
+          });
+          if (res.destroyed) break;
+        }
+        idle = setTimeout(() => ctl.abort(new Error("upstream stalled")), UPSTREAM_TIMEOUT_MS);
       }
+    } finally {
+      clearTimeout(idle);
+    }
+    if (res.destroyed) {
+      void reader.cancel().catch(() => undefined);
+      return;
     }
     res.end();
   } catch (err) {
     console.warn("[bytune] proxy error:", err instanceof Error ? err.message : err);
+    // Mid-body (headers already sent) the only honest answer is to drop the
+    // connection: Chromium then errors or re-requests the range. Writing a
+    // status here threw and left the response open, so playback hung.
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
     try {
       res.writeHead(502);
       res.end("proxy error");
     } catch {
-      /* response already gone */
+      res.destroy();
     }
   }
 }

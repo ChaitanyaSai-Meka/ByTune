@@ -10,6 +10,7 @@ import { transform, build } from "esbuild";
 const require = createRequire(import.meta.url);
 
 test("actual main reset IPC clears files and stops the real stats timer", async () => {
+  const { DEVICE_SETTINGS_FIELDS } = await import("../.test-build/sync-merge.mjs");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bytune-reset-handler-"));
   const handlers = new Map();
   const electron = {
@@ -35,6 +36,7 @@ test("actual main reset IPC clears files and stops the real stats timer", async 
         if (name === "./supabase") return { readProfile: () => null, signIn: async (id) => ({ mode: "account", userId: id }), signOut: async () => ({ mode: null, userId: null }) };
         if (name === "./downloads") return { resetDownloads: async () => {}, addDownloadListener() {}, defaultDownloadDir: async () => path.join(dir, "downloads") };
         if (name === "./local-library") return { resetLocalLibrary: async () => {} };
+        if (name === "./sync-merge") return { DEVICE_SETTINGS_FIELDS };
         if (name === "./pip") return { registerPipIpc() {}, isTrustedSender: () => true, restrictNavigation() {}, rendererUrl: () => "http://127.0.0.1:5173/" };
         if (name.startsWith("./")) return {};
         return require(name);

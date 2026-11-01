@@ -4,6 +4,7 @@ import { Dialog } from "./components/primitives";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { prefetchLyrics, LyricsCenter } from "./components/LyricsCenter";
 import { NowPlaying } from "./components/NowPlaying";
+import { PlaylistPicker } from "./components/PlaylistPicker";
 import { Onboarding } from "./views/OnboardingView";
 import { PlayerBar } from "./components/PlayerBar";
 import { RightRail } from "./components/RightRail";
@@ -11,8 +12,10 @@ import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
 import { TopBar } from "./components/TopBar";
 import { engineBoot } from "./lib/audio";
+import { initAutoplay } from "./lib/autoplay";
 import { setAmbientFromArtwork } from "./lib/ambient";
 import { listenForDownloadProgress } from "./lib/downloads";
+import { LYRICS_NUDGE_STEP, useLyricsNudge } from "./lib/lyricsOffset";
 import { watchMenuCommands } from "./lib/menuCommands";
 import { usePanelDrop } from "./lib/panelDrop";
 import { useArtworkPalette } from "./lib/palette";
@@ -33,6 +36,7 @@ import { RemotePlaylistView } from "./views/RemotePlaylistView";
 import { LibraryView } from "./views/LibraryView";import { LocalMusicView } from "./views/LocalMusicView";
 import { PlaylistView } from "./views/PlaylistView";
 import { ReplayView } from "./views/ReplayView";
+import { PodcastView } from "./views/PodcastView";
 import { SearchView } from "./views/SearchView";
 import { SettingsView } from "./views/SettingsView";
 
@@ -71,7 +75,9 @@ function useKeyboardShortcuts(): void {
       if (e.ctrlKey || e.metaKey) {
         if (e.key.toLowerCase() === "f") {
           e.preventDefault();
-          const el = document.getElementById("global-search") as HTMLInputElement | null;
+          // On the Settings page Ctrl/Cmd+F searches the settings instead.
+          const el = (document.getElementById("settings-filter") ??
+            document.getElementById("global-search")) as HTMLInputElement | null;
           el?.focus();
           el?.select();
         }
@@ -84,7 +90,10 @@ function useKeyboardShortcuts(): void {
       // Enter via its own capture listener); without this guard Space toggled
       // playback behind a confirm dialog, and preventDefault kept the
       // focused Confirm button dead.
-      if (useUI.getState().dialog) return;
+      // A menu or the playlist picker drives the keyboard while open: arrows and
+      // Space must not also change the volume, seek or toggle playback.
+      const layer = useUI.getState();
+      if (layer.dialog || layer.contextMenu || layer.playlistPicker) return;
       if (e.key === "Escape") {
         const ui = useUI.getState();
         // A context menu is the topmost layer and owns Escape: its own
@@ -112,6 +121,7 @@ function useKeyboardShortcuts(): void {
       // whole track per repeat event.
       const isPlainArrow =
         !e.shiftKey &&
+        !e.altKey &&
         (e.code === "ArrowRight" || e.code === "ArrowLeft" || e.code === "ArrowUp" || e.code === "ArrowDown");
       if (e.repeat && !isPlainArrow) return;
 
@@ -122,11 +132,17 @@ function useKeyboardShortcuts(): void {
           player.toggle();
           break;
         case "ArrowRight":
-          if (e.shiftKey) player.next(true);
+          if (e.altKey) {
+            e.preventDefault();
+            ui.goForward();
+          } else if (e.shiftKey) player.next(true);
           else player.seek(player.position + 5);
           break;
         case "ArrowLeft":
-          if (e.shiftKey) player.prev();
+          if (e.altKey) {
+            e.preventDefault();
+            ui.goBack();
+          } else if (e.shiftKey) player.prev();
           else player.seek(player.position - 5);
           break;
         case "ArrowUp":
@@ -155,16 +171,39 @@ function useKeyboardShortcuts(): void {
         case "KeyN":
           ui.toggleNowPlaying();
           break;
-        case "Slash":
-          e.preventDefault();
-          document.getElementById("global-search")?.focus();
+        case "BracketLeft":
+        case "BracketRight": {
+          // This song's lyrics timing, while lyrics are on screen.
+          const id = player.queue[player.index]?.id;
+          if (!id || (!ui.lyricsCenter && !ui.nowPlayingOpen)) break;
+          useLyricsNudge.getState().nudge(id, e.code === "BracketLeft" ? -LYRICS_NUDGE_STEP : LYRICS_NUDGE_STEP);
           break;
+        }
+        case "Slash": {
+          e.preventDefault();
+          // Like Ctrl/Cmd+F: select the old query so typing replaces it.
+          const field = document.getElementById("global-search") as HTMLInputElement | null;
+          field?.focus();
+          field?.select();
+          break;
+        }
         default:
           break;
       }
     };
+    // The mouse's back/forward side buttons walk the view history.
+    const onMouseUp = (e: MouseEvent): void => {
+      if (e.button !== 3 && e.button !== 4) return;
+      e.preventDefault();
+      if (e.button === 3) useUI.getState().goBack();
+      else useUI.getState().goForward();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
   }, []);
 }
 
@@ -228,6 +267,8 @@ function CurrentView(): ReactNode {
       return <LocalMusicView />;
     case "replay":
       return <ReplayView />;
+    case "podcast":
+      return view.param ? <PodcastView id={view.param} /> : null;
     case "settings":
       return <SettingsView />;
     default:
@@ -312,13 +353,17 @@ export default function App() {
     // player (queue), settings (quality/speed/fades) and library (history)
     // alike, so the first load never reads a default over a saved value.
     const stores = [usePlayer.persist, useSettings.persist, useLibrary.persist];
-    if (stores.every((p) => p.hasHydrated())) {
+    const boot = (): void => {
       engineBoot();
+      initAutoplay();
+    };
+    if (stores.every((p) => p.hasHydrated())) {
+      boot();
       return;
     }
     const unsubs = stores.map((p) =>
       p.onFinishHydration(() => {
-        if (stores.every((x) => x.hasHydrated())) engineBoot();
+        if (stores.every((x) => x.hasHydrated())) boot();
       })
     );
     return () => unsubs.forEach((u) => u());
@@ -398,6 +443,7 @@ export default function App() {
       <PlayerBar />
       <NowPlaying />
       <Dialog />
+      <PlaylistPicker />
       <ContextMenu />
       <Toasts />
     </div>

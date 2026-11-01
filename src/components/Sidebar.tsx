@@ -13,6 +13,7 @@ import {
   Download,
   Folder,
   FolderOpen,
+  BarChart3,
   Heart,
   Library,
   ListPlus,
@@ -30,7 +31,7 @@ import { CreateMenu } from "./CreateMenu";
 import { playlistFolderItems, playlistHeaderItems } from "../lib/trackActions";
 import { dragHasAlbum, dragHasArtist, dragHasPlaylist, dragHasTrack, readAlbum, readArtist, readPlaylist, readTrack, type AlbumPayload, type ArtistPayload, type PlaylistPayload } from "../lib/dnd";
 import { requireBridge } from "../lib/bridge";
-import { startDownload } from "../lib/downloads";
+import { downloadAll, startDownload } from "../lib/downloads";
 import type { Track } from "../types";
 
 /* ============================================================ nav */
@@ -40,7 +41,7 @@ interface LibRow {
   title: string;
   subtitle: string;
   thumb?: string;
-  kind: "playlist" | "artist" | "folder" | "local" | "downloads";
+  kind: "playlist" | "artist" | "folder" | "local" | "downloads" | "replay";
   /** artist-imported playlists open the artist page instead of the list */
   artistId?: string;
   /** playlists: the folder they're filed in; folders: their own id */
@@ -144,6 +145,8 @@ function LibraryPill() {
 
   const rows: LibRow[] = [];
   for (const r of singles.filter((r) => r.pinned)) rows.push(r);
+  // Replay: listening stats, otherwise only reachable from Settings.
+  rows.push({ id: "__replay__", title: "Replay", subtitle: "Your listening stats", kind: "replay" });
   for (const a of followedArtists) {
     rows.push({ id: a.id, title: a.name, subtitle: "Artist", thumb: a.thumb, kind: "artist" });
   }
@@ -187,37 +190,6 @@ function LibraryPill() {
 
   /* ---------------------------------------------------------- drag & drop */
 
-  /**
-   * Write an imported track list into the library. A playlist with the same
-   * name is UPDATED in place (tracks + identity re-stamped) rather than
-   * duplicated — re-dragging an artist refreshes their entry.
-   * One write for the whole list — addToPlaylist would persist per song.
-   */
-  const upsertImported = (
-    name: string,
-    tracks: Track[],
-    extra: { artistId?: string; artistThumb?: string } | undefined,
-    folderId?: string
-  ): { updated: boolean } => {
-    const lib = useLibrary.getState();
-    const existing = lib.playlists.find((p) => p.name.trim().toLowerCase() === name.toLowerCase());
-    if (existing) {
-      useLibrary.setState((s) => ({
-        playlists: s.playlists.map((p) =>
-          p.id === existing.id ? { ...p, tracks, ...extra } : p
-        ),
-      }));
-      if (folderId) lib.setPlaylistFolder(existing.id, folderId);
-      return { updated: true };
-    }
-    const created = lib.createPlaylist(name);
-    useLibrary.setState((s) => ({
-      playlists: s.playlists.map((p) => (p.id === created.id ? { ...p, tracks, ...extra } : p)),
-    }));
-    if (folderId) lib.setPlaylistFolder(created.id, folderId);
-    return { updated: false };
-  };
-
   /** Import a YouTube playlist as a real library playlist (same name). */
   const importPlaylist = async (pl: PlaylistPayload, folderId?: string): Promise<void> => {
     const ui = useUI.getState();
@@ -231,13 +203,8 @@ function LibraryPill() {
       );
       if (!tracks.length) throw new Error("no tracks");
       const n = tracks.length;
-      const { updated } = upsertImported(name, tracks, undefined, folderId);
-      ui.toast(
-        updated
-          ? `“${name}” · ${n} ${n === 1 ? "song" : "songs"} updated in your library`
-          : `“${name}” · ${n} ${n === 1 ? "song" : "songs"} added to your library`,
-        "success"
-      );
+      const created = useLibrary.getState().importPlaylist(name, tracks, folderId);
+      ui.toast(`“${created.name}” · ${n} ${n === 1 ? "song" : "songs"} added to your library`, "success");
     } catch {
       ui.toast(`Couldn't import “${pl.title}”`, "error");
     }
@@ -265,13 +232,8 @@ function LibraryPill() {
       );
       if (!tracks.length) throw new Error("no tracks");
       const n = tracks.length;
-      const { updated } = upsertImported(name, tracks, undefined, folderId);
-      ui.toast(
-        updated
-          ? `“${name}” · ${n} ${n === 1 ? "song" : "songs"} updated in your library`
-          : `“${name}” · ${n} ${n === 1 ? "song" : "songs"} added to your library`,
-        "success"
-      );
+      const created = useLibrary.getState().importPlaylist(name, tracks, folderId);
+      ui.toast(`“${created.name}” · ${n} ${n === 1 ? "song" : "songs"} added to your library`, "success");
     } catch {
       ui.toast(`Couldn't import “${al.title}”`, "error");
     }
@@ -438,7 +400,11 @@ function LibraryPill() {
         const al = readAlbum(e);
         if (!al) return;
         if (r.kind === "downloads") {
-          useUI.getState().toast("Albums can't be downloaded whole — drop a song instead", "info");
+          // An album dropped on Downloads downloads every song on it.
+          void requireBridge()
+            .getAlbum(al.id)
+            .then((page) => downloadAll(page.tracks ?? [], `"${page.album?.title || al.title}"`))
+            .catch(() => useUI.getState().toast("Couldn't open that album to download it", "error"));
           return;
         }
         void dropAlbumOn(r, al);
@@ -497,6 +463,9 @@ function LibraryPill() {
         break;
       case "local":
         navigate({ name: "local" });
+        break;
+      case "replay":
+        navigate({ name: "replay" });
         break;
     }
   };
@@ -720,9 +689,13 @@ function LibraryPill() {
                   <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
                     <Folder className="w-5 h-5 text-ink-hi/55" />
                   </span>
-                ) : r.kind === "local" ? (
+                ) : r.kind === "local" || r.kind === "replay" ? (
                   <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
-                    <FolderOpen className="w-5 h-5 text-ink-hi/55" />
+                    {r.kind === "local" ? (
+                      <FolderOpen className="w-5 h-5 text-ink-hi/55" />
+                    ) : (
+                      <BarChart3 className="w-5 h-5 text-ink-hi/55" />
+                    )}
                   </span>
                 ) : r.thumb ? (
                   <img src={upgradeArtwork(r.thumb)} alt="" className="w-12 h-12 rounded-md object-cover art-hairline shrink-0" />

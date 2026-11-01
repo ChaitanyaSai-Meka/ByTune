@@ -11,7 +11,10 @@
  * (element position − offset).
  */
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { useSettings } from "../stores/settings";
 import { detectMusicOnsetForTrack } from "./analysis";
+import { storage } from "./persist";
 
 interface LyricsAlignState {
   /** track id → seconds to subtract from the element position for lyrics */
@@ -29,6 +32,59 @@ export const useLyricsAlign = create<LyricsAlignState>((set) => ({
 export function getLyricsOffset(id: string | null | undefined): number {
   if (!id) return 0;
   return useLyricsAlign.getState().offsets[id] ?? 0;
+}
+
+/* ----------------------------- manual timing ----------------------------- */
+
+/** One press of [ or ]: this much earlier or later. */
+export const LYRICS_NUDGE_STEP = 0.25;
+const NUDGE_LIMIT_SEC = 10;
+/** Songs remembered; the oldest nudge goes first. */
+const NUDGE_KEEP = 500;
+
+/** A song's nudge after one more step (0 drops it); the oldest entries go past the cap. */
+export function nextNudges(nudges: Record<string, number>, id: string, delta: number): Record<string, number> {
+  const value = Math.round(Math.min(NUDGE_LIMIT_SEC, Math.max(-NUDGE_LIMIT_SEC, (nudges[id] ?? 0) + delta)) * 100) / 100;
+  const rest = Object.entries(nudges).filter(([key]) => key !== id);
+  const kept = value === 0 ? rest : [...rest, [id, value] as [string, number]];
+  return Object.fromEntries(kept.slice(-NUDGE_KEEP));
+}
+
+/** "0.25 s later", "1 s earlier", or "In sync". Positive = lyrics later. */
+export function describeLyricsShift(seconds: number): string {
+  if (!seconds) return "In sync";
+  return `${Math.round(Math.abs(seconds) * 100) / 100} s ${seconds > 0 ? "later" : "earlier"}`;
+}
+
+interface LyricsNudgeState {
+  /** track id → seconds this song's lyrics run later (+) or earlier (−) */
+  nudges: Record<string, number>;
+  nudge(id: string, delta: number): void;
+  resetNudge(id: string): void;
+}
+
+/** Per-song timing the listener set by hand. Kept on this device only. */
+export const useLyricsNudge = create<LyricsNudgeState>()(
+  persist(
+    (set, get) => ({
+      nudges: {},
+      nudge: (id, delta) => set({ nudges: nextNudges(get().nudges, id, delta) }),
+      resetNudge: (id) => set({ nudges: nextNudges(get().nudges, id, -(get().nudges[id] ?? 0)) }),
+    }),
+    { name: "lyrics-nudges", storage: createJSONStorage(() => storage) },
+  ),
+);
+
+/**
+ * Seconds to subtract from the element position for lyrics: the measured
+ * version offset, this song's nudge and this device's lyrics timing.
+ */
+export function useLyricsOffset(id: string | null | undefined): number {
+  const key = id ?? "";
+  const measured = useLyricsAlign((s) => s.offsets[key] ?? 0);
+  const nudge = useLyricsNudge((s) => s.nudges[key] ?? 0);
+  const device = useSettings((s) => s.lyricsOffset);
+  return measured + nudge + device;
 }
 
 /** Suspect a version mismatch when the upload runs this far past the lyrics. */

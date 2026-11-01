@@ -104,6 +104,8 @@ function fixture() {
     dir, disk, auth, sync, transition, events, calls, uploads,
     invoke: (name, ...args) => handlers.get(name)({}, ...args),
     statsNotify: () => statsNotify?.(),
+    /** The real Replay module sync.ts uses (main.ts gets a stand-in). */
+    stats: load(path.join(root, "electron", "stats.ts")),
     rows(value) { rows = value; },
     user(value) { user = value; },
     expired(value) { expired = value; },
@@ -133,6 +135,48 @@ test("guest data migrates into an account CREATED by sign-up", async () => {
     assert.deepEqual(new Set(uploaded.payload.state.liked.map(t => t.id)), new Set(["guest", "remote"]));
     assert.equal(uploaded.user_id, "A");
     assert.ok(h.uploads.some(v => v.store_name === "recent-searches"));
+  } finally { await h.close(); }
+});
+
+test("a fresh install's first settings sync keeps the account's AutoPlay choice", async () => {
+  const h = fixture();
+  try {
+    await h.invoke("auth:signIn", "alice", "password");
+    // An install whose settings have never synced: the app writes them (with
+    // the new default, AutoPlay on) before the first settings sync runs…
+    h.sync.resetSyncState("A");
+    const doc = await h.invoke("data:scope");
+    await h.invoke("data:write", "settings", envelope({ autoplay: true, crossfadeSeconds: 6 }), doc);
+    // …while the account already says AutoPlay off.
+    h.rows([row("settings", { state: { autoplay: false, crossfadeSeconds: 0 }, version: 0 })]);
+    await h.sync.syncNow();
+    const settings = h.disk.readData("settings").state;
+    assert.equal(settings.autoplay, false, "the account's AutoPlay choice is not overwritten by a default");
+    assert.equal(settings.crossfadeSeconds, 6, "other local settings still win, as before");
+  } finally { await h.close(); }
+});
+
+test("local songs never upload their absolute file path", async () => {
+  const h = fixture();
+  try {
+    await h.invoke("auth:continueGuest");
+    const doc = await h.invoke("data:scope");
+    // Library data saved by older builds carried the file path on local tracks.
+    const local = { ...track("local:abc"), localPath: "C:\\Users\\someone\\Music\\song.mp3" };
+    const lib = library("guest");
+    lib.state.liked.push(local);
+    lib.state.history = [local];
+    lib.state.playlists = [{ id: "p", name: "Mixed", createdAt: 1, tracks: [local, track("yt")] }];
+    await h.invoke("data:write", "library", lib, doc);
+    h.rows([]);
+    await h.invoke("auth:signUp", "alice", "valid-password-123");
+    const uploaded = h.uploads.find((v) => v.store_name === "library");
+    assert.ok(uploaded, "the library was uploaded");
+    assert.ok(!JSON.stringify(uploaded.payload).includes("localPath"), "no localPath anywhere in the upload");
+    assert.ok(!JSON.stringify(uploaded.payload).includes("song.mp3"));
+    assert.ok(uploaded.payload.state.liked.some((t) => t.id === "local:abc"), "the song itself still syncs");
+    assert.equal(h.disk.readData("library").state.liked.find((t) => t.id === "local:abc").localPath, local.localPath,
+      "the copy on this device is untouched");
   } finally { await h.close(); }
 });
 
@@ -359,6 +403,35 @@ test("manual restore with verified identity restores and retains device fields",
     assert.deepEqual(plain(h.disk.readData("library").state.downloads), { local: "audio.mp3" });
     assert.deepEqual(h.events, [{ stores: ["library"], seq: 1 }]);
   } finally { await h.close(); }
+});
+
+test("a sync merge includes the last seconds of Replay listening still held in memory", async () => {
+  const h = fixture();
+  try {
+    const now = new Date();
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const replay = (tracks) => ({
+      state: { buckets: [{ month, tracks, artists: {}, albums: {}, hours: new Array(24).fill(0), days: {} }] },
+      version: 1,
+    });
+    const rec = (ms) => ({ title: "T", artist: "A", thumb: "", ms, plays: 1, lastAt: 1 });
+    h.rows([row("listening-history", replay({ fromCloud: rec(90_000) }))]);
+    await h.invoke("auth:signIn", "alice", "password");
+    // The app wires Replay writes into sync exactly like this (main.ts).
+    h.stats.onStoreWrite(() => h.sync.noteLocalWrite(h.stats.HISTORY_STORE));
+    h.stats.initStats();
+    // A few seconds of listening, still only in memory (Replay flushes every 5 s)…
+    h.stats.recordListening({ id: "heardHere", title: "Here", artist: "A", duration: 200, thumb: "" }, 20_000);
+    // …while another device moves the cloud copy on.
+    h.rows([{ ...row("listening-history", replay({ fromCloud: rec(120_000) })), updated_at: new Date(Date.now() + 60_000).toISOString() }]);
+    await h.sync.syncNow();
+    const tracks = h.disk.readData("listening-history").state.buckets.find((b) => b.month === month).tracks;
+    assert.equal(tracks.heardHere?.ms, 20_000, "this device's unflushed listening survives the sync");
+    assert.equal(tracks.fromCloud.ms, 120_000, "and the other device's newer listening arrives");
+  } finally {
+    h.stats.resetStats();
+    await h.close();
+  }
 });
 
 test("Replay keeps uploading as listening accumulates, not just once", async () => {

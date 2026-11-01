@@ -13,6 +13,8 @@
  */
 import { Innertube } from "youtubei.js";
 import { app } from "electron";
+import * as path from "path";
+import { localTrackById } from "./local-library";
 import { pickAudio } from "./audio-format";
 import { fetchLyrics } from "./lyrics";
 import { largestThumbUrl, upgradeThumb } from "./artwork";
@@ -21,25 +23,36 @@ import { resolveMarket, type ResolvedMarket } from "./market";
 import {
   SEARCH_FILTER_PARAMS,
   callBrowse,
+  callBrowseContinuation,
   callSearch,
   callSearchContinuation,
   parseArtistPage,
   parseChartsShelves,
+  pageCredit,
   parseMoods,
+  parsePodcastEpisodes,
+  parsePodcastPage,
+  parsePlaylistContinuation,
+  parsePlaylistShelf,
   parseQueueCredits,
+  parseRadioPage,
   parseRemotePlaylistPage,
   parseReleasePage,
   parseSearchPage,
 } from "./ytm";
+import type { Credits, ParsedSong } from "./ytm";
 import type { MoodEntry } from "./moods";
 import type {
   Album,
+  PodcastPage,
+  AudioDetails,
   Artist,
   ArtistPageData,
   HomeItem,
   HomeShelf,
   LyricsResult,
   PlaylistCard,
+  RadioPage,
   RemotePlaylistPage,
   SearchFilter,
   SearchPageResult,
@@ -573,6 +586,49 @@ export async function getArtistPage(artistId: string): Promise<ArtistPageData> {
   };
 }
 
+const PODCAST_EPISODES_MAX = 100;
+
+/** A podcast show with its episodes — the first page plus a few more, newest 100 at most. */
+export async function getPodcast(browseId: string): Promise<PodcastPage> {
+  const yt = await getYT();
+  const response = await withRetry(() => callBrowse(yt, browseId));
+  const { continuation, ...page } = parsePodcastPage(response, browseId);
+  const seen = new Set(page.episodes.map((e) => e.id));
+  let token = continuation;
+  for (let n = 0; token && n < 4 && page.episodes.length < PODCAST_EPISODES_MAX; n++) {
+    const more = await withRetry(() => callBrowseContinuation(yt, token as string)).catch(() => null);
+    if (!more) break;
+    const next = parsePodcastEpisodes(more, page);
+    const fresh = next.episodes.filter((e) => !seen.has(e.id) && seen.add(e.id));
+    if (!fresh.length) break;
+    page.episodes.push(...fresh);
+    token = next.continuation;
+  }
+  // Long-running shows have hundreds of episodes; the newest 100 keep the page light.
+  page.episodes = page.episodes.slice(0, PODCAST_EPISODES_MAX);
+  return page;
+}
+
+/** A long playlist/album is paged; this many pages (~100 songs each) at most. */
+const MAX_SHELF_PAGES = 50;
+
+/**
+ * The rest of a paged shelf, following continuation tokens. A page that still
+ * fails after its retry ends the list: the songs already fetched still show.
+ */
+async function restOfShelf(yt: any, token: string | null, credit: Credits): Promise<ParsedSong[]> {
+  const out: ParsedSong[] = [];
+  for (let page = 0; token && page < MAX_SHELF_PAGES; page++) {
+    const response = await withRetry(() => callBrowseContinuation(yt, token as string)).catch(() => null);
+    if (!response) break;
+    const next = parsePlaylistContinuation(response, credit);
+    if (!next.songs.length) break;
+    out.push(...next.songs);
+    token = next.continuation;
+  }
+  return out;
+}
+
 /**
  * Album page — the mobile app's pageOf: the page's own header (title, credit
  * line, cover, artist link), its track list and the "About the album" blurb.
@@ -581,6 +637,12 @@ export async function getAlbum(albumId: string): Promise<{ album: Album; tracks:
   const yt = await getYT();
   const response = await withRetry(() => callBrowse(yt, albumId));
   const parsed = parseReleasePage(response, albumId);
+  if (parsed.continuation) {
+    const more = await restOfShelf(yt, parsed.continuation, pageCredit(response));
+    const seen = new Set(parsed.tracks.map((t) => t.id));
+    const thumb = parsed.header?.thumb ?? "";
+    for (const t of more) if (!seen.has(t.id) && seen.add(t.id)) parsed.tracks.push({ ...t, thumb: t.thumb || thumb });
+  }
   // The header line reads "Album • Artist • 2014" (older shape) or the strapline
   // carries the artist while the subtitle keeps "Album • 2014". Split like the
   // mobile DetailScreen does.
@@ -613,7 +675,8 @@ export async function getPlaylistPage(playlistId: string): Promise<RemotePlaylis
   const yt = await getYT();
   const id = /^VL|^PL|^OLAK5uy/.test(playlistId) ? playlistId : `VL${playlistId}`;
   const response = await withRetry(() => callBrowse(yt, id));
-  return parseRemotePlaylistPage(response, id);
+  const more = await restOfShelf(yt, parsePlaylistShelf(response)?.continuation ?? null, pageCredit(response));
+  return parseRemotePlaylistPage(response, id, more);
 }
 
 export async function getPlaylist(
@@ -621,8 +684,16 @@ export async function getPlaylist(
 ): Promise<{ title: string; tracks: Track[] }> {
   const yt = await getYT();
   const pl: any = await withRetry(() => (yt.music as any).getPlaylist(playlistId));
+  const items = [...collectItems(pl)];
+  // Follow the pages: imports and Home playlist cards used to stop at ~100 songs.
+  let page: any = pl;
+  for (let n = 0; page?.has_continuation && n < MAX_SHELF_PAGES; n++) {
+    page = await withRetry(() => page.getContinuation()).catch(() => null);
+    if (!page) break;
+    items.push(...collectItems(page));
+  }
   const tracks = dedupeById(
-    collectItems(pl)
+    items
       .map((i) => parseTrackItem(i, ["song", "video"]))
       .filter(Boolean) as Track[]
   );
@@ -656,8 +727,16 @@ export async function getHome(): Promise<HomeShelf[]> {
  */
 export async function getCharts(): Promise<HomeShelf[]> {
   const yt = await getYT();
-  const res = await withRetry(() => callBrowse(yt, "FEmusic_charts"));
-  return parseChartsShelves(res) as HomeShelf[];
+  const [res, explore] = await Promise.all([
+    withRetry(() => callBrowse(yt, "FEmusic_charts")),
+    // New albums & singles for this market ride along as "New releases".
+    withRetry(() => callBrowse(yt, "FEmusic_explore")).catch(() => null),
+  ]);
+  const shelves = parseChartsShelves(res) as HomeShelf[];
+  const fresh = explore
+    ? (parseChartsShelves(explore) as HomeShelf[]).find((s) => s.items.length >= 3 && s.items.every((i) => i.kind === "album"))
+    : undefined;
+  return fresh ? [...shelves, { ...fresh, title: "New releases" }] : shelves;
 }
 
 /**
@@ -732,6 +811,29 @@ async function resolveQueueCredits(
     return undefined;
   }
 }
+/**
+ * One page of YouTube Music's radio for a song — the endless AutoPlay source.
+ * The first page asks for the RDAMVM<id> station; later pages resend the same
+ * request with the continuation token the previous page returned.
+ */
+export async function getRadio(videoId: string, token?: string): Promise<RadioPage> {
+  const yt = await getYT();
+  const res: any = await withRetry(() =>
+    yt.actions.execute("next", {
+      videoId,
+      playlistId: `RDAMVM${videoId}`,
+      enablePersistentPlaylistPanel: true,
+      tunerSettingValue: "AUTOMIX_SETTING_NORMAL",
+      watchEndpointMusicSupportedConfigs: {
+        watchEndpointMusicConfig: { hasPersistentPlaylistPanel: true, musicVideoType: "MUSIC_VIDEO_TYPE_ATV" },
+      },
+      ...(token ? { continuation: token } : {}),
+      client: "YTMUSIC",
+    })
+  );
+  return parseRadioPage(res?.data ?? null, videoId);
+}
+
 const lyricCacheAt = new Map<string, number>();
 const LRCLIB_UA = "ByTune/1.0.0";
 
@@ -984,7 +1086,9 @@ export async function enrichDurations(ids: string[]): Promise<Record<string, num
  */
 async function probeUrl(url: string): Promise<boolean> {
   try {
-    const res = await fetch(url, { headers: { "User-Agent": UA, Range: "bytes=0-" } });
+    // Only the first chunk is read; a hung connection must not pin this
+    // track's resolution (and everything waiting on it) for minutes.
+    const res = await fetch(url, { headers: { "User-Agent": UA, Range: "bytes=0-" }, signal: AbortSignal.timeout(10_000) });
     if (res.status !== 206 && res.status !== 200) {
       try {
         await res.arrayBuffer();
@@ -1039,6 +1143,11 @@ export interface ResolvedStream {
   mime: string;
   /** Integrated loudness in LUFS when YouTube reports it (null = unknown). */
   lufs: number | null;
+  /** which YouTube client served it, or "Piped" */
+  source?: string;
+  kbps?: number;
+  sampleRate?: number;
+  channels?: number;
 }
 
 /**
@@ -1052,6 +1161,37 @@ export interface ResolvedStream {
 const RESOLVE_TTL_MS = 10 * 60 * 1000;
 const resolveCache = new Map<string, { value: ResolvedStream; ts: number }>();
 const resolving = new Map<string, Promise<ResolvedStream>>();
+
+/** "opus", "aac" … out of a rendition's mime type. */
+function codecOf(mime: string): string | undefined {
+  const c = /codecs="?([a-z0-9]+)/i.exec(mime)?.[1]?.toLowerCase();
+  return c === "mp4a" ? "aac" : c;
+}
+
+/**
+ * What the playing file actually is, for the Audio details card: the cached
+ * stream rendition, or a local file's own header and ReplayGain. Never makes a
+ * network call — an uncached stream just reports nothing yet.
+ */
+export function audioDetails(id: string): AudioDetails | null {
+  if (id.startsWith("local:")) {
+    const t = localTrackById(id);
+    if (!t) return null;
+    return {
+      source: "file",
+      codec: t.codec ?? (path.extname(t.path).slice(1).toLowerCase() || undefined),
+      kbps: t.kbps,
+      sampleRate: t.sampleRate,
+      bitDepth: t.bitDepth,
+      gainDb: t.gainDb,
+    };
+  }
+  let best: { value: ResolvedStream; ts: number } | null = null;
+  for (const [key, hit] of resolveCache) if (key.startsWith(`${id}|`) && (!best || hit.ts > best.ts)) best = hit;
+  if (!best) return null;
+  const v = best.value;
+  return { source: v.source ?? "YouTube", codec: codecOf(v.mime), kbps: v.kbps, sampleRate: v.sampleRate, channels: v.channels, lufs: v.lufs };
+}
 
 export function resolveStream(
   videoId: string,
@@ -1093,7 +1233,15 @@ export function resolveStream(
           // at the media element.
           if (!(await probeUrl(picked.url))) throw new Error(`stream rejected for client ${client}`);
           preferredClientIdx = idx;
-          const value: ResolvedStream = { url: picked.url, mime: picked.mime, lufs: picked.lufs };
+          const value: ResolvedStream = {
+            url: picked.url,
+            mime: picked.mime,
+            lufs: picked.lufs,
+            source: String(client),
+            kbps: picked.kbps,
+            sampleRate: picked.sampleRate,
+            channels: picked.channels,
+          };
           resolveCache.set(key, { value, ts: Date.now() });
           evictOldest(resolveCache, RESOLVE_CACHE_MAX);
           return value;
@@ -1113,7 +1261,7 @@ export function resolveStream(
     try {
       const url = await resolveViaPiped(videoId);
       // Piped mirrors don't report loudness; the renderer keeps its fallback.
-      const value: ResolvedStream = { url, mime: "audio/mp4", lufs: null };
+      const value: ResolvedStream = { url, mime: "audio/mp4", lufs: null, source: "Piped" };
       resolveCache.set(key, { value, ts: Date.now() });
       evictOldest(resolveCache, RESOLVE_CACHE_MAX);
       return value;

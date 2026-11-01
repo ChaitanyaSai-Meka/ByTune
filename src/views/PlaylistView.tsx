@@ -4,12 +4,15 @@
  * "PLAYLIST • N TRACKS • ABOUT 3:2X" metadata line, circular glass controls,
  * then the playlist's own numbered track rows.
  */
-import { Heart, ListMusic, ListPlus, MoreHorizontal, Play, Shuffle } from "lucide-react";
+import { useState } from "react";
+import { Download, FileDown, Heart, ListMusic, ListPlus, MoreHorizontal, Play, Shuffle } from "lucide-react";
+import { downloadAll } from "../lib/downloads";
+import { exportPlaylist } from "../lib/playlistShare";
 import { DownloadBadge } from "../components/TrackList";
 import { Artwork, EmptyState, EqBars, ExplicitBadge } from "../components/primitives";
 import { playlistHeaderItems, playlistMenuItems } from "../lib/trackActions";
 import { useDrag } from "../lib/dnd";
-import { fmtTime, plural } from "../lib/format";
+import { fmtTime, fmtTotal, plural } from "../lib/format";
 import { useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
 import { useLibrary, type Playlist } from "../stores/library";
@@ -48,7 +51,7 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
   const meta = [
     "Playlist",
     tracks.length ? plural(tracks.length, "track", "tracks") : "",
-    totalSec > 0 ? `about ${fmtTime(totalSec)}` : "",
+    totalSec > 0 ? fmtTotal(totalSec) : "",
   ]
     .filter(Boolean)
     .join(" • ")
@@ -75,6 +78,8 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
           toast("Playlist added to queue");
         },
       },
+      { label: "Download all", icon: Download, action: () => downloadAll(tracks, `"${playlist.name}"`) },
+      { label: "Export playlist…", icon: FileDown, action: () => void exportPlaylist(playlist.name, tracks) },
       { ...renameItem, separatorBefore: true },
       deleteItem,
     ]);
@@ -207,6 +212,9 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
   );
 }
 
+/** A playlist row being dragged to a new spot in the same playlist. */
+const ROW_MIME = "application/x-bytune-playlist-row";
+
 function PlaylistTrackRow({
   track,
   index,
@@ -226,6 +234,12 @@ function PlaylistTrackRow({
   const toggleLike = useLibrary((s) => s.toggleLike);
   const drag = useDrag({ track });
   const isCurrent = currentId === track.id;
+  // Drag a row within its playlist to move it; the line shows where it lands.
+  const [dropEdge, setDropEdge] = useState<"above" | "below" | null>(null);
+  const below = (e: React.DragEvent): boolean => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return e.clientY >= r.top + r.height / 2;
+  };
 
   const openMenu = (x: number, y: number): void => {
     openContextMenu(x, y, playlistMenuItems(playlist, track));
@@ -234,15 +248,49 @@ function PlaylistTrackRow({
   return (
     <div
       {...drag.props}
+      onDragStart={(e) => {
+        drag.props.onDragStart(e);
+        e.dataTransfer.setData(ROW_MIME, JSON.stringify({ playlistId: playlist.id, index }));
+      }}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes(ROW_MIME)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        setDropEdge(below(e) ? "below" : "above");
+      }}
+      onDragLeave={() => setDropEdge(null)}
+      onDrop={(e) => {
+        setDropEdge(null);
+        const raw = e.dataTransfer.getData(ROW_MIME);
+        if (!raw) return;
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+          const from = JSON.parse(raw) as { playlistId: string; index: number };
+          if (from.playlistId !== playlist.id || !Number.isInteger(from.index)) return;
+          let to = index + (below(e) ? 1 : 0);
+          if (from.index < to) to -= 1;
+          useLibrary.getState().moveInPlaylist(playlist.id, from.index, to);
+        } catch {
+          /* not one of our rows */
+        }
+      }}
       onClick={() => playQueue(queue, index)}
       onContextMenu={(e) => {
         e.preventDefault();
         openMenu(e.clientX, e.clientY);
       }}
-      className={`group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
+      className={`group relative flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
         isCurrent ? "bg-ink-hi/[0.14]" : "hover:bg-ink-hi/[0.05]"
       } ${drag.dragging ? "opacity-40" : ""}`}
     >
+      {dropEdge && (
+        <span
+          className={`pointer-events-none absolute left-3 right-3 h-0.5 rounded-full bg-primary ${
+            dropEdge === "above" ? "-top-px" : "-bottom-px"
+          }`}
+        />
+      )}
       {/* The playlist's own running order — numbered rows, play on hover. */}
       <div className="w-7 shrink-0 grid place-items-center text-[13px] text-ink-faint tabular-nums">
         {isCurrent && playing ? (

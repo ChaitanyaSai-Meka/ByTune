@@ -9,18 +9,24 @@
  * underline treatment, X returns to details). Lyrics live in the centre pane
  * (see LyricsCenter.tsx), not here.
  */
-import { useEffect, useState } from "react";
-import { BadgeCheck, Music2, X } from "lucide-react";
-import { usePlayer } from "../stores/player";
-import { useUI } from "../stores/ui";
-import { Artwork, EqBars, IconBtn } from "./primitives";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { BadgeCheck, Heart, Music2, ThumbsDown, X } from "lucide-react";
+import { autoplayTail, isRadioSeed, usePlayer } from "../stores/player";
+import { useSettings } from "../stores/settings";
+import { useUI, type MenuItem } from "../stores/ui";
+import { dontPlay, useAutoplayInfo } from "../lib/autoplay";
+import { confirmClearHistory, historyMenuItems, trackMenuItems } from "../lib/trackActions";
+import { Artwork, EqBars, IconBtn, Switch } from "./primitives";
 import { upgradeArtwork, wideArtwork } from "../lib/artwork";
-import { useDrag } from "../lib/dnd";
+import { useDrag, useTrackDrop } from "../lib/dnd";
+import { useSortable, type SortableRowProps } from "../lib/useSortable";
 import { fmtTime } from "../lib/format";
 import { useArtistImage } from "../lib/artistImage";
 import { monthlyListenersLabel, useArtistAbout } from "../lib/artistAbout";
 import { useLibrary } from "../stores/library";
-import type { Track } from "../types";
+import type { AudioDetails, Track } from "../types";
+import { audioEngineInfo } from "../lib/audio";
+import { LOUDNESS_LABEL } from "../stores/settings";
 
 /** The queue's "Now playing" row — draggable like every other song row. */
 function QueueCurrentRow({ track, playing }: { track: Track; playing: boolean }) {
@@ -28,6 +34,10 @@ function QueueCurrentRow({ track, playing }: { track: Track; playing: boolean })
   return (
     <div
       {...drag.props}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        useUI.getState().openContextMenu(e.clientX, e.clientY, trackMenuItems(track));
+      }}
       className={`flex items-center gap-3 h-14 px-2 rounded-lg bg-ink-hi/[0.14] ${
         drag.dragging ? "opacity-40" : ""
       }`}
@@ -50,19 +60,46 @@ function TrackRow({
   isPlaying,
   onPlay,
   onRemove,
+  actions,
+  menu = () => trackMenuItems(track),
+  sortable,
+  style,
 }: {
   track: Track;
   isCurrent?: boolean;
   isPlaying?: boolean;
   onPlay: () => void;
   onRemove?: () => void;
+  /** hover-only buttons shown before the duration */
+  actions?: ReactNode;
+  /** right-click menu */
+  menu?: () => MenuItem[];
+  /** an upcoming queue row: grabbing it reorders the queue (instead of dragging it out) */
+  sortable?: SortableRowProps;
+  style?: CSSProperties;
 }) {
   const drag = useDrag({ track });
   return (
     <div
-      {...drag.props}
+      {...(sortable ?? drag.props)}
+      style={style}
+      tabIndex={sortable ? 0 : undefined}
+      onKeyDown={
+        sortable
+          ? (e) => {
+              if (e.key === "Enter" && e.target === e.currentTarget) {
+                e.preventDefault();
+                onPlay();
+              } else sortable.onKeyDown(e);
+            }
+          : undefined
+      }
       onClick={onPlay}
-      className={`group flex items-center gap-3 h-12 px-2 rounded-lg cursor-pointer select-none transition-colors ${
+      onContextMenu={(e) => {
+        e.preventDefault();
+        useUI.getState().openContextMenu(e.clientX, e.clientY, menu());
+      }}
+      className={`group relative flex items-center gap-3 h-12 px-2 rounded-lg cursor-pointer select-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${
         isCurrent ? "bg-ink-hi/[0.14]" : "hover:bg-ink-hi/[0.05]"
       } ${drag.dragging ? "opacity-40" : ""}`}
     >
@@ -74,21 +111,27 @@ function TrackRow({
         <div className="text-[11.5px] truncate text-ink-hi/55 mt-0.5">{track.artist}</div>
       </div>
       {isCurrent && isPlaying && <EqBars />}
+      {/* Hover buttons sit before the duration on every row, so durations line up. */}
+      {(actions || onRemove) && (
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">
+          {actions}
+          {onRemove && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemove();
+              }}
+              title="Remove from queue"
+              aria-label="Remove from queue"
+              className="p-1 rounded-md text-ink-hi/45 hover:text-red-400 hover:bg-ink-hi/[0.06] transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      )}
       {track.duration > 0 && (
         <div className="w-9 text-right text-[11px] text-ink-hi/45 tabular-nums shrink-0">{fmtTime(track.duration)}</div>
-      )}
-      {onRemove && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
-          title="Remove from queue"
-          aria-label="Remove from queue"
-          className="p-1 rounded-md text-ink-hi/45 hover:text-red-400 hover:bg-ink-hi/[0.06] opacity-0 group-hover:opacity-100 transition-all shrink-0"
-        >
-          <X className="w-3.5 h-3.5" />
-        </button>
       )}
     </div>
   );
@@ -103,23 +146,133 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
   const queue = usePlayer((s) => s.queue);
   const index = usePlayer((s) => s.index);
   const playing = usePlayer((s) => s.playing);
-  const playAt = usePlayer((s) => s.playQueue);
+  const repeat = usePlayer((s) => s.repeat);
+  const jumpTo = usePlayer((s) => s.jumpTo);
   const removeAt = usePlayer((s) => s.removeAt);
+  const tail = usePlayer(autoplayTail);
   const history = useLibrary((s) => s.history);
   const playTrack = usePlayer((s) => s.playTrack);
+  const autoplay = useSettings((s) => s.autoplay);
+  const setAutoplay = useSettings((s) => s.setAutoplay);
+  const { seedTitle, loading } = useAutoplayInfo();
+  const liked = useLibrary((s) => s.liked);
+  const toggleLike = useLibrary((s) => s.toggleLike);
+  const likedIds = useMemo(() => new Set(liked.map((l) => l.id)), [liked]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Songs dragged onto the queue join it (after your own upcoming songs).
+  const queueDrop = useTrackDrop((track) => {
+    const added = usePlayer.getState().addToQueue([track]);
+    useUI.getState().toast(added ? `Added "${track.title}" to the queue` : `"${track.title}" is already in your queue`);
+  });
 
   const current = queue[index] ?? null;
-  const upcoming = queue.slice(index + 1);
+  // One list: your upcoming songs, the AutoPlay line, then AutoPlay's suggestions.
+  const suggestionsAt = queue.length - tail;
+  const own = queue.slice(index + 1, suggestionsAt);
+  const suggestions = queue.slice(suggestionsAt);
+  const line = own.length; // the AutoPlay line's place in the list
+  const queueIndexOf = (p: number): number => (p < line ? index + 1 + p : suggestionsAt + p - line - 1);
+  const sortable = useSortable({
+    signature: `${index}:${tail}:${queue
+      .slice(index)
+      .map((t) => t.id)
+      .join(",")}`,
+    listRef,
+    scrollRef,
+    // Your songs and AutoPlay's suggestions each reorder on their own side of the line.
+    clamp: (from, target) => (from < line ? Math.min(target, line - 1) : Math.max(target, line + 1)),
+    canDrag: (p) => (p < line ? line > 1 : p > line && suggestions.length > 1),
+    onCommit: (from, to) => usePlayer.getState().moveUpcoming(queueIndexOf(from), queueIndexOf(to)),
+  });
+  const note = suggestions.length
+    ? `Suggested by AutoPlay${seedTitle ? ` \u00b7 similar to ${seedTitle}` : ""}`
+    : !autoplay
+      ? "AutoPlay is off: the music stops after your last song"
+      : repeat !== "off"
+        ? "AutoPlay is paused while repeat is on"
+        : !isRadioSeed(queue[queue.length - 1]?.id)
+          ? "AutoPlay isn't available after local files"
+          : loading
+            ? "AutoPlay is finding similar songs\u2026"
+            : "AutoPlay keeps the music going with similar songs";
   // Row keys must not depend on the current queue index: embedding `index`
   // shifted every key on each track advance, remounting the whole upcoming
   // list (new drag state, new <img> decode) per track. Key by id plus its
-  // occurrence number within the queue — stable across playback.
+  // occurrence number within the queue — stable across playback. One array
+  // for the whole list, so a suggestion that becomes yours moves, not remounts.
   const occurrence = new Map<string, number>();
   const stableKey = (id: string): string => {
     const n = occurrence.get(id) ?? 0;
     occurrence.set(id, n + 1);
     return `${id}#${n}`;
   };
+  const rows = [
+    ...own.map((t, p) => (
+      <TrackRow
+        key={stableKey(t.id)}
+        track={t}
+        style={sortable.styleFor(p)}
+        sortable={sortable.rowProps(p)}
+        onPlay={() => jumpTo(index + 1 + p)}
+        onRemove={() => {
+          // Removing a row shifts the list up under a stationary
+          // pointer — the row now under it never fires mouseenter,
+          // so clear the hover wash here (navigate() does the same
+          // for view changes).
+          useUI.getState().setTintThumb(null);
+          removeAt(index + 1 + p);
+        }}
+      />
+    )),
+    <div
+      key="autoplay-line"
+      style={sortable.styleFor(line)}
+      className="px-2 pt-2.5 pb-1 text-[12px] leading-snug font-semibold text-ink-hi/50"
+    >
+      {note}
+    </div>,
+    ...suggestions.map((t, k) => {
+      const isLiked = likedIds.has(t.id);
+      return (
+        <TrackRow
+          key={stableKey(t.id)}
+          track={t}
+          style={sortable.styleFor(line + 1 + k)}
+          sortable={sortable.rowProps(line + 1 + k)}
+          onPlay={() => jumpTo(suggestionsAt + k)}
+          actions={
+            <>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleLike(t);
+                }}
+                title={isLiked ? "Remove from Liked Songs" : "Add to Liked Songs"}
+                aria-label="Like"
+                aria-pressed={isLiked}
+                className="p-1 rounded-md text-ink-hi/55 hover:text-ink-hi hover:bg-ink-hi/[0.06] transition-colors"
+              >
+                <Heart className={`w-3.5 h-3.5 ${isLiked ? "fill-current" : ""}`} />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  useUI.getState().setTintThumb(null);
+                  dontPlay(suggestionsAt + k);
+                }}
+                title="Don't play this"
+                aria-label="Don't play this"
+                className="p-1 rounded-md text-ink-hi/55 hover:text-ink-hi hover:bg-ink-hi/[0.06] transition-colors"
+              >
+                <ThumbsDown className="w-3.5 h-3.5" />
+              </button>
+            </>
+          }
+        />
+      );
+    }),
+  ];
 
   const TabBtn = ({
     id,
@@ -162,18 +315,14 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
       </div>
 
       {tab === "queue" ? (
-        <div className="flex-1 min-h-0 flex flex-col">
-          <div className="flex items-center justify-between px-4 pt-3 pb-2">
+        <div
+          {...queueDrop.props}
+          className={`flex-1 min-h-0 flex flex-col rounded-xl transition-shadow ${
+            queueDrop.hovering ? "ring-2 ring-inset ring-primary/60" : ""
+          }`}
+        >
+          <div className="px-4 pt-3 pb-2">
             <span className="micro-label text-ink-hi/55">Now playing</span>
-            {upcoming.length > 0 && (
-              <button
-                onClick={() => usePlayer.getState().clearUpcoming()}
-                className="text-[13px] font-semibold text-ink-hi/75 hover:text-ink-hi transition-colors"
-                title="Clear upcoming"
-              >
-                Clear
-              </button>
-            )}
           </div>
           <div className="px-2 pb-2">
             {current ? (
@@ -185,30 +334,32 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
             )}
           </div>
 
-          <div className="px-4 pt-2 pb-1">
-            <h2 className="text-[20px] font-extrabold tracking-[-0.4px] text-ink-hi">Next up</h2>
-          </div>
-          <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-3 space-y-0.5">
-            {upcoming.length === 0 ? (
-              <div className="px-3 py-6 text-center text-[13px] text-ink-hi/45">Your queue is empty.</div>
-            ) : (
-              upcoming.map((t, i) => (
-                <TrackRow
-                  key={stableKey(t.id)}
-                  track={t}
-                  onPlay={() => playAt(queue, index + 1 + i)}
-                  onRemove={() => {
-                    // Removing a row shifts the list up under a stationary
-                    // pointer — the row now under it never fires mouseenter,
-                    // so clear the hover wash here (navigate() does the same
-                    // for view changes).
-                    useUI.getState().setTintThumb(null);
-                    removeAt(index + 1 + i);
-                  }}
-                />
-              ))
-            )}
-          </div>
+          {current && (
+            <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-2 pb-3">
+              <div className="flex items-center gap-3 px-2 pt-2 pb-1.5">
+                <h2 className="flex-1 text-[15px] font-bold tracking-[-0.2px] text-ink-hi">Up next</h2>
+                {own.length > 0 && (
+                  <button
+                    onClick={() => usePlayer.getState().clearUpcoming()}
+                    className="text-[13px] font-semibold text-ink-hi/75 hover:text-ink-hi transition-colors"
+                    title="Clear your upcoming songs (AutoPlay's stay)"
+                  >
+                    Clear
+                  </button>
+                )}
+                <span aria-hidden className="text-[12.5px] font-semibold text-ink-hi/70">
+                  AutoPlay
+                </span>
+                <Switch checked={autoplay} onChange={setAutoplay} label="AutoPlay" />
+              </div>
+              {own.length === 0 && suggestions.length === 0 && (
+                <div className="px-2 pb-1 text-[13px] text-ink-hi/45">Your queue is empty.</div>
+              )}
+              <div ref={listRef} className="space-y-0.5">
+                {rows}
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <div className="flex-1 min-h-0 overflow-y-auto px-2 py-2 space-y-0.5">
@@ -217,9 +368,36 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
               Nothing here yet — tracks you play land in Recently played.
             </div>
           ) : (
-            history.slice(0, 50).map((t, i) => (
-              <TrackRow key={`${t.id}-${i}`} track={t} onPlay={() => playTrack(t)} />
-            ))
+            <>
+              <div className="flex justify-end px-2 pb-1">
+                <button
+                  onClick={confirmClearHistory}
+                  className="text-[12px] text-ink-hi/55 hover:text-ink-hi transition-colors"
+                >
+                  Clear recently played
+                </button>
+              </div>
+              {history.slice(0, 50).map((t, i) => (
+                <TrackRow
+                  key={`${t.id}-${i}`}
+                  track={t}
+                  onPlay={() => playTrack(t)}
+                  menu={() => historyMenuItems(t)}
+                  actions={
+                    <IconBtn
+                      icon={X}
+                      size="sm"
+                      danger
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        useLibrary.getState().removeFromHistory(t.id);
+                      }}
+                      title="Remove from Recently played"
+                    />
+                  }
+                />
+              ))}
+            </>
           )}
         </div>
       )}
@@ -273,7 +451,104 @@ function DetailsBody() {
       </div>
 
       <AboutArtistCard track={track} fallbackImage={artistImage ?? track.thumb ?? null} />
+      <AudioDetailsCard track={track} />
     </div>
+  );
+}
+
+/**
+ * Audio details: what is actually playing and what ByTune does to it — the
+ * source, its format, the rate it reaches your speakers at, leveling, EQ and
+ * limiter, speed and transitions. Plain facts; it never claims "bit-perfect".
+ */
+function AudioDetailsCard({ track }: { track: Track }) {
+  const [details, setDetails] = useState<AudioDetails | null>(null);
+  const [, setTick] = useState(0);
+  const eqOn = useSettings((s) => s.eqEnabled);
+  const speed = useSettings((s) => s.playbackSpeed);
+  const crossfade = useSettings((s) => s.crossfadeSeconds);
+  const smart = useSettings((s) => s.smartFade);
+  const level = useSettings((s) => s.loudnessLevel);
+
+  useEffect(() => {
+    let alive = true;
+    setDetails(null);
+    const load = (): void => {
+      void window.bytune
+        ?.audioDetails(track.id)
+        .then((d) => {
+          if (alive && d) {
+            setDetails(d);
+            window.clearInterval(retry);
+          }
+        })
+        .catch(() => undefined);
+    };
+    // A stream's details land once it has resolved: keep asking until then.
+    const retry = window.setInterval(load, 2000);
+    load();
+    return () => {
+      alive = false;
+      window.clearInterval(retry);
+    };
+  }, [track.id]);
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 1000); // leveling and limiter are live
+    return () => window.clearInterval(id);
+  }, []);
+
+  const engine = audioEngineInfo(track.id);
+  const khz = (hz: number): string => `${Math.round(hz / 100) / 10} kHz`;
+  const isFile = details?.source === "file";
+  const source = !details
+    ? "Waiting for the stream…"
+    : isFile
+      ? "Your file"
+      : details.source === "Piped"
+        ? "YouTube, through a Piped mirror"
+        : `YouTube Music (${details.source})`;
+  const format = details
+    ? [
+        details.codec?.toUpperCase(),
+        details.kbps ? `${details.kbps} kbps` : null,
+        details.bitDepth ? `${details.bitDepth}-bit` : null,
+        details.sampleRate ? khz(details.sampleRate) : null,
+        details.channels === 1 ? "mono" : details.channels === 2 ? "stereo" : details.channels ? `${details.channels} channels` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || "Unknown"
+    : null;
+  const resampled = details?.sampleRate && engine.outputRate && details.sampleRate !== engine.outputRate;
+  const output = engine.outputRate
+    ? `${khz(engine.outputRate)}${resampled ? ` (resampled from ${khz(details!.sampleRate!)})` : ""}`
+    : "Unknown";
+  const leveling =
+    level === "off"
+      ? "Off"
+      : isFile && typeof details?.gainDb !== "number"
+        ? "Not applied — this file has no ReplayGain tag"
+        : `${engine.levelingDb > -0.05 ? "0" : engine.levelingDb.toFixed(1)} dB (${LOUDNESS_LABEL[level]})`;
+  const rows: [string, string][] = [
+    ["Source", source],
+    ...(format ? ([["Format", format]] as [string, string][]) : []),
+    ["Output", output],
+    ["Volume leveling", leveling],
+    ["Equalizer", eqOn ? (engine.limitingDb < -0.1 ? `On, limiting ${engine.limitingDb.toFixed(1)} dB` : "On") : "Off"],
+    ...(speed !== 1 ? ([["Speed", `${speed}×`]] as [string, string][]) : []),
+    ["Transitions", smart ? "Automix" : crossfade ? `${crossfade} s crossfade` : "Off"],
+  ];
+  return (
+    <section aria-label="Audio details" className="rounded-xl bg-ink-hi/[0.05] p-4">
+      <h3 className="text-[14px] font-bold text-ink-hi mb-2">Audio details</h3>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[12.5px]">
+        {rows.map(([k, v]) => (
+          <div key={k} className="contents">
+            <dt className="text-ink-hi/55">{k}</dt>
+            <dd className="text-ink-hi/90 min-w-0 break-words">{v}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
   );
 }
 

@@ -2,7 +2,8 @@ import { playAlbum } from "../lib/album";
 import { playPlaylist } from "../lib/playlist";
 import { albumPayload, useDrag } from "../lib/dnd";
 import { usePlayer } from "../stores/player";
-import { tintHoverHandlers, useUI } from "../stores/ui";
+import { tintHoverHandlers, useUI, type MenuItem } from "../stores/ui";
+import { trackMenuItems } from "../lib/trackActions";
 import { Artwork, PlayOverlay, ShelfScroller } from "./primitives";
 import type { Album, Artist, HomeItem, HomeShelf, PlaylistCard, Track } from "../types";
 import type { KeyboardEvent } from "react";
@@ -27,7 +28,7 @@ const CARD =
 const CARD_TITLE = "text-[15px] font-semibold text-ink-hi truncate leading-snug";
 const CARD_SUB = "text-[13px] text-ink-dim truncate mt-0.5";
 
-export function TrackCard({ track }: { track: Track }) {
+export function TrackCard({ track, menu = () => trackMenuItems(track) }: { track: Track; menu?: () => MenuItem[] }) {
   const playTrack = usePlayer((s) => s.playTrack);
   const drag = useDrag({ track });
   const open = (): void => playTrack(track);
@@ -36,6 +37,10 @@ export function TrackCard({ track }: { track: Track }) {
       role="button"
       tabIndex={0}
       onClick={open}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        useUI.getState().openContextMenu(e.clientX, e.clientY, menu());
+      }}
       onKeyDown={activateOnKey(open)}
       {...tintHoverHandlers(track.thumb)}
       {...drag.props}

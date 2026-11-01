@@ -7,14 +7,14 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { Heart, ListPlus, MoreHorizontal, MoreVertical, Play, Shuffle, User } from "lucide-react";
-import { Artwork, ErrorState, ExplicitBadge, HeroSkeleton, ListSkeleton, ShelfScroller } from "../components/primitives";
+import { Artwork, EqBars, ErrorState, ExplicitBadge, HeroSkeleton, ListSkeleton, ShelfScroller } from "../components/primitives";
 import { trackMenuItems } from "../lib/trackActions";
 import { useDrag } from "../lib/dnd";
 import { fmtTime } from "../lib/format";
 import { useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
 import { useLibrary } from "../stores/library";
-import { usePlayer } from "../stores/player";
+import { usePlayer, useTrackPlayback } from "../stores/player";
 import { useUI } from "../stores/ui";
 import type { ArtistPageData, HomeItem, Track } from "../types";
 
@@ -59,6 +59,7 @@ function SongRow({ song, songs, index }: { song: Track; songs: Track[]; index: n
   const playQueue = usePlayer((s) => s.playQueue);
   const openContextMenu = useUI((s) => s.openContextMenu);
   const drag = useDrag({ track: song });
+  const state = useTrackPlayback(song.id);
   const openMenu = (x: number, y: number): void => {
     openContextMenu(x, y, trackMenuItems(song));
   };
@@ -70,9 +71,18 @@ function SongRow({ song, songs, index }: { song: Track; songs: Track[]; index: n
         e.preventDefault();
         openMenu(e.clientX, e.clientY);
       }}
-      className={`group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none hover:bg-ink-hi/[0.05] ${drag.dragging ? "opacity-40" : ""}`}
+      className={`group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
+        state ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.05]"
+      } ${drag.dragging ? "opacity-40" : ""}`}
     >
-      <Artwork src={song.thumb} className="w-[52px] h-[52px] rounded-lg shrink-0" iconClassName="w-4 h-4" alt="" />
+      <span className="relative shrink-0">
+        <Artwork src={song.thumb} className="w-[52px] h-[52px] rounded-lg" iconClassName="w-4 h-4" alt="" />
+        {state === "playing" && (
+          <span className="absolute inset-0 grid place-items-center rounded-lg bg-black/50">
+            <EqBars />
+          </span>
+        )}
+      </span>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 text-[16px] font-semibold tracking-[-0.2px] text-ink-hi">
           {song.explicit && <ExplicitBadge />}

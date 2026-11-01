@@ -13,7 +13,7 @@
  */
 
 /** Device-local settings a backup must never carry or overwrite. */
-export const DEVICE_LOCAL_SETTINGS = new Set(["downloadDir", "localMusicFolder"]);
+export const DEVICE_LOCAL_SETTINGS = new Set(["downloadDir", "localMusicFolder", "audioSinkId", "lyricsOffset"]);
 
 /** Known settings keys — junk in, junk never out. */
 export const SETTINGS_KEYS = new Set([
@@ -34,17 +34,35 @@ export const SETTINGS_KEYS = new Set([
   "animatedCanvas",
   "syncedLyrics",
   "blurUnfocusedLyrics",
+  "romanizeLyrics",
   "localMusicFolder",
   "filterNonMusicAudio",
   "dontRepeatSuggestions",
   "hideVolumeBar",
   "eqEnabled",
   "eqGains",
+  "eqPresets",
+  "eqAutoHeadroom",
+  "audioSinkId",
+  "lyricsOffset",
+  "loudnessLevel",
 ]);
 
 /** Equalizer band gains: one dB value per band (EQ_BANDS in src/lib/audio.ts has 10), within ±12. */
 export function eqGainsOk(v: unknown): boolean {
   return Array.isArray(v) && v.length === 10 && v.every((g) => typeof g === "number" && Number.isFinite(g) && g >= -12 && g <= 12);
+}
+
+/** Saved EQ presets: at most 20, each a short non-empty name and a valid gain curve. */
+export function eqPresetsOk(v: unknown): boolean {
+  return (
+    Array.isArray(v) &&
+    v.length <= 20 &&
+    v.every(
+      (p) =>
+        !!p && typeof p === "object" && typeof p.name === "string" && p.name.trim().length > 0 && p.name.length <= 40 && eqGainsOk(p.gains)
+    )
+  );
 }
 
 /** Inner state of a persisted store: unwraps the envelope, or passes a bare map through. */
@@ -105,7 +123,7 @@ export function settingsFromBackup(incoming: unknown, currentEnvelope: unknown):
       continue;
     }
     // A malformed gains list would break the equalizer and the Settings page.
-    if (k in inc && (k !== "eqGains" || eqGainsOk(inc[k]))) next[k] = inc[k];
+    if (k in inc && (k !== "eqGains" || eqGainsOk(inc[k])) && (k !== "eqPresets" || eqPresetsOk(inc[k])) && (k !== "loudnessLevel" || ["off", "quiet", "normal", "loud"].includes(inc[k] as string))) next[k] = inc[k];
   }
   return next;
 }

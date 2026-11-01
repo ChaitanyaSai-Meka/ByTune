@@ -11,7 +11,7 @@ export function useCanvas(track: Track | null): string | null {
   const [url, setUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!enabled || !track || track.localPath || !track.thumb) {
+    if (!enabled || !track || track.localPath || track.id.startsWith("local:") || !track.thumb) {
       setUrl(null);
       return;
     }

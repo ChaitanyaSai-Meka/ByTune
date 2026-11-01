@@ -6,6 +6,23 @@ import { storage } from "../lib/persist";
 export type StreamQuality = "low" | "medium" | "high" | "lossless";
 export type DownloadQuality = "standard" | "high" | "lossless";
 
+/** Volume leveling: the loudness every stream is brought to, or off. */
+export type LoudnessLevel = "off" | "quiet" | "normal" | "loud";
+export const LOUDNESS_LABEL: Record<LoudnessLevel, string> = {
+  off: "Off",
+  quiet: "Quiet",
+  normal: "Normal",
+  loud: "Loud",
+};
+
+/** A saved equalizer curve: one dB value per band (EQ_BANDS in lib/audio). */
+export interface EqPreset {
+  name: string;
+  gains: number[];
+}
+/** Saved presets kept; the oldest goes first. */
+export const EQ_PRESET_LIMIT = 20;
+
 export const STREAM_QUALITY_LABEL: Record<StreamQuality, string> = {
   low: "Low",
   medium: "Medium",
@@ -38,6 +55,12 @@ interface SettingsState {
   /** 10-band graphic EQ; gains in dB (−12..+12), one per EQ_BANDS entry */
   eqEnabled: boolean;
   eqGains: number[];
+  /** the listener's own EQ presets (synced; validated in cloud-payload/backup-transfer) */
+  eqPresets: EqPreset[];
+  /** lower the level only when EQ boosts would clip at the current volume */
+  eqAutoHeadroom: boolean;
+  /** volume leveling target (lib/audio LOUDNESS_TARGETS) */
+  loudnessLevel: LoudnessLevel;
 
   /* Appearance */
   reduceAnimation: boolean;
@@ -48,6 +71,11 @@ interface SettingsState {
   animatedCanvas: boolean;
   syncedLyrics: boolean;
   blurUnfocusedLyrics: boolean;
+  /** show a Latin-letters reading under lyrics in other scripts */
+  romanizeLyrics: boolean;
+  /** seconds this device shows lyrics later (+) or earlier (−) — headphone
+      delay is per device, so it never syncs (DEVICE_SETTINGS_FIELDS) */
+  lyricsOffset: number;
 
   /* Local music */
   localMusicFolder: string | null;
@@ -69,6 +97,11 @@ interface SettingsState {
   setAudioSinkId(sinkId: string): void;
   setEqEnabled(v: boolean): void;
   setEqGains(gains: number[]): void;
+  saveEqPreset(name: string, gains: number[]): void;
+  renameEqPreset(from: string, to: string): void;
+  deleteEqPreset(name: string): void;
+  setEqAutoHeadroom(v: boolean): void;
+  setLoudnessLevel(level: LoudnessLevel): void;
   setReduceAnimation(v: boolean): void;
   setReduceDynamicBlur(v: boolean): void;
   setLiquidGlass(v: boolean): void;
@@ -77,6 +110,8 @@ interface SettingsState {
   setAnimatedCanvas(v: boolean): void;
   setSyncedLyrics(v: boolean): void;
   setBlurUnfocusedLyrics(v: boolean): void;
+  setRomanizeLyrics(v: boolean): void;
+  setLyricsOffset(seconds: number): void;
   setLocalMusicFolder(v: string | null): void;
   setFilterNonMusicAudio(v: boolean): void;
   setDontRepeatSuggestions(v: boolean): void;
@@ -94,11 +129,16 @@ export const useSettings = create<SettingsState>()(
       crossfadeSeconds: 0,
       smartFade: false,
       skipSilence: false,
-      autoplay: false,
+      // On for new installs. Existing installs keep their stored value and
+      // get a one-time offer when their queue first runs out (lib/autoplay).
+      autoplay: true,
       playbackSpeed: 1,
       audioSinkId: "",
       eqEnabled: false,
       eqGains: Array(10).fill(0),
+      eqPresets: [],
+      eqAutoHeadroom: true,
+      loudnessLevel: "normal",
 
       reduceAnimation: false,
       reduceDynamicBlur: false,
@@ -108,6 +148,8 @@ export const useSettings = create<SettingsState>()(
       animatedCanvas: false,
       syncedLyrics: true,
       blurUnfocusedLyrics: true,
+      romanizeLyrics: false,
+      lyricsOffset: 0,
 
       localMusicFolder: null,
       filterNonMusicAudio: true,
@@ -127,6 +169,17 @@ export const useSettings = create<SettingsState>()(
       setAudioSinkId: (audioSinkId) => set({ audioSinkId }),
       setEqEnabled: (eqEnabled) => set({ eqEnabled }),
       setEqGains: (eqGains) => set({ eqGains: eqGains.map((g) => Math.min(12, Math.max(-12, g))) }),
+      saveEqPreset: (name, gains) =>
+        set((s) => ({
+          eqPresets: [...s.eqPresets.filter((p) => p.name !== name), { name, gains: [...gains] }].slice(-EQ_PRESET_LIMIT),
+        })),
+      renameEqPreset: (from, to) =>
+        set((s) => ({
+          eqPresets: s.eqPresets.filter((p) => p.name !== to || p.name === from).map((p) => (p.name === from ? { ...p, name: to } : p)),
+        })),
+      deleteEqPreset: (name) => set((s) => ({ eqPresets: s.eqPresets.filter((p) => p.name !== name) })),
+      setEqAutoHeadroom: (eqAutoHeadroom) => set({ eqAutoHeadroom }),
+      setLoudnessLevel: (loudnessLevel) => set({ loudnessLevel }),
       setReduceAnimation: (reduceAnimation) => set({ reduceAnimation }),
       setReduceDynamicBlur: (reduceDynamicBlur) => set({ reduceDynamicBlur }),
       setLiquidGlass: (liquidGlass) => set({ liquidGlass }),
@@ -135,6 +188,8 @@ export const useSettings = create<SettingsState>()(
       setAnimatedCanvas: (animatedCanvas) => set({ animatedCanvas }),
       setSyncedLyrics: (syncedLyrics) => set({ syncedLyrics }),
       setBlurUnfocusedLyrics: (blurUnfocusedLyrics) => set({ blurUnfocusedLyrics }),
+      setRomanizeLyrics: (romanizeLyrics) => set({ romanizeLyrics }),
+      setLyricsOffset: (seconds) => set({ lyricsOffset: Math.round(Math.min(3, Math.max(-3, seconds)) * 20) / 20 }),
       setLocalMusicFolder: (localMusicFolder) => set({ localMusicFolder }),
       setFilterNonMusicAudio: (filterNonMusicAudio) => set({ filterNonMusicAudio }),
       setDontRepeatSuggestions: (dontRepeatSuggestions) => set({ dontRepeatSuggestions }),

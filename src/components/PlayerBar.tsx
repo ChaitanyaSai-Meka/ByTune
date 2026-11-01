@@ -19,11 +19,11 @@
  *  - seek row (8px below transport): fixed 50px time boxes (12/17
  *    #b3b3b3) flanking a flexible bar — 12px hit area, 4px track (2px
  *    radius, white @30%), white fill, 12px white handle on hover
- *  - right: lyrics / queue / volume (speaker 32px + 67px track)
+ *  - right: sleep timer / lyrics / queue / volume (speaker 32px + 67px track)
  *    / miniplayer / fullscreen — 16px icons white @70% → white on hover
  */
 import { useEffect, useRef, useState } from "react";
-import { Check, Heart, ListMusic, ListPlus, Loader2 } from "lucide-react";
+import { Check, Heart, ListMusic, ListPlus, Loader2, Moon } from "lucide-react";
 import {
   SpCheck,
   SpCoverNote,
@@ -50,6 +50,7 @@ import { useSettings } from "../stores/settings";
 import { useUI, type MenuItem } from "../stores/ui";
 import { upgradeArtwork } from "../lib/artwork";
 import { useDrag } from "../lib/dnd";
+import { SLEEP_MAX_MINUTES, formatSleepLeft, parseSleepMinutes, useSleepTimer } from "../lib/sleepTimer";
 
 /* Transport button — 32×32, 16px glyph, colour-only hover (Spotify). */
 function TransportButton({
@@ -86,12 +87,15 @@ function BarButton({
   active,
   title,
   className: extra = "",
+  menu,
   children,
 }: {
   onClick: () => void;
   active?: boolean;
   title: string;
   className?: string;
+  /** opens a menu instead of toggling */
+  menu?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -99,7 +103,8 @@ function BarButton({
       onClick={onClick}
       title={title}
       aria-label={title}
-      aria-pressed={active}
+      aria-pressed={menu ? undefined : active}
+      aria-haspopup={menu ? "menu" : undefined}
       className={`relative grid h-8 w-8 place-items-center rounded-full transition-colors ${extra} ${
         active ? "text-white" : "text-white/70 hover:text-white"
       }`}
@@ -111,6 +116,81 @@ function BarButton({
         <span className="absolute bottom-[2px] left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-white" />
       )}
     </button>
+  );
+}
+
+/* Sleep timer — a moon in the right cluster; its menu hangs above it. While a
+   timer runs the moon carries the active dot and the time left beside it. */
+function SleepTimerButton() {
+  const endsAt = useSleepTimer((s) => s.endsAt);
+  const endOfSong = useSleepTimer((s) => s.endOfSong);
+  const anchorRef = useRef<HTMLSpanElement>(null);
+  const [now, setNow] = useState(() => performance.now());
+  useEffect(() => {
+    if (endsAt == null) return;
+    setNow(performance.now());
+    const id = window.setInterval(() => setNow(performance.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [endsAt]);
+
+  const left = endsAt != null ? formatSleepLeft(endsAt - now) : null;
+  const status = endOfSong ? "Stops after this song" : left ? `Stops in ${left}` : null;
+
+  const open = (): void => {
+    const ui = useUI.getState();
+    const sleep = useSleepTimer.getState();
+    const start = (minutes: number, label: string): void => {
+      sleep.start(minutes);
+      ui.toast(`Music stops in ${label}`, "info");
+    };
+    const preset = (minutes: number, label: string): MenuItem => ({ label, action: () => start(minutes, label) });
+    const items: MenuItem[] = [
+      { label: status ?? "Sleep timer", header: true },
+      preset(5, "5 minutes"),
+      preset(15, "15 minutes"),
+      preset(30, "30 minutes"),
+      preset(45, "45 minutes"),
+      preset(60, "1 hour"),
+      preset(120, "2 hours"),
+      {
+        label: "End of this song",
+        action: () => {
+          sleep.startEndOfSong();
+          ui.toast("Music stops after this song", "info");
+        },
+      },
+      {
+        label: "Custom…",
+        action: () =>
+          ui.openDialog({
+            title: "Sleep timer",
+            body: "Stop the music after how long? Minutes, or hours and minutes like 1:30 — up to 12 hours.",
+            initialValue: "60",
+            placeholder: "Minutes",
+            confirmLabel: "Start",
+            onConfirm: (value) => {
+              const minutes = parseSleepMinutes(value);
+              if (minutes == null || minutes < 1 || minutes > SLEEP_MAX_MINUTES) {
+                useUI.getState().toast("Enter a time from 1 minute to 12 hours", "error");
+                return;
+              }
+              start(minutes, formatSleepLeft(minutes * 60_000));
+            },
+          }),
+      },
+    ];
+    if (status) items.push({ label: "Turn off", separatorBefore: true, action: () => sleep.cancel() });
+    const rect = anchorRef.current?.getBoundingClientRect();
+    ui.openContextMenu(rect?.left ?? window.innerWidth / 2, rect?.top ?? window.innerHeight / 2, items, { above: true });
+  };
+
+  return (
+    <span ref={anchorRef} className="flex items-center">
+      <BarButton onClick={open} title={status ? `Sleep timer: ${status.toLowerCase()}` : "Sleep timer"} active={!!status} menu>
+        <Moon size={16} strokeWidth={2} />
+      </BarButton>
+      {left && <span className="-ml-0.5 mr-1 text-[11px] tabular-nums text-white/70">{left}</span>}
+    </span>
   );
 }
 
@@ -340,6 +420,7 @@ export function PlayerBar() {
 
         {/* Right — lyrics, queue, volume, miniplayer, fullscreen. */}
         <div className="flex items-center justify-end">
+          <SleepTimerButton />
           <BarButton onClick={toggleLyrics} title="Lyrics" active={lyricsCenter}>
             <SpLyrics />
           </BarButton>

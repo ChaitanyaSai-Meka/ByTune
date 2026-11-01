@@ -182,6 +182,9 @@ export function TopBar() {
   useEffect(() => {
     const q = query.trim();
     if (!fieldFocused || q.length < 2) {
+      // Invalidate any request still in flight, or it reopens the dropdown
+      // after Enter, a blur or a cleared field.
+      suggestSeq.current++;
       setSuggests([]);
       setSuggestOpen(false);
       setActiveIdx(-1);
@@ -207,6 +210,7 @@ export function TopBar() {
   }, [query, fieldFocused]);
 
   const closeDropdown = (): void => {
+    suggestSeq.current++;
     setSuggestOpen(false);
     setActiveIdx(-1);
   };
@@ -230,6 +234,7 @@ export function TopBar() {
     const t = text.trim();
     if (!t) return;
     setQuery(t);
+    useRecents.getState().pushSearch(t);
     closeDropdown();
     setFieldFocused(false);
     inputRef.current?.blur();
@@ -383,7 +388,7 @@ export function TopBar() {
           />
           {/* Type-ahead dropdown — BitChord mobile's model: the typed query
               plus plain text completions, no artwork rows while typing. */}
-          {suggestOpen && suggests.length > 0 && (
+          {fieldFocused && suggestOpen && suggests.length > 0 && (
             <div
               className="absolute left-0 right-0 top-full mt-2 z-50 glass-strong-solid rounded-2xl p-1.5 shadow-float max-h-[420px] overflow-y-auto animate-pop-in"
               role="listbox"

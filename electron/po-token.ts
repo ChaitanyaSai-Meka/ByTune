@@ -19,6 +19,9 @@ import { BotGuardClient } from "bgutils-js/botguard";
 import { WebPoMinter } from "bgutils-js/webpo";
 import { buildURL, parseLooseJSON } from "bgutils-js/utils";
 
+/** A hung YouTube request must fail, not stall every track behind the token. */
+const FETCH_TIMEOUT_MS = 15_000;
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const REQUEST_KEY = "O43z0dpjhgX20SCx4KAo";
@@ -86,6 +89,7 @@ async function fetchChallengeFromHomepage(): Promise<ChallengeData | undefined> 
   try {
     const pageRes = await fetch("https://www.youtube.com", {
       headers: { accept: "*/*", "accept-language": "en-US,en;q=0.7", "user-agent": UA },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     const pageHtml = await pageRes.text();
 
@@ -120,7 +124,10 @@ async function fetchChallengeFromHomepage(): Promise<ChallengeData | undefined> 
         console.warn("[bytune] homepage challenge: no interpreter available");
         return undefined;
       }
-      const jsRes = await fetch(`https:${interpreterUrlWrapped}`, { headers: { "user-agent": UA } });
+      const jsRes = await fetch(`https:${interpreterUrlWrapped}`, {
+        headers: { "user-agent": UA },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
       interpreterJS = await jsRes.text();
     }
     return {
@@ -141,6 +148,7 @@ async function fetchChallengeFromAttGet(): Promise<ChallengeData | undefined> {
     const res = await fetch("https://www.youtube.com/youtubei/v1/att/get?prettyPrint=false", {
       method: "POST",
       headers: waaHeaders(),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       body: JSON.stringify({
         context: { client: { clientName: "WEB", clientVersion: "2.20260817.01.00" } },
         engagementType: "ENGAGEMENT_TYPE_UNBOUND",
@@ -157,7 +165,10 @@ async function fetchChallengeFromAttGet(): Promise<ChallengeData | undefined> {
       bgChallenge?.interpreterJavascript?.privateDoNotAccessOrElseSafeScriptWrappedValue;
     if (!interpreterJS) {
       if (!interpreterUrlWrapped) throw new Error("no interpreter available");
-      const jsRes = await fetch(`https:${interpreterUrlWrapped}`, { headers: { "user-agent": UA } });
+      const jsRes = await fetch(`https:${interpreterUrlWrapped}`, {
+        headers: { "user-agent": UA },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
       interpreterJS = await jsRes.text();
     }
     return {
@@ -205,6 +216,7 @@ async function mintWithChallenge(challenge: ChallengeData, visitorData: string):
   const itRes = await fetch(buildURL("GenerateIT"), {
     method: "POST",
     headers: waaHeaders(),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     body: JSON.stringify([REQUEST_KEY, botguardResponse]),
   });
   const itRaw = await itRes.text();

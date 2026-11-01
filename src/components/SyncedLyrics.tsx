@@ -13,6 +13,8 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getPlaybackPosition } from "../lib/audio";
+import { visibleLyricLines } from "../lib/lyricsLines";
+import { romanize } from "../lib/romanize";
 import { LYRICS_LOADING_LINES, pickLyricsLine } from "../lib/lyricsPhrases";
 import { usePlayer } from "../stores/player";
 import { useSettings } from "../stores/settings";
@@ -37,6 +39,18 @@ interface LyricsViewProps {
 type LyricsVariant = "compact" | "large" | "hero";
 
 /** Line type scale — `hero` is the fullscreen variant of `large`. */
+/** Background vocals and romanized readings: a quieter line under the lyric. */
+function subLineClass(variant: LyricsVariant): string {
+  switch (variant) {
+    case "hero":
+      return "font-display text-[clamp(17px,1.9vw,28px)] leading-[1.3] font-bold";
+    case "large":
+      return "font-display text-[22px] leading-[1.3] font-bold";
+    default:
+      return "font-display text-[15px] leading-[1.35] font-bold";
+  }
+}
+
 function lineSizeClass(variant: LyricsVariant): string {
   switch (variant) {
     case "hero":
@@ -181,6 +195,7 @@ export function LyricsView({
   // and the glow yields to reduced motion / reduced blur.
   const syncedOn = useSettings((s) => s.syncedLyrics);
   const blurOn = useSettings((s) => s.blurUnfocusedLyrics);
+  const romanOn = useSettings((s) => s.romanizeLyrics);
   const reduceMotion = useSettings((s) => s.reduceAnimation);
   const reduceBlur = useSettings((s) => s.reduceDynamicBlur);
   const blurLines = blurOn && !reduceBlur;
@@ -194,13 +209,7 @@ export function LyricsView({
 
   const synced = lyrics?.synced ?? null;
 
-  // Providers attach backing-vocal / credit lines wrapped in parentheses at
-  // the head of the song — they render as phantom lyrics before the first
-  // real line, so they're dropped here (gap lines stay).
-  const lines = useMemo(
-    () => synced?.filter((l) => l.gap || (!!l.text && !/^[[(]/.test(l.text.trim()) && l.time > 0)) ?? null,
-    [synced],
-  );
+  const lines = useMemo(() => (synced ? visibleLyricLines(synced) : null), [synced]);
 
   // Static text for the plain (unsynced) treatment: the provider's plain
   // lyrics when they exist, otherwise the synced lines' own words joined in
@@ -244,7 +253,10 @@ export function LyricsView({
       if (!container || !el) return;
       const target =
         el.offsetTop + el.clientHeight / 2 - container.clientHeight * anchor;
-      container.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
+      const still =
+        document.documentElement.classList.contains("reduce-motion") ||
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      container.scrollTo({ top: Math.max(0, target), behavior: still ? "auto" : "smooth" });
     });
     return () => window.cancelAnimationFrame(raf);
   }, [activeIndex, synced, anchor]);
@@ -373,6 +385,8 @@ export function LyricsView({
               spans = resolveWordSpans(ws, line.time, t1);
             }
 
+            // Background vocals and a romanized reading follow as quieter lines.
+            const roman = romanOn ? (line.roman ?? romanize(line.text)) : null;
             return (
               <button
                 key={`${line.time}-${i}`}
@@ -392,9 +406,16 @@ export function LyricsView({
                     {line.text}
                   </span>
                 )}
+                {line.bg && <span className={`block mt-1 opacity-70 ${subLineClass(variant)}`}>{line.bg.text}</span>}
+                {roman && (
+                  <span className={`block mt-1 text-ink-hi/60 ${subLineClass(variant)}`}>
+                    {roman}
+                  </span>
+                )}
               </button>
             );
           })}
+          {lyrics?.source && <p className="pt-4 text-[12px] font-medium text-ink-hi/45">Lyrics from {lyrics.source}</p>}
         </div>
         <div aria-hidden="true" style={{ height: bottomSpacer, flexShrink: 0 }} />
         </div>

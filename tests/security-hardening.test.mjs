@@ -93,7 +93,12 @@ test("download filenames: traversal, reserved names and bidi spoofing are neutra
 });
 
 test("cloud validation strips scheme-unsafe thumbs and device-owned settings keys", async () => {
-  const outfile = await bundle("../electron/cloud-payload.ts", { config: "export const SYNCED_STORES = ['library','settings','player','recent-searches'];" }, []);
+  // The device-only list comes from the real module (built by `npm test`), so the stub can't drift.
+  const { DEVICE_SETTINGS_FIELDS } = await import("../.test-build/sync-merge.mjs");
+  const outfile = await bundle("../electron/cloud-payload.ts", {
+    config: "export const SYNCED_STORES = ['library','settings','player','recent-searches'];",
+    "sync-merge": `export const DEVICE_SETTINGS_FIELDS = ${JSON.stringify(DEVICE_SETTINGS_FIELDS)};`,
+  }, []);
   const { validateCloudPayload } = require(outfile);
   const payload = {
     version: 1,
@@ -108,9 +113,10 @@ test("cloud validation strips scheme-unsafe thumbs and device-owned settings key
   const good = { version: 1, state: { liked: [{ id: "a", title: "T", artist: "A", thumb: "https://i.ytimg.com/vi/x/hqdefault.jpg", duration: 60 }] } };
   validateCloudPayload("library", good);
   assert.ok(good.state.liked[0].thumb, "legit https thumbs survive");
-  const settings = { version: 1, state: { downloadDir: "C:\\hostile", downloadQuality: "high" } };
+  const settings = { version: 1, state: { downloadDir: "C:\\hostile", audioSinkId: "other-pc", downloadQuality: "high" } };
   validateCloudPayload("settings", settings);
   assert.equal(settings.state.downloadDir, undefined, "device-owned paths must be stripped from cloud data");
+  assert.equal(settings.state.audioSinkId, undefined, "another machine's output device must not arrive");
   assert.equal(settings.state.downloadQuality, "high", "legit settings survive");
 });
 

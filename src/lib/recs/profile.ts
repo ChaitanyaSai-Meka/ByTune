@@ -215,10 +215,12 @@ interface ComputeInput {
   searches: string[];
   skips: Record<string, SkipEntry>;
   now: number;
+  /** artists the listener follows — a standing preference, like a few likes */
+  followed?: { id: string; name: string; thumb?: string }[];
 }
 
 export function computeTasteProfile(input: ComputeInput): TasteProfile {
-  const { all, month, history, liked, playlists, searches, skips, now } = input;
+  const { all, month, history, liked, playlists, searches, skips, now, followed = [] } = input;
 
   const lower = (s: string): string => s.trim().toLowerCase();
 
@@ -284,6 +286,8 @@ export function computeTasteProfile(input: ComputeInput): TasteProfile {
   };
   for (const t of history) creditFromLibrary(t, true);
   for (const t of liked) creditFromLibrary(t, false);
+  // A followed artist is in the profile even before a single play.
+  for (const a of followed) if (a.name.trim()) aggFor(a.name);
   for (const [key, credited] of fromLibrary) {
     const agg = aggFor(credited.name);
     agg.playsAll += credited.plays;
@@ -299,6 +303,11 @@ export function computeTasteProfile(input: ComputeInput): TasteProfile {
   // ---- identity resolution: real tracks first, then the persisted
   // artist-meta cache (search results from earlier runs) -------------------
   const idByKey = new Map<string, { artistId?: string; thumb?: string }>();
+  // Followed artists carry their exact page id and photo.
+  for (const a of followed) {
+    const key = lower(a.name);
+    if (key) idByKey.set(key, { artistId: a.id, thumb: a.thumb });
+  }
   for (const t of [...history, ...liked, ...playlists.flatMap((p) => p.tracks)]) {
     const key = lower(t.artist);
     if (!key || key === "unknown artist") continue;
@@ -319,6 +328,11 @@ export function computeTasteProfile(input: ComputeInput): TasteProfile {
   for (const t of liked) {
     const key = lower(t.artist);
     likedByKey.set(key, (likedByKey.get(key) ?? 0) + 1);
+  }
+  // Following counts like two liked songs.
+  for (const a of followed) {
+    const key = lower(a.name);
+    if (key) likedByKey.set(key, (likedByKey.get(key) ?? 0) + 2);
   }
   const searchByKey = new Map<string, number>();
   for (const q of searches) {
@@ -438,6 +452,7 @@ export function useTasteProfile(): TasteProfile | null {
   const history = useLibrary((s) => s.history);
   const liked = useLibrary((s) => s.liked);
   const playlists = useLibrary((s) => s.playlists);
+  const followed = useLibrary((s) => s.followedArtists);
   const searches = useRecents((s) => s.searches);
   const skips = useListening((s) => s.skips);
   const listenVersion = useListening((s) => s.version);
@@ -447,15 +462,17 @@ export function useTasteProfile(): TasteProfile | null {
     return computeTasteProfile({
       all: stats.all,
       month: stats.month,
-      history,
-      liked,
+      // Podcast episodes are not music taste.
+      history: history.filter((t) => !t.episode),
+      liked: liked.filter((t) => !t.episode),
       playlists,
       searches,
       skips,
       now: Date.now(),
+      followed,
     });
     // listenVersion participates so a freshly recorded skip re-scores the
     // profile even when the skips object was recycled by the persistence layer.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stats, history, liked, playlists, searches, skips, listenVersion]);
+  }, [stats, history, liked, playlists, searches, skips, listenVersion, followed]);
 }

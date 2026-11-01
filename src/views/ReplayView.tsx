@@ -11,6 +11,7 @@ import { useUI } from "../stores/ui";
 import { resolveArtistMeta } from "../stores/artistMeta";
 import { useLibrary } from "../stores/library";
 import type { Track } from "../types";
+import { activityDays, fmtHours } from "../lib/replayFormat";
 
 interface Summary {
   totalMs: number;
@@ -31,26 +32,34 @@ const PERIODS = [
   { key: "all", label: "All time" },
 ] as const;
 
-function fmtHours(ms: number): string {
-  const h = ms / 3_600_000;
-  if (h < 1) return `${Math.round(ms / 60000)} min`;
-  return `${h < 10 ? h.toFixed(1) : Math.round(h)} hrs`;
-}
+type PeriodKey = (typeof PERIODS)[number]["key"];
 
 function fmtDate(iso: string): string {
   const d = new Date(`${iso}T00:00:00`);
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+/** "6 PM" or "18" — whatever this computer's clock format is. */
+const hourLabel = (h: number): string => new Date(2000, 0, 1, h).toLocaleTimeString(undefined, { hour: "numeric" });
+
+// Kept across visits so Back lands on the same period, drawn at full height
+// straight away — the app's scroll restore needs the content already there.
+let lastPeriod: PeriodKey = "month";
+const summaryCache = new Map<PeriodKey, Summary>();
+
 /** Join key for an album row — the same shape the stats buckets use. */
 const albumKey = (al: { name: string; artist?: string }): string =>
   `${al.name.toLowerCase()}|${(al.artist || "unknown artist").toLowerCase()}`;
 
 export function ReplayView() {
-  const [period, setPeriod] = useState<(typeof PERIODS)[number]["key"]>("month");
+  const [period, setPeriodState] = useState<PeriodKey>(lastPeriod);
+  const setPeriod = (k: PeriodKey): void => {
+    lastPeriod = k;
+    setPeriodState(k);
+  };
   const [nonce, setNonce] = useState(0);
-  const [data, setData] = useState<Summary | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<Summary | null>(() => summaryCache.get(lastPeriod) ?? null);
+  const [loading, setLoading] = useState(() => !summaryCache.has(lastPeriod));
   const [error, setError] = useState<string | null>(null);
   const [artistThumbs, setArtistThumbs] = useState<Record<string, string>>({});
   const playQueue = usePlayer((s) => s.playQueue);
@@ -59,11 +68,14 @@ export function ReplayView() {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    const cached = summaryCache.get(period);
+    if (cached) setData(cached);
+    setLoading(!cached);
     setError(null);
     window.bytune
       ?.statsSummary(period)
       .then((res) => {
+        summaryCache.set(period, res as Summary);
         if (!cancelled) setData(res as Summary);
       })
       .catch((err: unknown) => {
@@ -151,13 +163,37 @@ export function ReplayView() {
     return al.thumb || albumCandidates.web.get(key) || presentCovers[key] || "";
   };
 
+  // Top artists and albums open their pages; with no id to go on, a search.
+  const searchFor = (q: string): void => {
+    useUI.getState().setSearchQuery(q);
+    useUI.getState().navigate({ name: "search" });
+  };
+  const openArtist = async (name: string): Promise<void> => {
+    const meta = await resolveArtistMeta(name);
+    if (meta?.id) useUI.getState().navigate({ name: "artist", param: meta.id });
+    else searchFor(name);
+  };
+  const albumIds = useMemo(() => {
+    const ids = new Map<string, string>();
+    for (const t of [...history, ...liked, ...playlists.flatMap((p) => p.tracks)]) {
+      const key = t.album && t.albumId ? albumKey({ name: t.album, artist: t.artist }) : null;
+      if (key && !ids.has(key)) ids.set(key, t.albumId as string);
+    }
+    return ids;
+  }, [history, liked, playlists]);
+  const openAlbum = (al: Summary["albums"][number]): void => {
+    const id = albumIds.get(albumKey(al));
+    if (id) useUI.getState().navigate({ name: "album", param: id });
+    else searchFor(`${al.name} ${al.artist ?? ""}`.trim());
+  };
+
   if (error) {
     return <ErrorState title="Replay didn't load" body="Give it another try." onRetry={() => setNonce((n) => n + 1)} />;
   }
 
   const hasData = !!data && data.totalMs > 0;
-  const maxDay = Math.max(1, ...(data?.days.map((d) => d.ms) ?? [1]));
-  const recentDays = (data?.days ?? []).slice(-28);
+  const recentDays = data ? activityDays(period, data.days) : [];
+  const maxDay = Math.max(1, ...recentDays.map((d) => d.ms));
   const maxHour = Math.max(1, ...(data?.hours.map((h) => h) ?? [1]));
   const topTracks: Track[] = (data?.tracks ?? []).slice(0, 20).map((t) => ({
     id: t.id,
@@ -174,7 +210,7 @@ export function ReplayView() {
           <h1 className="font-display text-[34px] font-bold tracking-[-0.03em] text-ink-hi">Replay</h1>
           <p className="text-[13.5px] text-ink-dim mt-1">Your listening, counted by ByTune — nothing estimated.</p>
         </div>
-        <Pills options={PERIODS.map((p) => ({ key: p.key, label: p.label }))} value={period} onChange={(k) => setPeriod(k as typeof period)} />
+        <Pills options={PERIODS.map((p) => ({ key: p.key, label: p.label }))} value={period} onChange={(k) => setPeriod(k as PeriodKey)} />
       </div>
 
       {loading && (
@@ -203,7 +239,7 @@ export function ReplayView() {
             </div>
             <div className="glass-pill rounded-2xl p-5">
               <div className="text-[12px] uppercase tracking-[0.12em] text-ink-faint font-semibold">Plays</div>
-              <div className="font-display text-[30px] font-bold text-ink-hi mt-2">{data.plays}</div>
+              <div className="font-display text-[30px] font-bold text-ink-hi mt-2">{data.plays.toLocaleString()}</div>
             </div>
             <div className="glass-pill rounded-2xl p-5">
               <div className="text-[12px] uppercase tracking-[0.12em] text-ink-faint font-semibold">Top artist</div>
@@ -250,7 +286,7 @@ export function ReplayView() {
             <div className="glass-pill rounded-2xl p-5">
               <div className="flex items-end gap-1 h-20">
                 {data.hours.map((ms, h) => (
-                  <div key={h} title={`${h}:00 — ${fmtHours(ms)}`} className="flex-1 flex flex-col items-center gap-1">
+                  <div key={h} title={`${hourLabel(h)} — ${fmtHours(ms)}`} className="flex-1 flex flex-col items-center gap-1">
                     <div
                       className="w-full rounded-t-sm bg-ink-hi/25 hover:bg-ink-hi/50 transition-colors min-h-[2px]"
                       style={{ height: `${Math.max(2, (ms / maxHour) * 72)}px` }}
@@ -259,11 +295,9 @@ export function ReplayView() {
                 ))}
               </div>
               <div className="flex justify-between text-[11px] text-ink-faint mt-2">
-                <span>12am</span>
-                <span>6am</span>
-                <span>12pm</span>
-                <span>6pm</span>
-                <span>11pm</span>
+                {[0, 6, 12, 18, 23].map((h) => (
+                  <span key={h}>{hourLabel(h)}</span>
+                ))}
               </div>
             </div>
           </section>
@@ -300,7 +334,11 @@ export function ReplayView() {
               <h2 className="section-title text-[21px] mb-4">Top artists</h2>
               <div className="glass-pill rounded-2xl p-4 space-y-3">
                 {data.artists.slice(0, 10).map((a, i) => (
-                  <div key={a.name} className="flex items-center gap-3">
+                  <button
+                    key={a.name}
+                    onClick={() => void openArtist(a.name)}
+                    className="w-full flex items-center gap-3 rounded-xl text-left hover:bg-ink-hi/[0.05] transition-colors"
+                  >
                     <span className="w-6 text-center text-[13px] font-bold text-ink-faint">{i + 1}</span>
                     <Artwork
                       src={a.thumb || artistThumbs[a.name] || ""}
@@ -310,7 +348,7 @@ export function ReplayView() {
                     />
                     <span className="min-w-0 flex-1 text-[14px] font-semibold text-ink-hi truncate">{a.name}</span>
                     <span className="text-[12.5px] text-ink-faint shrink-0">{fmtHours(a.ms)}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
               {data.albums.length > 0 && (
@@ -318,7 +356,11 @@ export function ReplayView() {
                   <h2 className="section-title text-[21px] mt-8 mb-4">Top albums</h2>
                   <div className="glass-pill rounded-2xl p-4 space-y-3">
                     {data.albums.slice(0, 5).map((al, i) => (
-                      <div key={`${al.name}-${i}`} className="flex items-center gap-3">
+                      <button
+                        key={`${al.name}-${i}`}
+                        onClick={() => openAlbum(al)}
+                        className="w-full flex items-center gap-3 rounded-xl text-left hover:bg-ink-hi/[0.05] transition-colors"
+                      >
                         <span className="w-6 text-center text-[13px] font-bold text-ink-faint">{i + 1}</span>
                         <Artwork
                           src={albumThumb(al)}
@@ -331,7 +373,7 @@ export function ReplayView() {
                           <span className="block text-[12.5px] text-ink-dim truncate">{al.artist}</span>
                         </span>
                         <span className="text-[12.5px] text-ink-faint shrink-0">{fmtHours(al.ms)}</span>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 </>

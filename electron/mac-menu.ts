@@ -32,7 +32,12 @@ export type MenuCommand =
   | "now-playing"
   | "miniplayer"
   | "settings"
-  | "focus-search";
+  | "focus-search"
+  | "sleep-15"
+  | "sleep-30"
+  | "sleep-60"
+  | "sleep-end"
+  | "sleep-off";
 
 export interface MenuPlaybackState {
   playing: boolean;
@@ -83,6 +88,17 @@ export function buildAppMenu(state: MenuPlaybackState, wiring: MenuWiring, isDev
         // its checkmark says. Clicking the already-selected mode is a no-op.
         click: mode === state.repeat ? undefined : cmd(`repeat-${mode}`),
       })),
+    },
+    {
+      label: "Sleep Timer",
+      submenu: [
+        { label: "15 Minutes", click: cmd("sleep-15") },
+        { label: "30 Minutes", click: cmd("sleep-30") },
+        { label: "1 Hour", click: cmd("sleep-60") },
+        { label: "End of This Song", click: cmd("sleep-end") },
+        { type: "separator" },
+        { label: "Turn Off", click: cmd("sleep-off") },
+      ],
     },
     { type: "separator" },
     { label: "Show Queue", click: cmd("queue") },

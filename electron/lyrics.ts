@@ -422,89 +422,161 @@ function attrTimeSeconds(attrs: string, name: string): number | null {
   return null;
 }
 
+const TTML_TRANSLATION_ROLE = /(?:ttm:role|x-role)\s*=\s*"x-translation"/;
+const TTML_ROMAN_ROLE = /(?:ttm:role|x-role)\s*=\s*"x-roman"/;
+const TTML_SIDE_ROLE = /(?:ttm:role|x-role)\s*=\s*"(?:x-translation|x-roman)"/;
+const TTML_BG_ROLE = /(?:ttm:role|x-role)\s*=\s*"x-bg"/;
+
+type TimedPiece = { begin: number; end: number | null; text: string; boundary: boolean };
+
+/**
+ * Glue syllable pieces into words: a boundary is whitespace in the gap before
+ * a piece or whitespace inside its text (Apple writes it inside,
+ * Lyrically-generated TTML writes it between). A producer that emits no
+ * whitespace at all gets one word per piece.
+ */
+function piecesToWords(timed: TimedPiece[]): SyncedLyricWord[] {
+  const words: SyncedLyricWord[] = [];
+  let cur: { start: number; end: number; text: string } | null = null;
+  const closeWord = (): void => {
+    if (cur) words.push({ start: cur.start, end: cur.end, text: cur.text.trim() });
+    cur = null;
+  };
+  for (const sp of timed) {
+    const text = sp.text;
+    if (!text) continue;
+    if (!cur || sp.boundary || /^\s/.test(text)) {
+      closeWord();
+      cur = { start: sp.begin, end: sp.end ?? sp.begin, text };
+    } else {
+      cur.text += text;
+      cur.end = sp.end ?? cur.end;
+    }
+    if (/\s$/.test(cur.text)) closeWord();
+  }
+  closeWord();
+  if (words.filter((w) => w.text).length <= 1 && timed.length > 1) {
+    words.length = 0;
+    for (const sp of timed) {
+      if (!sp.text.trim()) continue;
+      words.push({ start: sp.begin, end: Math.max(sp.end ?? sp.begin, sp.begin), text: sp.text.trim() });
+    }
+  }
+  const clean = words.filter((w) => w.text.length > 0);
+  for (const w of clean) if (w.end < w.start) w.end = w.start;
+  return clean;
+}
+
+const plainText = (markup: string): string => decodeEntities(markup.replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+
+/** Romanized lines from the head's first transliteration block, keyed by line (itunes:key). */
+function ttmlTransliterations(ttml: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const block = /<transliteration\b[^>]*>([\s\S]*?)<\/transliteration>/.exec(ttml)?.[1];
+  if (!block) return out;
+  for (const m of block.matchAll(/<text\b[^>]*\bfor\s*=\s*"([^"]+)"[^>]*>([\s\S]*?)<\/text>/g)) {
+    const text = plainText(m[2]);
+    if (text) out.set(m[1], text);
+  }
+  return out;
+}
+
 /**
  * Apple Music TTML, word-timed. A <p> per line, a timed <span> per syllable;
  * syllables of one word are adjacent spans with no whitespace between them,
- * so whitespace — not the span boundary — separates words. All times come
- * out in SECONDS.
+ * so whitespace — not the span boundary — separates words. Kept per line:
+ * background vocals (a ttm:role="x-bg" wrapper around their own timed spans)
+ * as a separate part, and a romanized reading (head transliterations or an
+ * inline x-roman span). All times in SECONDS.
  */
-function parseTtml(ttml: string): SyncedLyricLine[] {
+export function parseTtml(ttml: string): SyncedLyricLine[] {
   const lines: SyncedLyricLine[] = [];
+  const romans = ttmlTransliterations(ttml);
   const pBlocks = ttml.match(/<p\b[^>]*>[\s\S]*?<\/p>|<p\b[^>]*\/>/g) ?? [];
   for (const block of pBlocks) {
     const open = /<p\b([^>]*)>/.exec(block);
     if (!open) continue;
     const attrs = open[1];
-    if (/(?:ttm:role|x-role)\s*=\s*"(x-translation|x-roman)"/.test(attrs)) continue;
+    if (TTML_SIDE_ROLE.test(attrs)) continue;
     const begin = attrTimeSeconds(attrs, "begin");
     if (begin == null) continue;
     const end = attrTimeSeconds(attrs, "end");
+    const key = /itunes:key\s*=\s*"([^"]+)"/.exec(attrs)?.[1];
 
-    // Walk the paragraph as a sequence: each span plus the gap text BEFORE it.
-    // The gap is where the word boundary usually lives ("</span> <span>") -
-    // dropping it glued whole lines into single mega-words.
-    const spans = [...block.matchAll(/<span\b([^>]*)>([\s\S]*?)<\/span>/g)];
-    const timed: { begin: number | null; end: number | null; text: string; boundary: boolean }[] = [];
-    let prevEnd = 0;
-    for (const m of spans) {
-      const gap = block.slice(prevEnd, m.index ?? 0);
-      timed.push({
-        begin: attrTimeSeconds(m[1], "begin"),
-        end: attrTimeSeconds(m[1], "end"),
-        text: decodeEntities(m[2].replace(/<[^>]+>/g, "")),
-        boundary: /\s/.test(gap),
-      });
-      prevEnd = (m.index ?? 0) + m[0].length;
+    // Walk the paragraph's tags in order. Text belongs to the innermost span
+    // when that span is timed; anything else is gap text, where the word
+    // boundary usually lives ("</span> <span>") - dropping it glued whole
+    // lines into single mega-words. Spans nest (the x-bg wrapper), so a flat
+    // span regex would glue the wrapper to its first child.
+    type Span = { begin: number | null; end: number | null; skip: boolean; bg: boolean; inBg: boolean; roman: boolean };
+    const main: TimedPiece[] = [];
+    const backing: TimedPiece[] = [];
+    const stack: Span[] = [];
+    let owner: Span | null = null;
+    let gap = "";
+    let all = "";
+    let roman = "";
+    for (const t of block.matchAll(/<span\b([^>]*)>|<\/span>|<[^>]*>|[^<]+/g)) {
+      const tag = t[0];
+      if (tag.startsWith("<span")) {
+        if (/\/\s*$/.test(t[1])) continue; // <span/>: nothing inside
+        const parent = stack.at(-1);
+        const span: Span = {
+          begin: attrTimeSeconds(t[1], "begin"),
+          end: attrTimeSeconds(t[1], "end"),
+          skip: !!parent?.skip || TTML_SIDE_ROLE.test(t[1]),
+          bg: TTML_BG_ROLE.test(t[1]),
+          inBg: !!parent?.inBg || TTML_BG_ROLE.test(t[1]),
+          roman: !!parent?.roman || TTML_ROMAN_ROLE.test(t[1]),
+        };
+        if (span.bg) gap += " ";
+        stack.push(span);
+      } else if (tag === "</span>") {
+        if (stack.pop()?.bg) gap += " ";
+      } else if (!tag.startsWith("<")) {
+        const top = stack.at(-1);
+        if (top?.roman) roman += tag;
+        if (top?.skip) continue;
+        all += tag;
+        if (top?.begin == null) gap += tag;
+        else {
+          const into = top.inBg ? backing : main;
+          if (owner === top && into.length) into[into.length - 1].text += decodeEntities(tag);
+          else {
+            into.push({ begin: top.begin, end: top.end, text: decodeEntities(tag), boundary: /\s/.test(gap) });
+            owner = top;
+            gap = "";
+          }
+        }
+      } else if (stack.at(-1)?.begin == null) {
+        gap += " "; // a <br/> or other tag between words still separates them
+      }
     }
+    const romanText = (key ? romans.get(key) : undefined) ?? (plainText(roman) || undefined);
+    const extras = romanText ? { roman: romanText } : {};
 
-    if (timed.length === 0) {
-      // Line-synced TTML: bare text, no spans.
-      const text = decodeEntities(block.replace(/<[^>]+>/g, "")).trim();
+    if (main.length === 0 && backing.length === 0) {
+      // Line-synced TTML: bare text, no timed spans.
+      const text = decodeEntities(all).trim();
       if (!text) continue;
-      lines.push({ time: begin, text, end: end != null && end > begin ? end : undefined });
+      lines.push({ time: begin, text, end: end != null && end > begin ? end : undefined, ...extras });
       continue;
     }
 
-    // Merge syllable spans into words: a boundary is whitespace in the gap
-    // before a span or whitespace inside the span text (Apple writes it
-    // inside, Lyrically-generated TTML writes it between).
-    const words: SyncedLyricWord[] = [];
-    let cur: { start: number; end: number; text: string } | null = null;
-    const closeWord = (): void => {
-      if (cur) words.push({ start: cur.start, end: cur.end, text: cur.text.trim() });
-      cur = null;
-    };
-    for (const sp of timed) {
-      const text = sp.text;
-      if (!text) continue;
-      if (!cur || sp.boundary || /^\s/.test(text)) {
-        closeWord();
-        cur = { start: sp.begin as number, end: sp.end ?? sp.begin ?? 0, text };
-      } else {
-        cur.text += text;
-        cur.end = sp.end ?? cur.end;
-      }
-      if (/\s$/.test(cur.text)) closeWord();
-    }
-    closeWord();
-
-    // A producer that emits no whitespace at all: each span is a word.
-    if (words.length <= 1 && timed.length > 1) {
-      words.length = 0;
-      for (const sp of timed) {
-        if (sp.begin == null || !sp.text.trim()) continue;
-        const st = sp.begin;
-        words.push({ start: st, end: Math.max(sp.end ?? st, st), text: sp.text.trim() });
-      }
-    }
-    const clean = words.filter((w) => w.text.length > 0);
-    if (clean.length === 0) continue;
-    for (const w of clean) if (w.end < w.start) w.end = w.start;
+    let words = piecesToWords(main);
+    let bgWords = piecesToWords(backing);
+    // A line that is only background vocals is shown as the line itself.
+    if (!words.length) [words, bgWords] = [bgWords, []];
+    if (words.length === 0) continue;
+    const firstStart = Math.min(words[0].start, bgWords[0]?.start ?? Infinity);
+    const lastEnd = Math.max(words[words.length - 1].end, bgWords.at(-1)?.end ?? 0);
     lines.push({
-      time: Math.min(begin, clean[0].start),
-      text: clean.map((w) => w.text).join(" "),
-      words: clean,
-      end: end != null && end > begin ? end : clean[clean.length - 1].end,
+      time: Math.min(begin, firstStart),
+      text: words.map((w) => w.text).join(" "),
+      words,
+      end: end != null && end > begin ? end : lastEnd,
+      ...(bgWords.length ? { bg: { text: bgWords.map((w) => w.text).join(" "), words: bgWords } } : {}),
+      ...extras,
     });
   }
   lines.sort((a, b) => a.time - b.time);

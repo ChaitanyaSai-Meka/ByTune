@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "crypto";
 import * as persist from "./persist";
 import { SYNCED_STORES } from "../src/lib/config";
+import { DEVICE_SETTINGS_FIELDS } from "./sync-merge";
 
 const accountStores = new Set<string>([...SYNCED_STORES, "player", "artist-meta-cache"]);
 let owner = "guest";
@@ -79,7 +80,7 @@ export async function changeOwner(next: string, migrateGuest: boolean): Promise<
       let value = saved;
       if (name === "library") value = { state: { ...(saved?.state ?? {}), downloads: local?.state?.downloads ?? {} }, version: 1 };
       if (name === "settings") {
-        const device = Object.fromEntries(["downloadDir", "localMusicFolder"].filter((key) => local?.state?.[key] !== undefined).map((key) => [key, local.state[key]]));
+        const device = Object.fromEntries(DEVICE_SETTINGS_FIELDS.filter((key) => local?.state?.[key] !== undefined).map((key) => [key, local.state[key]]));
         value = { state: { ...(saved?.state ?? {}), ...device }, version: saved?.version ?? 0 };
       }
       await persist.writeData(name, value);

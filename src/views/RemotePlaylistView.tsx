@@ -6,13 +6,15 @@
  */
 import { useEffect, useState } from "react";
 import { ListMusic, MoreHorizontal, Play, Shuffle } from "lucide-react";
-import { Artwork, ErrorState, ExplicitBadge, HeroSkeleton, ListSkeleton } from "../components/primitives";
+import { Artwork, EqBars, ErrorState, ExplicitBadge, HeroSkeleton, ListSkeleton } from "../components/primitives";
 import { trackMenuItems } from "../lib/trackActions";
+import { downloadAll } from "../lib/downloads";
+import { copyLink, youtubePlaylistLink } from "../lib/playlistShare";
 import { useDrag } from "../lib/dnd";
 import { fmtTime } from "../lib/format";
 import { useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
-import { usePlayer } from "../stores/player";
+import { usePlayer, useTrackPlayback } from "../stores/player";
 import { useUI } from "../stores/ui";
 import type { RemotePlaylistPage, Track } from "../types";
 
@@ -31,6 +33,7 @@ function PlaylistTrackRow({
   const openContextMenu = useUI((s) => s.openContextMenu);
   const currentId = usePlayer((s) => s.queue[s.index]?.id ?? null);
   const drag = useDrag({ track: song });
+  const state = useTrackPlayback(song.id);
   const openMenu = (x: number, y: number): void => {
     openContextMenu(x, y, trackMenuItems(song));
   };
@@ -49,7 +52,7 @@ function PlaylistTrackRow({
       {numbered ? (
         <div className="w-7 shrink-0 grid place-items-center text-[13px] text-ink-faint tabular-nums">
           {currentId === song.id ? (
-            <span className="text-accent">▸</span>
+            state === "playing" ? <EqBars /> : <span className="text-accent">▸</span>
           ) : (
             <span className="group-hover:hidden">{index + 1}</span>
           )}
@@ -215,6 +218,8 @@ export function RemotePlaylistView({ playlistId }: { playlistId: string }) {
                       toast("Playlist added to queue");
                     },
                   },
+                  { label: "Download all", action: () => downloadAll(tracks, "this playlist") },
+                  { label: "Copy link", action: () => copyLink(youtubePlaylistLink(playlistId)) },
                 ])
               }
               title="More options"

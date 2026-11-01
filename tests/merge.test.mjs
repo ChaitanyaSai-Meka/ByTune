@@ -4,6 +4,7 @@ import {
   mergeArtistMeta,
   mergeLibrary,
   mergeListening,
+  mergeListeningHistory,
   mergeRecentSearches,
   mergeSettings,
   mergeSyncMeta,
@@ -115,6 +116,22 @@ test("stripDeviceSettings removes machine paths before upload", () => {
   assert.equal(clean.state.autoplay, true);
 });
 
+test("the chosen output device stays on this machine", () => {
+  const clean = stripDeviceSettings(env({ audioSinkId: "usb-dac-123", autoplay: true }));
+  assert.equal(clean.state.audioSinkId, undefined, "never uploaded");
+  const merged = mergeSettings(env({ audioSinkId: "usb-dac-123" }), env({ audioSinkId: "other-pc-speaker", autoplay: false }), {
+    audioSinkId: "usb-dac-123",
+  });
+  assert.equal(merged.state.audioSinkId, "usb-dac-123", "a pull keeps this machine's device");
+});
+
+test("lyrics timing stays on this machine (headphone delay is per device)", () => {
+  const clean = stripDeviceSettings(env({ lyricsOffset: 0.3, autoplay: true }));
+  assert.equal(clean.state.lyricsOffset, undefined, "never uploaded");
+  const merged = mergeSettings(env({ lyricsOffset: 0.3 }), env({ lyricsOffset: -1 }), { lyricsOffset: 0.3 });
+  assert.equal(merged.state.lyricsOffset, 0.3, "a pull keeps this machine's timing");
+});
+
 test("malformed cloud payloads fall back to local content", () => {
   const local = env({ liked: [track("a")], playlists: [], history: [], downloads: {} });
   const merged = mergeLibrary(local, "not-an-object", {});
@@ -183,4 +200,22 @@ test("artist identity merge unions by name with the freshest resolution winning"
   assert.equal(merged.state.byName["the weeknd"].id, "w");
   const reversed = mergeArtistMeta(remote, local);
   assert.equal(reversed.state.byName["arijit singh"].id, "cloud-id", "newest resolution wins regardless of side");
+});
+
+test("Replay merges per track: each device's listening survives", () => {
+  const month = (tracks, artists = {}) => ({
+    state: { buckets: [{ month: "2026-10", tracks, artists, albums: {}, hours: new Array(24).fill(0), days: {} }] },
+    version: 1,
+  });
+  const rec = (ms, plays = 1) => ({ title: "T", artist: "A", thumb: "", ms, plays, lastAt: 1 });
+  const local = month({ a: rec(100_000), shared: rec(50_000) }, { x: { name: "X", ms: 150_000, plays: 2 } });
+  const remote = month({ b: rec(200_000), shared: rec(80_000, 2) }, { y: { name: "Y", ms: 200_000, plays: 1 } });
+  const [bucket] = mergeListeningHistory(local, remote).state.buckets;
+  assert.equal(bucket.tracks.a.ms, 100_000, "this device's track stays");
+  assert.equal(bucket.tracks.b.ms, 200_000, "the other device's track is no longer dropped");
+  assert.equal(bucket.tracks.shared.ms, 80_000, "the larger record wins, never summed");
+  assert.deepEqual(Object.keys(bucket.artists).sort(), ["x", "y"]);
+  const hostile = mergeListeningHistory(month(JSON.parse('{"__proto__": {"polluted": true}}')), month({}));
+  assert.equal({}.polluted, undefined);
+  assert.ok(hostile.state.buckets.length === 1);
 });

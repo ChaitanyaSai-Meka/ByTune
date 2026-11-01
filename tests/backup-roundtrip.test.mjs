@@ -23,6 +23,15 @@ test("equalizer settings survive a backup; a malformed one is never imported", (
   }
 });
 
+test("saved EQ presets survive a backup; malformed ones are never imported", () => {
+  const eqPresets = [{ name: "Night", gains: [3, 2, 1, 0, 0, 0, 0, -1, -2, -3] }];
+  const doc = settingsToBackup(envelope({ eqPresets, eqAutoHeadroom: false }));
+  assert.deepEqual(settingsFromBackup(doc, envelope({})), { eqPresets, eqAutoHeadroom: false });
+  for (const bad of ["junk", [{ name: "", gains: eqPresets[0].gains }], [{ name: "x", gains: [1] }], Array(21).fill(eqPresets[0])]) {
+    assert.deepEqual(settingsFromBackup({ eqPresets: bad }, envelope({})), {}, JSON.stringify(bad).slice(0, 40));
+  }
+});
+
 test("settings and recent searches survive export → wipe → import", () => {
   // 1. A live store, in the envelope shape persist writes to disk.
   const settingsEnvelope = envelope({

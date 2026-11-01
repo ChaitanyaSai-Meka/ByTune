@@ -8,6 +8,7 @@ function MenuRow({ item, onClose }: { item: MenuItem; onClose: () => void }) {
   const Icon = item.icon;
   return (
     <button
+      role="menuitem"
       disabled={item.disabled}
       onClick={(e) => {
         e.stopPropagation();
@@ -65,6 +66,7 @@ function Submenu({
     <div
       ref={ref}
       data-menu-portal=""
+      role="menu"
       className="fixed z-[101] min-w-[220px] max-w-[300px] max-h-[340px] overflow-y-auto rounded-2xl glass-strong p-1.5 shadow-float animate-pop-in"
       style={pos ? { left: pos.left, top: pos.top } : { visibility: "hidden" }}
       onContextMenu={(e) => e.preventDefault()}
@@ -73,7 +75,7 @@ function Submenu({
     >
       {items.map((item, i) => (
         <Fragment key={`${item.label}-${i}`}>
-          {item.separatorBefore && <div className="my-1.5 h-px bg-ink-hi/[0.07]" />}
+          {item.separatorBefore && <div role="separator" className="my-1.5 h-px bg-ink-hi/[0.07]" />}
           <MenuRow item={item} onClose={onClose} />
         </Fragment>
       ))}
@@ -106,27 +108,46 @@ export function ContextMenu() {
   // Measured in a layout effect so the very first paint is already at the
   // clamped position — a passive effect here let the menu flash at (0,0)
   // for a frame before jumping into place. (Submenu below does the same.)
+  /** what had focus before the menu opened — it gets focus back on close */
+  const returnFocus = useRef<HTMLElement | null>(null);
+
   useLayoutEffect(() => {
     if (!menu) return;
     const el = ref.current;
     const w = el?.offsetWidth ?? 230;
     const h = el?.offsetHeight ?? 320;
+    // Shift+F10 / the Menu key report (0, 0): open beside the focused element.
+    let { x, y } = menu;
+    if (x === 0 && y === 0 && document.activeElement instanceof HTMLElement) {
+      const r = document.activeElement.getBoundingClientRect();
+      [x, y] = [r.left + 16, r.bottom];
+    }
     setPos({
       // Right-aligned menus hang off their right edge (x is that edge) —
       // settings selects drop down under the row's value, select-style.
-      x: Math.max(8, Math.min(menu.alignRight ? menu.x - w : menu.x, window.innerWidth - w - 8)),
+      x: Math.max(8, Math.min(menu.alignRight ? x - w : x, window.innerWidth - w - 8)),
       // `above` menus hang from their bottom edge: y is the anchor's top, the
       // panel ends a beat above it — the playbar buttons open this way.
       y: menu.above
-        ? Math.max(8, menu.y - h - 6)
-        : Math.max(8, Math.min(menu.y, window.innerHeight - h - 8)),
+        ? Math.max(8, y - h - 6)
+        : Math.max(8, Math.min(y, window.innerHeight - h - 8)),
     });
   }, [menu]);
 
-  // A freshly opened menu always starts with every submenu folded.
+  // A freshly opened menu always starts with every submenu folded, and with
+  // focus on its first item so the keyboard can drive it.
   useEffect(() => {
     cancelSubClose();
     setSub(null);
+    if (menu) {
+      if (!returnFocus.current) returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      ref.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true });
+    } else if (returnFocus.current) {
+      // Only if focus left with the menu: an action that opened a dialog keeps it.
+      const now = document.activeElement;
+      if (returnFocus.current.isConnected && (!now || now === document.body)) returnFocus.current.focus({ preventScroll: true });
+      returnFocus.current = null;
+    }
     return cancelSubClose;
   }, [menu]);
 
@@ -153,12 +174,38 @@ export function ContextMenu() {
       close();
     };
     const onKey = (e: KeyboardEvent): void => {
+      const active = document.activeElement as HTMLElement | null;
+      const inSub = !!active?.closest("[data-menu-portal]");
+      const list = (inSub ? active!.closest("[data-menu-portal]") : ref.current) as HTMLElement | null;
+      const items = list ? [...list.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')] : [];
+      const at = items.indexOf(active as HTMLButtonElement);
+      const focusAt = (i: number): void => items[(i + items.length) % items.length]?.focus({ preventScroll: false });
       if (e.key === "Escape") {
         // First Escape folds the submenu, the second dismisses the menu.
         if (sub !== null) {
           setSub(null);
+          ref.current?.querySelector<HTMLButtonElement>('[aria-expanded="true"]')?.focus();
           return;
         }
+        close();
+      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        focusAt(at < 0 ? (e.key === "ArrowDown" ? 0 : -1) : at + (e.key === "ArrowDown" ? 1 : -1));
+      } else if (e.key === "Home" || e.key === "End") {
+        e.preventDefault();
+        focusAt(e.key === "Home" ? 0 : -1);
+      } else if (e.key === "ArrowRight" && !inSub && active?.getAttribute("aria-haspopup") === "menu") {
+        e.preventDefault();
+        if (active.getAttribute("aria-expanded") !== "true") active.click();
+        window.setTimeout(() => {
+          document.querySelector<HTMLButtonElement>('[data-menu-portal] [role="menuitem"]:not(:disabled)')?.focus();
+        }, 0);
+      } else if (e.key === "ArrowLeft" && inSub) {
+        e.preventDefault();
+        setSub(null);
+        ref.current?.querySelector<HTMLButtonElement>('[aria-expanded="true"]')?.focus();
+      } else if (e.key === "Tab") {
+        e.preventDefault();
         close();
       }
     };
@@ -177,6 +224,8 @@ export function ContextMenu() {
   return (
     <div
       ref={ref}
+      role="menu"
+      aria-orientation="vertical"
       className="fixed z-[100] min-w-[230px] max-w-[300px] max-h-[70vh] overflow-y-auto rounded-2xl glass-strong p-1.5 animate-pop-in"
       style={{ left: pos.x, top: pos.y }}
       onContextMenu={(e) => e.preventDefault()}
@@ -191,8 +240,8 @@ export function ContextMenu() {
         if (item.header) {
           return (
             <Fragment key={`${item.label}-${i}`}>
-              {item.separatorBefore && <div className="my-1.5 h-px bg-ink-hi/[0.07]" />}
-              <div className="px-3 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
+              {item.separatorBefore && <div role="separator" className="my-1.5 h-px bg-ink-hi/[0.07]" />}
+              <div role="presentation" className="px-3 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
                 {item.label}
               </div>
             </Fragment>
@@ -203,7 +252,7 @@ export function ContextMenu() {
         return (
           <Fragment key={`${item.label}-${i}`}>
             {/* The separator rides BEFORE its item - it must not swallow it. */}
-            {item.separatorBefore && <div className="my-1.5 h-px bg-ink-hi/[0.07]" />}
+            {item.separatorBefore && <div role="separator" className="my-1.5 h-px bg-ink-hi/[0.07]" />}
             <div
               className="relative"
               onMouseEnter={(e) => {
@@ -217,6 +266,9 @@ export function ContextMenu() {
               }}
             >
               <button
+                role="menuitem"
+                aria-haspopup={hasSub ? "menu" : undefined}
+                aria-expanded={hasSub ? subOpen : undefined}
                 disabled={item.disabled}
                 onClick={(e) => {
                   e.stopPropagation();

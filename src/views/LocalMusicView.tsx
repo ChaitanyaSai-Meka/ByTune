@@ -49,9 +49,9 @@ function toTrack(t: LocalTrack): Track & { mtime: number } {
     album: t.album,
     duration: t.duration,
     thumb: t.art ?? "",
-    // Mark local origin explicitly: the id prefix already routes playback,
-    // but dependents (canvas lookup, silence analysis) check this flag.
-    localPath: t.path,
+    // No localPath: the `local:` id already marks and routes local songs, and
+    // these tracks end up in likes, playlists and history, which sync — an
+    // absolute path (C:\Users\<name>\…) must never reach the account.
     mtime: t.mtime,
   };
 }

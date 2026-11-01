@@ -229,13 +229,8 @@ function FolderSection({
             seen.has(t.id) ? false : (seen.add(t.id), true)
           );
           if (!tracks.length) throw new Error("no tracks");
-          const created = lib.createPlaylist(name);
-          useLibrary.setState((s) => ({
-            playlists: s.playlists.map((p) =>
-              p.id === created.id ? { ...p, tracks, folderId: folder.id } : p
-            ),
-          }));
-          ui.toast(`“${name}” · ${tracks.length} songs added to “${folder.name}”`, "success");
+          const created = lib.importPlaylist(name, tracks, folder.id);
+          ui.toast(`“${created.name}” · ${tracks.length} songs added to “${folder.name}”`, "success");
         })
         .catch(() => ui.toast(`Couldn't import “${pl.title}”`, "error"));
       return;
@@ -252,13 +247,8 @@ function FolderSection({
           seen.has(t.id) ? false : (seen.add(t.id), true)
         );
         if (!tracks.length) throw new Error("no tracks");
-        const created = lib.createPlaylist(name);
-        useLibrary.setState((s) => ({
-          playlists: s.playlists.map((p) =>
-            p.id === created.id ? { ...p, tracks, folderId: folder.id } : p
-          ),
-        }));
-        ui.toast(`“${name}” · ${tracks.length} songs added to “${folder.name}”`, "success");
+        const created = lib.importPlaylist(name, tracks, folder.id);
+        ui.toast(`“${created.name}” · ${tracks.length} songs added to “${folder.name}”`, "success");
       })
       .catch(() => ui.toast(`Couldn't import “${al.title}”`, "error"));
   };

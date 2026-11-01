@@ -145,7 +145,11 @@ export function listenForDownloadProgress(): () => void {
         downloaded: 0,
         total: 0,
       });
-      useUI.getState().toast("Download finished", "success");
+      // One toast when the queue drains, not one per song of a "Download all".
+      const busy = Object.values(useLibrary.getState().downloads).some(
+        (d) => d.status === "queued" || d.status === "downloading"
+      );
+      if (!busy) useUI.getState().toast("Downloads finished", "success");
     } else if (e.type === "failed") {
       buffer.flush(e.id);
       lib.patchDownload(e.id, { status: "failed", progress: 0 });
@@ -163,4 +167,39 @@ export function listenForDownloadProgress(): () => void {
     offEvent?.();
     offProgress();
   };
+}
+
+/** Above this many songs, "Download all" asks first (it can be gigabytes). */
+const DOWNLOAD_ALL_CONFIRM = 25;
+
+/**
+ * "Download all" for a playlist or album: queue every song that isn't already
+ * downloaded or on its way. Local files are skipped — they're already here.
+ * The main process still downloads two at a time.
+ */
+export function downloadAll(tracks: Track[], what: string): void {
+  const lib = useLibrary.getState();
+  const seen = new Set<string>();
+  const fresh = tracks.filter((t) => {
+    if (seen.has(t.id) || t.localPath || t.id.startsWith("local:")) return false;
+    seen.add(t.id);
+    const status = lib.downloads[t.id]?.status;
+    return status !== "done" && status !== "downloading" && status !== "queued";
+  });
+  const ui = useUI.getState();
+  if (!fresh.length) {
+    ui.toast(`Everything in ${what} is already downloaded`, "info");
+    return;
+  }
+  const go = (): void => {
+    ui.toast(`Downloading ${fresh.length} ${fresh.length === 1 ? "song" : "songs"} from ${what}`, "info");
+    for (const t of fresh) void startDownload(t);
+  };
+  if (fresh.length <= DOWNLOAD_ALL_CONFIRM) return go();
+  ui.openDialog({
+    title: `Download ${fresh.length} songs?`,
+    body: `That's roughly ${Math.max(0.1, Math.round(fresh.length * 0.04 * 10) / 10)} GB. They download two at a time; you can cancel any of them in Downloads.`,
+    confirmLabel: "Download all",
+    onConfirm: go,
+  });
 }

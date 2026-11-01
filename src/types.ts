@@ -18,6 +18,8 @@ export interface Track {
   artistImage?: string;
   /** set for local-library tracks (local origin flag; playback resolves via the id) */
   localPath?: string;
+  /** a podcast episode — kept out of Replay, recommendations and AutoPlay */
+  episode?: boolean;
 }
 
 export interface Album {
@@ -50,7 +52,7 @@ export interface PlaylistCard {
   subtitle?: string;
 }
 
-export type SearchFilter = "all" | "songs" | "videos" | "albums" | "artists" | "playlists";
+export type SearchFilter = "all" | "songs" | "videos" | "albums" | "artists" | "playlists" | "podcasts";
 
 export interface SearchResults {
   songs: Track[];
@@ -67,7 +69,7 @@ export interface SearchResults {
 /* ---------------- Mobile-faithful search ---------------- */
 
 /** What kind of page a non-track search result opens — YouTube's own pageType. */
-export type BrowseType = "album" | "artist" | "playlist" | "other";
+export type BrowseType = "album" | "artist" | "playlist" | "podcast" | "other";
 
 /** A non-track search row: album, artist, playlist or profile/podcast. */
 export interface BrowseItem {
@@ -86,12 +88,29 @@ export interface BrowseItem {
 export type SearchRow =
   | { kind: "top"; song: Track }
   | { kind: "track"; song: Track }
-  | { kind: "browse"; item: BrowseItem };
+  /** top: the promoted result on the "All" tab (an artist, album or playlist card) */
+  | { kind: "browse"; item: BrowseItem; top?: boolean };
 
 /** One page of search rows, plus the token for the next page (null when done). */
 export interface SearchPageResult {
   rows: SearchRow[];
   continuation: string | null;
+}
+
+/** A song from YouTube Music's radio, with what kind of upload it is. */
+export interface RadioTrack extends Track {
+  /** song = catalogue audio (ATV), video = official music video (OMV),
+      upload = user upload (UGC), episode = podcast episode */
+  videoType: "song" | "video" | "upload" | "episode";
+}
+
+/** One page of a song's radio — the endless AutoPlay source. */
+export interface RadioPage {
+  tracks: RadioTrack[];
+  /** Token for the next page, or null when the radio has no more. */
+  next: string | null;
+  /** The seed song's own credits (search rows often lack them). */
+  seed: { artist: string; artistId?: string } | null;
 }
 
 /** The kind-aware "Top result" card (YouTube's MusicCardShelf). */
@@ -178,6 +197,44 @@ export interface SyncedLyricLine {
   end?: number;
   /** instrumental section marker (nobody sings here) */
   gap?: boolean;
+  /** background vocals sung under this line, with their own timing */
+  bg?: { text: string; words?: SyncedLyricWord[] };
+  /** the provider's romanized reading of a non-Latin line */
+  roman?: string;
+}
+
+/** What the playing file actually is — the Audio details card. */
+export interface AudioDetails {
+  /** a YouTube client name, "Piped", or "file" for your own music */
+  source: string;
+  /** "opus", "aac", "flac" … */
+  codec?: string;
+  kbps?: number;
+  sampleRate?: number;
+  bitDepth?: number;
+  channels?: number;
+  /** loudness YouTube reports, LUFS */
+  lufs?: number | null;
+  /** ReplayGain track gain from a file's tags, dB */
+  gainDb?: number;
+}
+
+/** A podcast episode: plays like a song, but stays out of Replay, recommendations and AutoPlay. */
+export interface PodcastEpisode extends Track {
+  episode: true;
+  /** "2d ago", "Oct 12" … as YouTube Music prints it */
+  published?: string;
+  description?: string;
+}
+
+/** A podcast show page: who makes it and its episodes, newest first. */
+export interface PodcastPage {
+  id: string;
+  title: string;
+  author: string;
+  thumb: string;
+  description: string | null;
+  episodes: PodcastEpisode[];
 }
 
 export interface LyricsResult {

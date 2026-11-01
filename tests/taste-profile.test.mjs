@@ -110,3 +110,16 @@ test("real listening stats outrank library fallback for the same artist", async 
   assert.ok(statsArtist, "stats-driven artist present");
   assert.ok(statsArtist.score > withStats.artists.find((a) => a.name === "Arijit Singh").score);
 });
+
+test("followed artists join the taste profile with their own page id", async () => {
+  const { computeTasteProfile } = await loadProfile();
+  const p = computeTasteProfile({
+    all: statsSummary(0), month: statsSummary(0),
+    ...library, searches: [], skips: {}, now,
+    followed: [{ id: "UCanirudh", name: "Anirudh Ravichander", thumb: "https://x/a.jpg" }],
+  });
+  const anirudh = p.artists.find((a) => a.name === "Anirudh Ravichander");
+  assert.ok(anirudh, "a followed artist is in the profile before any play");
+  assert.equal(anirudh.artistId, "UCanirudh");
+  assert.ok(anirudh.score > 0, "and is scored onto the feed");
+});

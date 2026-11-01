@@ -25,7 +25,7 @@ import { validateCloudRows } from "./cloud-payload";
 import { authenticatedUserId, readProfile, sessionInfo } from "./supabase";
 import * as stats from "./stats";
 import { SYNCED_STORES } from "../src/lib/config";
-import { mergeArtistMeta, mergeLibrary, mergeListening, mergeListeningHistory, mergeRecentSearches, mergeSettings, mergeSyncMeta, stripDeviceSettings } from "./sync-merge";
+import { DEVICE_SETTINGS_FIELDS, mergeArtistMeta, mergeLibrary, mergeListening, mergeListeningHistory, mergeRecentSearches, mergeSettings, mergeSyncMeta, stripDeviceSettings } from "./sync-merge";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 type SbClient = SupabaseClient<any, "public", any>;
@@ -217,6 +217,21 @@ export function noteSyncFailure(err: unknown): void {
   lastError = err instanceof Error ? err.message : String(err);
 }
 
+/** A store envelope with one state key left out. */
+function withoutKey(envelope: unknown, key: string): unknown {
+  const e = envelope as { state?: Record<string, unknown> };
+  if (!e?.state || !(key in e.state)) return envelope;
+  const { [key]: _drop, ...state } = e.state;
+  return { ...(envelope as object), state };
+}
+
+/** A track without its absolute file path (older local songs carried one). */
+function withoutPath(track: unknown): unknown {
+  if (!track || typeof track !== "object" || !("localPath" in track)) return track;
+  const { localPath: _path, ...rest } = track as Record<string, unknown>;
+  return rest;
+}
+
 /** Device-owned fields never leave the machine. */
 function stripForUpload(name: string, data: unknown): unknown {
   if (!data || typeof data !== "object") return data;
@@ -224,7 +239,18 @@ function stripForUpload(name: string, data: unknown): unknown {
   if (!envelope.state) return data;
   if (name === "library") {
     const { downloads: _drop, ...keep } = envelope.state;
-    return { ...envelope, state: keep };
+    const tracks = (list: unknown): unknown => (Array.isArray(list) ? list.map(withoutPath) : list);
+    return {
+      ...envelope,
+      state: {
+        ...keep,
+        liked: tracks(keep.liked),
+        history: tracks(keep.history),
+        playlists: Array.isArray(keep.playlists)
+          ? keep.playlists.map((p) => (p && typeof p === "object" ? { ...p, tracks: tracks((p as { tracks?: unknown }).tracks) } : p))
+          : keep.playlists,
+      },
+    };
   }
   if (name === "settings") return stripDeviceSettings(data);
   if (name === "listening-history") return stats.fitForSync(data as { state?: { buckets?: unknown } });
@@ -238,7 +264,7 @@ function localDeviceState(name: string): Record<string, unknown> {
   if (name === "library") return { downloads: state.downloads ?? {} };
   if (name === "settings") {
     const out: Record<string, unknown> = {};
-    for (const f of ["downloadDir", "localMusicFolder"]) {
+    for (const f of DEVICE_SETTINGS_FIELDS) {
       if (state[f] !== undefined) out[f] = state[f];
     }
     return out;
@@ -385,6 +411,10 @@ export async function syncNowExclusive(): Promise<{ pushed: string[]; pulled: st
     const pulled: string[] = [];
     const merged: string[] = [];
     for (const name of SYNCED_STORES) {
+      // Replay holds its last few seconds of listening in memory. Write them
+      // out before reading the store, so the merge below includes them — the
+      // reload that follows a write would otherwise drop them.
+      if (name === stats.HISTORY_STORE) stats.flushSync();
       const local = persist.readData(name);
       const m = storeMeta(name);
       const remoteRow = cloud.get(name);
@@ -418,7 +448,12 @@ export async function syncNowExclusive(): Promise<{ pushed: string[]; pulled: st
         // Both sides moved — merge records, back up both inputs first.
         await backupStore(name, local);
         await backupStore(name, remote.payload);
-        const mergedEnvelope = mergeStore(name, local, remote.payload);
+        // A fresh install's first sync: its AutoPlay value is only the new
+        // default (on), so the account's own choice wins rather than being
+        // overwritten on every device.
+        const firstSettings = name === "settings" && m.syncedAt === 0 && local && typeof local === "object";
+        const localForMerge = firstSettings ? withoutKey(local, "autoplay") : local;
+        const mergedEnvelope = mergeStore(name, localForMerge, remote.payload);
         const next = mergedEnvelope ?? (remote.updatedAt > m.syncedAt ? remote.payload : local);
         await writeLocalStore(name, next);
         restored.add(name);

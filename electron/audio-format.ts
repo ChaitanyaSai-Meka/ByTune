@@ -60,6 +60,10 @@ export interface PickedAudio {
   url: string;
   mime: string;
   lufs: number | null;
+  /** average bitrate of the rendition, when YouTube states it */
+  kbps?: number;
+  sampleRate?: number;
+  channels?: number;
 }
 
 export async function pickAudio(
@@ -85,7 +89,11 @@ export async function pickAudio(
   // Quality ceiling: best rendition at/below the cap; if only higher ones
   // exist, take the best rather than refusing — a capped track beats silence.
   if (maxKbps && maxKbps > 0) {
-    const capped = candidates.filter((f) => (f.bitrate ?? 0) / 1000 <= maxKbps);
+    // Ceilings name nominal tiers ("128 kbps") but `bitrate` is YouTube's
+    // peak: 128k AAC (itag 140) reports ~130k and was filtered out, so a
+    // "Standard" download fell to 48k HE-AAC. Prefer the average, with headroom.
+    const kbps = (f: any): number => (f.average_bitrate ?? f.bitrate ?? 0) / 1000;
+    const capped = candidates.filter((f) => kbps(f) <= maxKbps * 1.1);
     if (capped.length) candidates = capped;
   }
   // Downloads ask for mp4Only: an AAC `.m4a` is the most portable file across
@@ -99,5 +107,14 @@ export async function pickAudio(
   const preferred = candidates[0];
   const url = await formatUrl(preferred, yt);
   if (!url) return null;
-  return { url, mime: String(preferred.mime_type ?? "audio/mp4"), lufs: formatLufs(preferred) };
+  const num = (v: unknown): number | undefined => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : undefined);
+  const bps = num(preferred.average_bitrate) ?? num(preferred.bitrate);
+  return {
+    url,
+    mime: String(preferred.mime_type ?? "audio/mp4"),
+    lufs: formatLufs(preferred),
+    kbps: bps ? Math.round(bps / 1000) : undefined,
+    sampleRate: num(preferred.audio_sample_rate),
+    channels: num(preferred.audio_channels),
+  };
 }

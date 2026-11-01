@@ -1,7 +1,7 @@
 /** Transient UI state: navigation, panels, toasts, context menu, dialogs. */
 import type { LucideIcon } from "lucide-react";
 import { create } from "zustand";
-import type { SearchFilter } from "../types";
+import type { SearchFilter, Track } from "../types";
 
 export type ViewName =
   | "home"
@@ -16,6 +16,7 @@ export type ViewName =
   | "downloads"
   | "local"
   | "replay"
+  | "podcast"
   | "settings";
 
 export interface View {
@@ -101,6 +102,8 @@ export interface UIState {
   toasts: Toast[];
   contextMenu: ContextMenuState | null;
   dialog: DialogRequest | null;
+  /** songs waiting for the "Add to playlists" picker */
+  playlistPicker: Track[] | null;
   /** Artwork URL the pointer is hovering — drives the middle panel's wash.
       null = at rest, the wash wears the playing track's colour. */
   tintThumb: string | null;
@@ -128,6 +131,8 @@ export interface UIState {
   closeContextMenu(): void;
   openDialog(req: DialogRequest): void;
   closeDialog(): void;
+  openPlaylistPicker(tracks: Track[]): void;
+  closePlaylistPicker(): void;
   bumpHomeReload(): void;
   bumpViewReload(): void;
   clearPendingScroll(): void;
@@ -181,6 +186,7 @@ export const useUI = create<UIState>((set, get) => ({
   toasts: [],
   contextMenu: null,
   dialog: null,
+  playlistPicker: null,
   tintThumb: null,
   homeReloadNonce: 0,
   viewReloadNonce: 0,
@@ -291,6 +297,12 @@ export const useUI = create<UIState>((set, get) => ({
     set({ dialog: req });
   },
 
+  openPlaylistPicker(tracks) {
+    set({ playlistPicker: tracks });
+  },
+  closePlaylistPicker() {
+    set({ playlistPicker: null });
+  },
   closeDialog() {
     set({ dialog: null });
   },

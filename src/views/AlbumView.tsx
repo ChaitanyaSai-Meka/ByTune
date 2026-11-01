@@ -7,14 +7,16 @@
  */
 import { useEffect, useState } from "react";
 import { Disc3, ListPlus, MoreHorizontal, Play, Shuffle, User } from "lucide-react";
-import { Artwork, ErrorState, ExplicitBadge, HeroSkeleton, ListSkeleton } from "../components/primitives";
+import { Artwork, EqBars, ErrorState, ExplicitBadge, HeroSkeleton, ListSkeleton } from "../components/primitives";
 import { trackMenuItems } from "../lib/trackActions";
+import { downloadAll } from "../lib/downloads";
+import { copyLink, youtubeAlbumLink } from "../lib/playlistShare";
 import { useDrag } from "../lib/dnd";
 import { fmtTime } from "../lib/format";
 import { useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
 import { queueAlbum } from "../lib/album";
-import { usePlayer } from "../stores/player";
+import { usePlayer, useTrackPlayback } from "../stores/player";
 import { useUI } from "../stores/ui";
 import type { Album, Track } from "../types";
 
@@ -173,6 +175,12 @@ export function AlbumView({ albumId }: { albumId: string }) {
                     disabled: !tracks.length,
                     action: () => void queueAlbum(albumId, false),
                   },
+                  {
+                    label: "Download all",
+                    disabled: !tracks.length,
+                    action: () => downloadAll(tracks, `"${album.title}"`),
+                  },
+                  { label: "Copy link", action: () => copyLink(youtubeAlbumLink(albumId)) },
                 ])
               }
               title="More options"
@@ -239,6 +247,7 @@ function AlbumTrackRow({ song, index, tracks }: { song: Track; index: number; tr
   const openContextMenu = useUI((s) => s.openContextMenu);
   const currentId = usePlayer((s) => s.queue[s.index]?.id ?? null);
   const drag = useDrag({ track: song });
+  const state = useTrackPlayback(song.id);
   const openMenu = (x: number, y: number): void => {
     openContextMenu(x, y, trackMenuItems(song));
   };
@@ -257,7 +266,7 @@ function AlbumTrackRow({ song, index, tracks }: { song: Track; index: number; tr
       {/* An album's numbers are the sleeve's own — numbered rows, like mobile. */}
       <div className="w-7 shrink-0 grid place-items-center text-[13px] text-ink-faint tabular-nums">
         {currentId === song.id ? (
-          <span className="text-accent">▸</span>
+          state === "playing" ? <EqBars /> : <span className="text-accent">▸</span>
         ) : (
           <>
             <span className="group-hover:hidden">{index + 1}</span>

@@ -257,8 +257,8 @@ export function reloadStore(): void {
   dirty = false;
   open.clear();
   loaded = false;
-  ruleMs.clear();
-  ruleCounted.clear();
+  // ruleMs/ruleCounted describe the listen in progress, not the file: clearing
+  // them let a song already credited be credited again after a sync.
   loadAll();
 }
 

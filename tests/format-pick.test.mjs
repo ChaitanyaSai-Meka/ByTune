@@ -99,3 +99,17 @@ test("progressive-only streams still resolve", async () => {
   const picked = await pickAudio(info, {}, undefined, false);
   assert.equal(picked.url, "https://example/140");
 });
+
+test("a 128 kbps download ceiling keeps 128k AAC, whose peak bitrate reads ~130k", async () => {
+  const standard = await pickAudio(VISIONOS_SET, {}, 128, true);
+  assert.equal(standard.url, "https://example/140", "not the 48k HE-AAC fallback");
+  const withAverage = {
+    streaming_data: {
+      adaptive_formats: [
+        mk(139, 'audio/mp4; codecs="mp4a.40.5"', 50213, { average_bitrate: 48000 }),
+        mk(140, 'audio/mp4; codecs="mp4a.40.2"', 145000, { average_bitrate: 129000 }),
+      ],
+    },
+  };
+  assert.equal((await pickAudio(withAverage, {}, 128, true)).url, "https://example/140", "the average decides when present");
+});

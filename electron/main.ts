@@ -255,6 +255,20 @@ function createWindow(): void {
     console.warn("[bytune] main window load failed:", err instanceof Error ? err.message : err);
   });
 
+  // A crashed renderer left a blank window with the music stopped. Reload it,
+  // but give up after a few crashes in a row (a crash on load would loop).
+  let crashes = 0;
+  let crashReset: NodeJS.Timeout | null = null;
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    console.warn(`[bytune] renderer gone (${details.reason}, exit ${details.exitCode})`);
+    if (details.reason === "clean-exit" || !mainWindow || mainWindow.isDestroyed()) return;
+    crashes += 1;
+    if (crashReset) clearTimeout(crashReset);
+    crashReset = setTimeout(() => (crashes = 0), 60_000);
+    if (crashes > 3) return;
+    void mainWindow.loadURL(pip.rendererUrl()).catch(() => undefined);
+  });
+
   mainWindow.webContents.on("before-input-event", (event, input) => {
     // DevTools are a development convenience, not a shipping feature.
     if (isDev && input.type === "keyDown" && input.key === "F12") {
@@ -327,6 +341,8 @@ const RENDERER_STORES = new Set([
   "artist-bundle-cache",
   "artist-about-cache",
   "home-market-cache",
+  "lyrics-nudges",
+  "recent-items",
 ]);
 function assertRendererStore(name: unknown): asserts name is string {
   if (typeof name !== "string" || !RENDERER_STORES.has(name)) throw new Error("Store not allowed");
@@ -361,10 +377,23 @@ function registerIpc(): void {
   ipc.handle("music:playlist", (_e, id: string) => music.getPlaylist(id));
   ipc.handle("music:playlistPage", (_e, id: string) => music.getPlaylistPage(String(id ?? "")));
   ipc.handle("music:home", () => music.getHome());
+  ipc.handle("music:radio", (_e, id: unknown, token?: unknown) => {
+    // Only a bare YouTube video id has a radio; local:/other ids are refused.
+    const videoId = typeof id === "string" ? id : "";
+    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) throw new Error("No radio for this track");
+    const next = typeof token === "string" && token.length > 0 && token.length <= 4096 ? token : undefined;
+    return music.getRadio(videoId, next);
+  });
   ipc.handle("music:charts", () => music.getCharts());
   ipc.handle("music:moods", () => music.getMoods());
   ipc.handle("market:current", () => music.currentMarket());
   ipc.handle("music:lyrics", (_e, meta: music.LyricsMeta) => music.getLyrics(meta));
+  ipc.handle("music:podcast", (_e, id: unknown) => {
+    if (typeof id !== "string" || !/^MPSP[A-Za-z0-9_-]{8,80}$/.test(id)) throw new Error("Not a podcast");
+    return music.getPodcast(id);
+  });
+  // Read-only: what the playing file is (cached rendition or local header).
+  ipc.handle("audio:details", (_e, id: unknown) => (typeof id === "string" && id.length <= 200 ? music.audioDetails(id) : null));
   ipc.handle("music:enrich", (_e, ids: string[]) => music.enrichDurations(Array.isArray(ids) ? ids : []));
   ipc.handle("music:stream", async (_e, id: string, forceRotate?: boolean, quality?: string) => {
     // Hand the renderer a localhost proxy URL — the main process does the
@@ -429,7 +458,8 @@ function registerIpc(): void {
       if (dataResetActive) return;
       // A new listen re-arms the one-play rule (replays count, loops don't).
       if (ev.type === "start" && ev.track?.id) stats.noteTrackStart(ev.track.id);
-      if ((ev.type === "progress" || ev.type === "stop" || ev.type === "pause") && ev.track && (ev.deltaMs ?? 0) > 0) {
+      // Podcast episodes never count in Replay.
+      if ((ev.type === "progress" || ev.type === "stop" || ev.type === "pause") && ev.track && !ev.track.episode && (ev.deltaMs ?? 0) > 0) {
         stats.recordListening(ev.track, ev.deltaMs as number);
       }
     }
@@ -539,6 +569,40 @@ function registerIpc(): void {
   });
 
   ipc.handle("backup:export", () => backupExport(mainWindow));
+  // Playlist files: export writes whichever format the picked name asks for;
+  // import reads one small text file. Both only through the native dialogs.
+  const PLAYLIST_FILE_MAX = 5 * 1024 * 1024;
+  ipc.handle("playlist:export", async (_e, name: unknown, m3u8: unknown, json: unknown) => {
+    if (typeof name !== "string" || typeof m3u8 !== "string" || typeof json !== "string") {
+      throw new Error("Invalid playlist export");
+    }
+    if (m3u8.length > PLAYLIST_FILE_MAX || json.length > PLAYLIST_FILE_MAX) throw new Error("Playlist too large to export");
+    const safeName = name.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").trim().slice(0, 100) || "playlist";
+    const opts = {
+      title: "Export playlist",
+      defaultPath: `${safeName}.m3u8`,
+      filters: [
+        { name: "Playlist (M3U8)", extensions: ["m3u8"] },
+        { name: "ByTune playlist (JSON)", extensions: ["json"] },
+      ],
+    };
+    const res = mainWindow ? await dialog.showSaveDialog(mainWindow, opts) : await dialog.showSaveDialog(opts);
+    if (res.canceled || !res.filePath) return { cancelled: true };
+    await fs.promises.writeFile(res.filePath, res.filePath.toLowerCase().endsWith(".json") ? json : m3u8, "utf-8");
+    return { path: res.filePath };
+  });
+  ipc.handle("playlist:import", async () => {
+    const opts = {
+      title: "Import playlist",
+      properties: ["openFile" as const],
+      filters: [{ name: "Playlists", extensions: ["m3u8", "m3u", "json"] }],
+    };
+    const res = mainWindow ? await dialog.showOpenDialog(mainWindow, opts) : await dialog.showOpenDialog(opts);
+    const file = res.canceled ? undefined : res.filePaths[0];
+    if (!file) return null;
+    if ((await fs.promises.stat(file)).size > PLAYLIST_FILE_MAX) throw new Error("That file is too large for a playlist");
+    return { name: path.basename(file).replace(/\.(m3u8?|json)$/i, ""), text: await fs.promises.readFile(file, "utf-8") };
+  });
   ipc.handle("backup:import", () => backupImport(mainWindow));
 
   // ---- Accounts (Supabase) + cloud backup ----

@@ -495,6 +495,42 @@ export function ExplicitBadge() {
 /* ============================================================ equalizer */
 
 /** Animated "now playing" indicator. */
+/** The on/off toggle used by Settings rows and the queue's AutoPlay header. */
+export function Switch({
+  checked,
+  onChange,
+  disabled,
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+  /** accessible name, when no visible label is tied to the switch */
+  label?: string;
+}) {
+  return (
+    <button
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!disabled) onChange(!checked);
+      }}
+      className={`relative shrink-0 w-[42px] h-[26px] rounded-full transition-colors duration-200 disabled:opacity-40 ${
+        checked ? "bg-primary" : "bg-ink-hi/[0.16]"
+      }`}
+    >
+      <span
+        className={`absolute top-[3px] w-[20px] h-[20px] rounded-full transition-all duration-200 ${
+          checked ? "left-[19px] bg-on-primary" : "left-[3px] bg-white"
+        }`}
+      />
+    </button>
+  );
+}
+
 export function EqBars() {
   return (
     <span className="flex items-end gap-0.5 h-3.5" aria-label="Playing">

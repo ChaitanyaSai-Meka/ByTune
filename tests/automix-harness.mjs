@@ -181,8 +181,14 @@ async function bundleEngine() {
       export function hasBridge() { return true; }
       export function requireBridge() {
         return {
-          getStreamUrl: async (id) => "fake:" + id,
+          getStreamUrl: async (id) => {
+            if (globalThis.__failIds?.has(id)) throw new Error("stream gone");
+            return "fake:" + id;
+          },
           localTrackUrl: async (id) => "fake:" + id,
+          getRadio: async (id, token) =>
+            globalThis.__radio ? globalThis.__radio(id, token) : { tracks: [], next: null, seed: null },
+          getHome: async () => globalThis.__home ?? [],
         };
       }`,
     playEvents: `
@@ -194,7 +200,8 @@ async function bundleEngine() {
         getCached: () => (globalThis.__tempo ?? null),
         ensure: async () => {},
       };
-      export async function detectEdgeSilence() { return globalThis.__trims ?? null; }`,
+      export async function detectEdgeSilence() { return globalThis.__trims ?? null; }
+      export async function detectMusicOnsetForTrack() { return null; }`,
     artwork: `export function upgradeArtwork(t) { return t || ""; }`,
     persist: `
       export const storage = globalThis.__storage;
@@ -206,9 +213,13 @@ async function bundleEngine() {
     stdin: {
       contents: `
         export * from "./src/lib/audio";
-        export { usePlayer } from "./src/stores/player";
+        export { initAutoplay, dontPlay } from "./src/lib/autoplay";
+        export { usePlayer, autoplayTail } from "./src/stores/player";
         export { useSettings } from "./src/stores/settings";
         export { useLibrary } from "./src/stores/library";
+        export { useUI } from "./src/stores/ui";
+        export { useSleepTimer, parseSleepMinutes, formatSleepLeft } from "./src/lib/sleepTimer";
+        export { nextNudges, describeLyricsShift } from "./src/lib/lyricsOffset";
       `,
       resolveDir: fileURLToPath(new URL("..", import.meta.url)),
       sourcefile: "engine-harness.ts",
@@ -271,6 +282,9 @@ export async function createEngine({ tickMs = 20 } = {}) {
   globalThis.__clock = clock;
   delete globalThis.__tempo;
   delete globalThis.__trims;
+  delete globalThis.__radio;
+  delete globalThis.__home;
+  delete globalThis.__failIds;
   globalThis.__registry = elements;
 
   const prev = {
@@ -358,12 +372,13 @@ export async function boot(opts = {}) {
     crossfadeSeconds: opts.fadeSeconds ?? FADE_SEC,
     smartFade: opts.smartFade ?? false,
     skipSilence: opts.skipSilence ?? false,
-    autoplay: false,
+    autoplay: opts.autoplay ?? false,
     playbackSpeed: 1,
   });
   useLibrary.setState({ history: [] });
   while (!usePlayer.persist.hasHydrated()) await flushMicrotasks(2);
   h.engine.initAudioEngine();
+  if (opts.autoplay) h.engine.initAutoplay();
   return h;
 }
 

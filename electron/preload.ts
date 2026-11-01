@@ -1,6 +1,6 @@
 /** Preload — exposes a minimal, typed API to the renderer via contextBridge. */
 import { contextBridge, ipcRenderer } from "electron";
-import type { DownloadProgress, Track } from "../src/types";
+import type { AudioDetails, DownloadProgress, PodcastPage, RadioPage, Track } from "../src/types";
 
 // The PiP window loads this same preload but its scope requests are rejected
 // by design (main-window-only handler) — an eager invoke there would leave an
@@ -38,6 +38,7 @@ const api = {
   getPlaylist: (id: string) => ipcRenderer.invoke("music:playlist", id),
   getPlaylistPage: (id: string) => ipcRenderer.invoke("music:playlistPage", id),
   getHome: () => ipcRenderer.invoke("music:home"),
+  getRadio: (id: string, token?: string): Promise<RadioPage> => ipcRenderer.invoke("music:radio", id, token),
 /** YTM Charts for the device market (regional popularity — cold-start feed). */
   getCharts: () => ipcRenderer.invoke("music:charts"),
   /** Per-market moods & genres from the provider's Explore page. */
@@ -142,6 +143,11 @@ const api = {
 
   // Backup export / import (native save/open pickers in main)
   backupExport: () => ipcRenderer.invoke("backup:export"),
+  playlistExport: (name: string, m3u8: string, json: string): Promise<{ path?: string; cancelled?: boolean }> =>
+    ipcRenderer.invoke("playlist:export", name, m3u8, json),
+  playlistImport: (): Promise<{ name: string; text: string } | null> => ipcRenderer.invoke("playlist:import"),
+  audioDetails: (id: string): Promise<AudioDetails | null> => ipcRenderer.invoke("audio:details", id),
+  getPodcast: (id: string): Promise<PodcastPage> => ipcRenderer.invoke("music:podcast", id),
   backupImport: () => ipcRenderer.invoke("backup:import"),
 
   // Accounts (Supabase) + cloud backup
