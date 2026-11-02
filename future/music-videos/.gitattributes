@@ -1,0 +1,2 @@
+# Always LF on checkout: git apply --3way compares this patch against the LF blobs git stores.
+*.patch eol=lf

@@ -212,7 +212,8 @@ async function runDownload(track: Track, dirOverride?: string, maxKbps?: number,
     // Downloads ask for an mp4/AAC rendition (the most portable container);
     // the resolver still falls back to the best available if a track has none,
     // so name the file from the mime it actually returned.
-    const stream = await abortable(resolveStream(track.id, false, maxKbps, true), ctrl.signal);
+    // A fresh URL: a download fetches it directly, with no 403 retry, and an hours-old URL may be tied to an old address.
+    const stream = await abortable(resolveStream(track.id, true, maxKbps, true), ctrl.signal);
     checkCancelled();
     const ext = /webm|opus/i.test(stream.mime) ? ".webm" : ".m4a";
     dest = uniquePath(dir, `${sanitizeFilename(`${track.artist} - ${track.title}`)}${ext}`);

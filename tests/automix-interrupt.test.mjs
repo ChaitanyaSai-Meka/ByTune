@@ -8,7 +8,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { boot, decksOf, firstSoundAt, flushMicrotasks, play, read, restartedFrom, sounding, startsOf, track } from "./automix-harness.mjs";
+import { boot, decksOf, endedAt, firstSoundAt, flushMicrotasks, play, read, restartedFrom, sounding, startsOf, track } from "./automix-harness.mjs";
 
 /** A: 3s, and its stream outlasts the 0.6s blend so nothing ends mid-test. */
 function stage(h, extra = []) {
@@ -171,26 +171,30 @@ test("an incoming track shorter than the blend is promoted and the queue keeps m
   assert.ok(live[0].currentTime < 1.5, `playback must resume promptly, got ${live[0].currentTime}s`);
 });
 
-test("shuffle and repeat-one suppress pre-arming entirely", async (t) => {
+test("shuffle blends into the next song of the shuffled queue, and only that one", async (t) => {
+  const h = await boot();
+  t.after(() => h.restore());
+  const { usePlayer } = h.engine;
+  usePlayer.getState().toggleShuffle();
+  await play(h, stage(h, ["B", "C"]));
+  const [first, next, other] = usePlayer.getState().queue.map((x) => x.id);
+  assert.equal(first, "A", "the chosen song plays first");
+
+  await h.advance(2900);
+  assert.ok(firstSoundAt(h, next) < endedAt(h, "A"), "the blend into the shuffled next song starts before A ends");
+  assert.equal(firstSoundAt(h, other), Infinity, "the song after it stays silent");
+});
+
+test("repeat-one never pre-arms a transition", async (t) => {
   const h = await boot();
   t.after(() => h.restore());
   const { usePlayer } = h.engine;
   h.setDuration("A", 3.0);
-  usePlayer.getState().toggleShuffle();
-  await play(h, [track("A", 3.0), track("B", 4.0), track("C", 4.0)]);
-
-  await h.advance(1200);
-  assert.equal(firstSoundAt(h, "B"), Infinity, "shuffle must not pre-arm a transition");
-  assert.equal(firstSoundAt(h, "C"), Infinity, "shuffle must not pre-arm a transition");
-
-  usePlayer.getState().toggleShuffle();
   usePlayer.getState().cycleRepeat(); // off -> all
   usePlayer.getState().cycleRepeat(); // all -> one
   assert.equal(usePlayer.getState().repeat, "one");
-  h.trace.length = 0;
-  (h.elements.emits ?? []).length = 0;
-  h.record();
-  await h.advance(2500);
+  await play(h, [track("A", 3.0), track("B", 4.0), track("C", 4.0)]);
+  await h.advance(3500);
   assert.equal(firstSoundAt(h, "B"), Infinity, "repeat-one must not pre-arm a transition");
   const live = sounding(h);
   assert.equal(live.length, 1);
@@ -253,4 +257,46 @@ test("turning the crossfade off mid-blend still cancels it cleanly", async (t) =
   assert.equal(read(h).id, "B");
   assert.equal(restartedFrom(h, "B"), false, "changing the setting must not restart the incoming track");
   assert.equal(sounding(h).length, 1);
+});
+
+test("a seek back while a blend waits to start cancels it, and a fresh one comes later", async (t) => {
+  const h = await boot();
+  t.after(() => h.restore());
+  const { usePlayer } = h.engine;
+  await play(h, stage(h, ["B"]));
+  await h.advance(1500);
+  usePlayer.getState().seek(0.2);
+  await h.advance(1500);
+  assert.equal(firstSoundAt(h, "B"), Infinity, "no blend at the old time");
+  await h.advance(2500);
+  assert.ok(firstSoundAt(h, "B") < Infinity, "a fresh blend later");
+});
+
+test("'End of this song' while a blend waits to start: no blend, and the music stops at its end", async (t) => {
+  const h = await boot();
+  t.after(() => h.restore());
+  const { usePlayer, useSleepTimer } = h.engine;
+  h.setDuration("A", 3.0);
+  h.setDuration("B", 4.0);
+  await play(h, [track("A", 3.0), track("B", 4.0)]);
+  await h.advance(1500);
+  useSleepTimer.getState().startEndOfSong();
+  await h.advance(3000);
+  assert.equal(firstSoundAt(h, "B"), Infinity, "B never sounds");
+  assert.equal(usePlayer.getState().playing, false, "stopped at the end of A");
+});
+
+test("a seek after the crossover puts the screen back on the playing song", async (t) => {
+  const h = await boot();
+  t.after(() => h.restore());
+  const { usePlayer } = h.engine;
+  h.setDuration("A", 3.0);
+  h.setDuration("B", 4.0);
+  await play(h, [track("A", 3.0), track("B", 4.0)]);
+  await h.advance(2800);
+  assert.equal(usePlayer.getState().blendInto?.id, "B");
+  usePlayer.getState().seek(1.0);
+  await flushMicrotasks();
+  assert.equal(usePlayer.getState().blendInto, null);
+  assert.equal(read(h).id, "A");
 });

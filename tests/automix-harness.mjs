@@ -111,6 +111,7 @@ class FakeAudio {
     this.currentTime = 0;
     this.ended = false;
     this.error = null;
+    if (this.__srcValue) (globalThis.__loads ||= []).push(this.__srcValue);
     const d = globalThis.__durations?.[this.__srcValue];
     this.duration = d == null ? NaN : d;
     this.__endAt = globalThis.__streamEnds?.[this.__srcValue] ?? d;
@@ -186,6 +187,7 @@ async function bundleEngine() {
             return "fake:" + id;
           },
           localTrackUrl: async (id) => "fake:" + id,
+          localGainDb: async (id) => globalThis.__gainDb?.[id] ?? null,
           getRadio: async (id, token) =>
             globalThis.__radio ? globalThis.__radio(id, token) : { tracks: [], next: null, seed: null },
           getHome: async () => globalThis.__home ?? [],
@@ -196,12 +198,8 @@ async function bundleEngine() {
         (globalThis.__events ||= []).push({ type, id: track && track.id, position });
       }`,
     analysis: `
-      export const analyseTrackHead = {
-        getCached: () => (globalThis.__tempo ?? null),
-        ensure: async () => {},
-      };
-      export async function detectEdgeSilence() { return globalThis.__trims ?? null; }
-      export async function detectMusicOnsetForTrack() { return null; }`,
+      export async function analyseTrack(t) { return globalThis.__analysis?.[t.id] ?? null; }
+      export function peekAnalysis(id) { return globalThis.__analysis?.[id] ?? null; }`,
     artwork: `export function upgradeArtwork(t) { return t || ""; }`,
     persist: `
       export const storage = globalThis.__storage;
@@ -214,7 +212,7 @@ async function bundleEngine() {
       contents: `
         export * from "./src/lib/audio";
         export { initAutoplay, dontPlay } from "./src/lib/autoplay";
-        export { usePlayer, autoplayTail } from "./src/stores/player";
+        export { usePlayer, autoplayTail, nextPass, upNextIndex, shownTrack } from "./src/stores/player";
         export { useSettings } from "./src/stores/settings";
         export { useLibrary } from "./src/stores/library";
         export { useUI } from "./src/stores/ui";
@@ -280,8 +278,9 @@ export async function createEngine({ tickMs = 20 } = {}) {
   globalThis.__storage = storage;
   globalThis.__events = events;
   globalThis.__clock = clock;
-  delete globalThis.__tempo;
-  delete globalThis.__trims;
+  globalThis.__analysis = {};
+  delete globalThis.__gainDb;
+  delete globalThis.__lufs;
   delete globalThis.__radio;
   delete globalThis.__home;
   delete globalThis.__failIds;
@@ -301,13 +300,23 @@ export async function createEngine({ tickMs = 20 } = {}) {
     clearInterval: (id) => clock.clearInterval(id),
     addEventListener() {},
     removeEventListener() {},
+    bytune: { mediaSetMetadata: (m) => (globalThis.__media ||= []).push(m) },
   };
+  globalThis.__loads = [];
+  globalThis.__media = [];
   globalThis.Audio = class extends FakeAudio {
     constructor() {
       super(elements, tickMs);
     }
   };
-  globalThis.fetch = async () => ({ ok: false, json: async () => ({}) });
+  // `&meta=1` answers YouTube's reported loudness from __lufs (absent: unknown, as for Piped).
+  globalThis.fetch = async (url) => {
+    const id = String(url).replace(/^fake:/, "").split("&")[0];
+    if (/[?&]meta=1/.test(String(url)) && globalThis.__lufs && id in globalThis.__lufs) {
+      return { ok: true, json: async () => ({ lufs: globalThis.__lufs[id] }) };
+    }
+    return { ok: false, json: async () => ({}) };
+  };
 
   // The media clock ticks first so a boundary `ended` and a fade completion
   // landing on the same millisecond resolve the way a browser resolves them.
@@ -359,6 +368,11 @@ export async function createEngine({ tickMs = 20 } = {}) {
 }
 
 export const track = (id, duration) => ({ id, title: id, artist: "Test", album: "T", duration, thumb: null });
+
+/** What the shared analysis knows about a song (defaults: no silence, no beats, unmeasured). */
+export function setAnalysis(id, partial = {}) {
+  (globalThis.__analysis ||= {})[id] = { head: 0, tail: 0, lufs: null, onset: null, intro: null, outro: null, ...partial };
+}
 
 /* ------------------------------ query helpers ------------------------------ */
 

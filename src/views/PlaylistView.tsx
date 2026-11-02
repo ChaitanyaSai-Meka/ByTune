@@ -4,7 +4,7 @@
  * "PLAYLIST • N TRACKS • ABOUT 3:2X" metadata line, circular glass controls,
  * then the playlist's own numbered track rows.
  */
-import { useState } from "react";
+import { useEffect, useRef } from "react";
 import { Download, FileDown, Heart, ListMusic, ListPlus, MoreHorizontal, Play, Shuffle } from "lucide-react";
 import { downloadAll } from "../lib/downloads";
 import { exportPlaylist } from "../lib/playlistShare";
@@ -12,6 +12,7 @@ import { DownloadBadge } from "../components/TrackList";
 import { Artwork, EmptyState, EqBars, ExplicitBadge } from "../components/primitives";
 import { playlistHeaderItems, playlistMenuItems } from "../lib/trackActions";
 import { useDrag } from "../lib/dnd";
+import { useSortable, type SortableDragProps } from "../lib/useSortable";
 import { fmtTime, fmtTotal, plural } from "../lib/format";
 import { useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
@@ -33,6 +34,24 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
 
   // Dropping songs onto this page is handled panel-wide in App (usePanelDrop).
 
+  // A song dragged within the list moves the way the queue's do; dragged out,
+  // it still drops onto other playlists or the queue.
+  const listRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    scrollRef.current = document.getElementById("view-scroll");
+  }, []);
+  const sortable = useSortable({
+    signature: (playlist?.tracks ?? []).map((t) => t.id).join(","),
+    listRef,
+    scrollRef,
+    clamp: (_from, target) => target,
+    canDrag: () => true,
+    onCommit: (from, to) => {
+      if (playlist) useLibrary.getState().moveInPlaylist(playlist.id, from, to);
+    },
+  });
+
   if (!playlist) {
     return (
       <EmptyState
@@ -45,6 +64,13 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
   }
 
   const tracks = playlist.tracks;
+  // Keys stay with the song (id + which copy), so a moved row moves rather than remounting.
+  const copies = new Map<string, number>();
+  const rowKey = (id: string): string => {
+    const n = copies.get(id) ?? 0;
+    copies.set(id, n + 1);
+    return `${id}#${n}`;
+  };
   const totalSec = tracks.reduce((acc, t) => acc + t.duration, 0);
   // Spotify's model: a fresh playlist reads "PLAYLIST" — the "0 tracks"
   // count only appears once there's something to count.
@@ -171,10 +197,10 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
 
       <div className="px-8 pb-12 pt-2">
         {tracks.length ? (
-          <div>
+          <div ref={listRef} {...sortable.listProps}>
             {tracks.map((track, i) => (
-              <div key={`${track.id}-${i}`}>
-                <PlaylistTrackRow track={track} index={i} queue={tracks} playlist={playlist} />
+              <div key={rowKey(track.id)} style={sortable.styleFor(i)}>
+                <PlaylistTrackRow track={track} index={i} queue={tracks} playlist={playlist} sortDrag={sortable.dragProps(i)} />
                 {i < tracks.length - 1 && <div className="h-px bg-ink-hi/[0.05] ml-[112px] mr-3" />}
               </div>
             ))}
@@ -212,19 +238,19 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
   );
 }
 
-/** A playlist row being dragged to a new spot in the same playlist. */
-const ROW_MIME = "application/x-bytune-playlist-row";
-
 function PlaylistTrackRow({
   track,
   index,
   queue,
   playlist,
+  sortDrag,
 }: {
   track: Track;
   index: number;
   queue: Track[];
   playlist: Playlist;
+  /** moving the row within the playlist (see useSortable) */
+  sortDrag: SortableDragProps;
 }) {
   const playQueue = usePlayer((s) => s.playQueue);
   const openContextMenu = useUI((s) => s.openContextMenu);
@@ -234,12 +260,6 @@ function PlaylistTrackRow({
   const toggleLike = useLibrary((s) => s.toggleLike);
   const drag = useDrag({ track });
   const isCurrent = currentId === track.id;
-  // Drag a row within its playlist to move it; the line shows where it lands.
-  const [dropEdge, setDropEdge] = useState<"above" | "below" | null>(null);
-  const below = (e: React.DragEvent): boolean => {
-    const r = e.currentTarget.getBoundingClientRect();
-    return e.clientY >= r.top + r.height / 2;
-  };
 
   const openMenu = (x: number, y: number): void => {
     openContextMenu(x, y, playlistMenuItems(playlist, track));
@@ -250,30 +270,11 @@ function PlaylistTrackRow({
       {...drag.props}
       onDragStart={(e) => {
         drag.props.onDragStart(e);
-        e.dataTransfer.setData(ROW_MIME, JSON.stringify({ playlistId: playlist.id, index }));
+        sortDrag.onDragStart(e);
       }}
-      onDragOver={(e) => {
-        if (!e.dataTransfer.types.includes(ROW_MIME)) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        setDropEdge(below(e) ? "below" : "above");
-      }}
-      onDragLeave={() => setDropEdge(null)}
-      onDrop={(e) => {
-        setDropEdge(null);
-        const raw = e.dataTransfer.getData(ROW_MIME);
-        if (!raw) return;
-        e.preventDefault();
-        e.stopPropagation();
-        try {
-          const from = JSON.parse(raw) as { playlistId: string; index: number };
-          if (from.playlistId !== playlist.id || !Number.isInteger(from.index)) return;
-          let to = index + (below(e) ? 1 : 0);
-          if (from.index < to) to -= 1;
-          useLibrary.getState().moveInPlaylist(playlist.id, from.index, to);
-        } catch {
-          /* not one of our rows */
-        }
+      onDragEnd={(e) => {
+        drag.props.onDragEnd(e);
+        sortDrag.onDragEnd(e);
       }}
       onClick={() => playQueue(queue, index)}
       onContextMenu={(e) => {
@@ -284,15 +285,8 @@ function PlaylistTrackRow({
         isCurrent ? "bg-ink-hi/[0.14]" : "hover:bg-ink-hi/[0.05]"
       } ${drag.dragging ? "opacity-40" : ""}`}
     >
-      {dropEdge && (
-        <span
-          className={`pointer-events-none absolute left-3 right-3 h-0.5 rounded-full bg-primary ${
-            dropEdge === "above" ? "-top-px" : "-bottom-px"
-          }`}
-        />
-      )}
       {/* The playlist's own running order — numbered rows, play on hover. */}
-      <div className="w-7 shrink-0 grid place-items-center text-[13px] text-ink-faint tabular-nums">
+      <div data-ghost-hide className="w-7 shrink-0 grid place-items-center text-[13px] text-ink-faint tabular-nums">
         {isCurrent && playing ? (
           <EqBars />
         ) : (
@@ -321,7 +315,10 @@ function PlaylistTrackRow({
         </div>
         <div className="text-[14px] truncate text-ink-dim mt-0.5">{track.artist}</div>
       </div>
-      <div className="w-[88px] shrink-0 flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+      <div
+        data-ghost-hide
+        className="w-[88px] shrink-0 flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
+      >
         <button
           onClick={(e) => {
             e.stopPropagation();

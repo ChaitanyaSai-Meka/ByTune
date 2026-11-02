@@ -473,3 +473,22 @@ test("Replay keeps uploading as listening accumulates, not just once", async () 
     assert.equal(uploadsOf().length, before, "guest Replay stays local");
   } finally { await h.close(); }
 });
+
+test("signed in, only a store's first unsynced write saves sync meta to disk at once", async () => {
+  const h = fixture();
+  try {
+    await signedIn(h);
+    await h.disk.writeData("library", library("local"));
+    await h.sync.syncNow();
+    const clean = plain(h.disk.readData("sync-meta")).stores.library;
+    assert.ok(clean.changedAt <= clean.syncedAt, "pushed: clean");
+    await new Promise((r) => setTimeout(r, 5));
+    h.sync.noteLocalWrite("library");
+    const dirty = plain(h.disk.readData("sync-meta")).stores.library;
+    assert.ok(dirty.changedAt > dirty.syncedAt, "the clean-to-dirty edge is on disk at once");
+    await new Promise((r) => setTimeout(r, 5));
+    h.sync.noteLocalWrite("library");
+    assert.equal(plain(h.disk.readData("sync-meta")).stores.library.changedAt, dirty.changedAt, "later writes stay in memory");
+    assert.ok(h.sync.syncStatus().pending > 0, "a push is still on its way");
+  } finally { await h.close(); }
+});

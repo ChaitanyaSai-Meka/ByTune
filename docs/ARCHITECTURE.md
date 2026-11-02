@@ -56,9 +56,9 @@ Note that YouTube actively changes this plumbing; if playback ever breaks, updat
 - Downloads are written as `.m4a` files to the user-configured downloads folder and tracked in a download registry that is reconciled at boot.
 - With an account (optional), the library is backed up to Supabase and merged across devices (`sync-merge.ts`); guest data stays on the device only.
 
-## Beat-aware Auto Mix
+## Automix
 
-`src/lib/analysis.ts` decodes a track and estimates tempo (BPM) from the onset-energy envelope via autocorrelation. Auto Mix uses that beat grid to land crossfades on the incoming track's tempo; the plain Crossfade setting uses fixed-duration fades instead.
+`src/lib/analysis.ts` decodes each song once at a reduced sample rate and finds its silent edges, its first musical onset, its integrated loudness (BS.1770) and beat grids at the intro and outro. Automix blends where the outgoing song's sound really ends, brings the next song in at its first sound, and slides the blend by under one beat so the beats land together when the tempos are within 4% (`planBlend` in `src/lib/audio.ts`). It does not stretch tempo. The plain Crossfade setting uses fixed-length fades; Skip silence trims the same edges. The same measurement levels Piped streams and local files without ReplayGain.
 
 ## Local music
 

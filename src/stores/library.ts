@@ -1,6 +1,6 @@
 /** Library state: liked tracks, playlists, history and download registry. */
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 import { coalescedStorage } from "../lib/persist";
 import { recordDeletionChanges } from "../lib/deletion-sync";
 import type { DeletionChange, DeletionSync } from "../lib/deletion-sync";
@@ -328,7 +328,7 @@ export const useLibrary = create<LibraryState>()(
       // would serialize the whole library (liked + playlists + history + the
       // full Track objects) to disk at that rate. Pending writes still flush
       // on pagehide/beforeunload, so close-time durability is unchanged.
-      storage: createJSONStorage(() => coalescedStorage),
+      storage: coalescedStorage,
       version: 1,
       onRehydrateStorage: () => {
         const likes = hydrationLikes ?? new Map<string, { track: Track; liked: boolean }>();

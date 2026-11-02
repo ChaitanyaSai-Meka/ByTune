@@ -45,7 +45,7 @@ import {
 } from "./SpotifyIcons";
 import { SeekBar, VolumeControl } from "./Controls";
 import { useLibrary } from "../stores/library";
-import { usePlayer } from "../stores/player";
+import { usePlayer, shownTrack } from "../stores/player";
 import { useSettings } from "../stores/settings";
 import { useUI, type MenuItem } from "../stores/ui";
 import { upgradeArtwork } from "../lib/artwork";
@@ -195,7 +195,7 @@ function SleepTimerButton() {
 }
 
 export function PlayerBar() {
-  const track = usePlayer((s) => s.queue[s.index] ?? null);
+  const track = usePlayer(shownTrack);
   const playing = usePlayer((s) => s.playing);
   const buffering = usePlayer((s) => s.buffering);
   const shuffle = usePlayer((s) => s.shuffle);
@@ -332,7 +332,7 @@ export function PlayerBar() {
                 key={track.id}
                 src={upgradeArtwork(track.thumb)}
                 alt=""
-                className="h-full w-full object-cover"
+                className="h-full w-full object-cover animate-art-in"
               />
             ) : (
               <div className="grid h-full w-full place-items-center">
@@ -341,7 +341,7 @@ export function PlayerBar() {
             )}
           </button>
           <div className="ml-2.5 min-w-0">
-            <button onClick={toggleNowPlaying} className="block w-full text-left" key={track ? `meta-${track.id}` : "meta-none"}>
+            <button onClick={toggleNowPlaying} className="block w-full text-left animate-meta-in" key={track ? `meta-${track.id}` : "meta-none"}>
               <span className="block truncate px-1.5 -mx-1.5 text-[14px] leading-[19px] text-white hover:underline">
                 {track ? track.title : "Nothing playing"}
               </span>

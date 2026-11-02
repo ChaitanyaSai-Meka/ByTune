@@ -38,11 +38,8 @@ export interface LocalTrack {
   mtime: number;
   /** localart:// URL for the extracted cover, when one was found */
   art?: string;
-  /** the file's own audio format (filled in by a scan) */
+  /** the file's own codec (filled in by a scan; also marks an entry as read with these fields) */
   codec?: string;
-  sampleRate?: number;
-  bitDepth?: number;
-  kbps?: number;
   /** ReplayGain track gain from the tags, dB */
   gainDb?: number;
 }
@@ -563,8 +560,6 @@ export async function scanLibrary(
       // string that lands in the persisted store.
       const bounded = (value: string | undefined): string | undefined =>
         typeof value === "string" ? value.slice(0, 200) : undefined;
-      const positive = (value: number | undefined): number | undefined =>
-        typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
       track = {
         ...track,
         title: bounded(c.title?.trim()) || track.title,
@@ -573,9 +568,6 @@ export async function scanLibrary(
         genre: bounded(c.genre?.[0]),
         duration: parsedDuration(meta.format.duration),
         codec: bounded(meta.format.codec)?.toLowerCase(),
-        sampleRate: positive(meta.format.sampleRate),
-        bitDepth: positive(meta.format.bitsPerSample),
-        kbps: positive(meta.format.bitrate) ? Math.round((meta.format.bitrate as number) / 1000) : undefined,
         gainDb: Number.isFinite(c.replaygain_track_gain?.dB) ? c.replaygain_track_gain?.dB : undefined,
         // Re-parsed (mtime changed) → refresh the extracted cover too.
         art: extractArt(hashPath(f.abs), c.picture?.[0], true),

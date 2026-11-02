@@ -97,11 +97,12 @@ function loadMeta(): SyncMeta {
 }
 
 /**
- * Meta reaches disk immediately. `changedAt` is what tells the next boot
- * "this store has local edits the cloud has not seen" — a debounced (or
- * lost-at-quit) save is precisely how a stale cloud copy could overwrite
- * newer local data on the next start. The file is tiny and store writes are
- * user-frequency (never per-timeupdate), so there is nothing to debounce.
+ * A store going from clean to dirty reaches disk immediately: `changedAt >
+ * syncedAt` is what tells the next boot "this store has local edits the cloud
+ * has not seen", and a lost save is precisely how a stale cloud copy could
+ * overwrite newer local data on the next start. Later writes to a store that
+ * is already dirty only move `changedAt` in memory (Replay writes every 5s
+ * while you listen); every push saves meta, and quitting runs flushMetaSync.
  */
 function saveMeta(): void {
   persist.writeDataSync("sync-meta", meta);
@@ -180,7 +181,7 @@ export function noteLocalWrite(name: string): void {
   if (sessionInfo().mode !== "account") return;
   const m = storeMeta(name);
   meta.stores[name] = { ...m, changedAt: Date.now() };
-  saveMeta();
+  if (m.changedAt <= m.syncedAt) saveMeta(); // clean → dirty: the edge the next boot must see
   schedulePush(name);
 }
 

@@ -74,3 +74,52 @@ test("a song that fails while blending in is dropped from the blend, and plays n
     h.restore();
   }
 });
+
+test("a long song that fails again after playing on for 30 s gets another retry", async () => {
+  const h = await boot({ fadeSeconds: 0 });
+  try {
+    h.setDuration("a", 600);
+    await play(h, [track("a", 600)]);
+    await h.advance(30_000);
+    let deck = live(h, "a");
+    deck.pause();
+    deck.emit("error");
+    await settle(h);
+    assert.ok(live(h, "a"), "the first retry");
+    await h.advance(40_000);
+    deck = live(h, "a");
+    assert.ok(deck.currentTime >= 69);
+    deck.pause();
+    deck.emit("error");
+    await settle(h);
+    const again = live(h, "a");
+    assert.ok(again && again.currentTime >= 69, "retried again, where it was");
+    assert.equal(read(h).id, "a");
+  } finally {
+    await settle(h);
+    h.restore();
+  }
+});
+
+test("a song that fails again straight after its retry is skipped, not retried in a loop", async () => {
+  const h = await boot({ fadeSeconds: 0 });
+  try {
+    h.setDuration("a", 600);
+    h.setDuration("b", 600);
+    await play(h, [track("a", 600), track("b", 600)]);
+    await h.advance(30_000);
+    let deck = live(h, "a");
+    deck.pause();
+    deck.emit("error");
+    await settle(h);
+    await h.advance(2_000);
+    deck = live(h, "a");
+    deck.pause();
+    deck.emit("error");
+    await settle(h);
+    assert.equal(read(h).id, "b", "skipped to the next song");
+  } finally {
+    await settle(h);
+    h.restore();
+  }
+});

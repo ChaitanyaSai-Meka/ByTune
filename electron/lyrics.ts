@@ -1,21 +1,36 @@
 /**
- * Lyrics providers for the desktop player — BitChord mobile's sweep, ported.
+ * Lyrics providers for the desktop player — BitChord's lyrics system, in
+ * ByTune's own code: the same sources, in the same order, asked and chosen
+ * between the same way.
  *
- * Fourteen sources are raced in parallel but their answers are taken in
- * BitChord's default priority order; a word-synced answer beats a line-synced
- * one from a source ahead of it when prioritizeWordSync is on (it is, by
- * default). The sweep is deadline-bounded so a slow provider chain can never
- * hold the lyrics view past a couple of seconds. The plain YT Music text
- * stays as the final fallback.
+ * The recording is settled first: the BiniLyrics search names it by ISRC
+ * (identifyRecording), so lrc.red fetches that very recording's document and
+ * LyricsPlus asks for it by code. Every source is asked at once (Genius, a
+ * scraper, only when nothing else answered), and the answers are taken in
+ * priority order (takeInPriorityOrder): a lower source finishing first never
+ * beats one still pending above it, and the highest-priority source with
+ * timed lyrics wins — word or line timing, BitChord's default. Plain text is
+ * the fallback.
  *
- * Word-timed chain: BiniLyrics (Apple TTML, matched on the recording — it
- * also reports the ISRC every later play reuses) → BetterLyrics (Apple TTML)
- * → Portato (QQ Music karaoke timings) → PaxSenix (Apple TTML via a public
- * proxy) → LyricsPlus (syllable mirrors) → SimpMusic. Then Unison, the
- * playing video's own captions, and YT Music's Lyrics tab; then the
- * line-synced workhorses Megalobiz → KuGou → LRCLIB → Musixmatch (richsync,
- * signed the way Musixmatch's web client signs), with Genius scraped plain
- * text as the last resort.
+ * One thing on top of BitChord: every source that searches by name must name
+ * the playing recording before its words are used (namesRecording) — the same
+ * song, the same version words ("Live", "Remix", "Sped Up", "Versión Pop"…)
+ * and a shared artist. BitChord checks this for lrc.red's search only, and
+ * trusts the rest; a miss is recoverable — the next source gets its turn —
+ * and the wrong words scrolling in time with the right song are not. So the
+ * check doesn't refuse what BitChord would rightly show, it reads names the
+ * way catalogues write them: Traditional and Simplified Chinese alike, an
+ * artist in another script by the entry's length, "(Album Version)" as a
+ * label, "Artist - Song (Lyrics)" uploads by their dash, and the playing
+ * release's own entry ("Despacito (Versión Pop)") for its title track. A music
+ * video takes the identify step's recording at the album length, as BitChord's
+ * identify does.
+ *
+ * The order: lrc.red → BiniLyrics → BetterLyrics (Apple TTML) → Portato (QQ
+ * Music karaoke timings) → PaxSenix (Apple TTML via a public proxy) →
+ * LyricsPlus (syllable mirrors) → Unison → the playing video's own captions →
+ * YT Music's Lyrics tab → KuGou → LRCLIB → Musixmatch (signed the way its web
+ * client signs) → Genius.
  *
  * All timings are SECONDS end-to-end — providers that serve milliseconds
  * convert at the parse boundary, which is exactly where the classic "lyrics
@@ -23,6 +38,7 @@
  */
 import { createHmac, randomUUID } from "node:crypto";
 import type { SyncedLyricLine, SyncedLyricWord } from "../src/types";
+import { foldHan } from "./hanFold";
 
 export interface LyricQuery {
   id: string;
@@ -45,7 +61,15 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const LYRICS_AGENT = "ByTune (https://github.com/bytune-music)";
 
-async function getText(url: string, timeoutMs = 6000, headers: Record<string, string> = {}): Promise<string | null> {
+async function getText(
+  url: string,
+  timeoutMs = 6000,
+  headers: Record<string, string> = {},
+  /** Called when the host never answered at all — DNS, refused, timed out — rather than said no. */
+  onUnreachable?: () => void,
+  /** Called with the status when the host answered with an HTTP error. */
+  onHttpError?: (status: number) => void
+): Promise<string | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -55,11 +79,13 @@ async function getText(url: string, timeoutMs = 6000, headers: Record<string, st
     });
     if (!res.ok) {
       console.log(`[bytune][lyrics-net] HTTP ${res.status} ${url.slice(0, 90)}`);
+      onHttpError?.(res.status);
       return null;
     }
     return await res.text();
   } catch (err) {
     console.log(`[bytune][lyrics-net] FAIL ${url.slice(0, 90)} :: ${err instanceof Error ? err.message : err}`);
+    onUnreachable?.();
     return null;
   } finally {
     clearTimeout(timer);
@@ -94,21 +120,25 @@ function stampMs(min: string, sec: string, frac: string): number {
  * to title-based matching instead. */
 const PLACEHOLDER_ARTISTS = new Set(["", "unknown artist", "unknown", "various artists", "artist"]);
 
-function primaryArtist(artist: string): string {
-  const lead = artist
-    .split(/,|;| & | feat\. | ft\. | featuring /i)[0]
-    .replace(/\s*\(.*?\)\s*/g, "")
-    .trim();
-  return PLACEHOLDER_ARTISTS.has(lead.toLowerCase()) ? "" : lead;
+/** YouTube's auto-generated channels for licensed music are "Artist - Topic". */
+function untopic(artist: string): string {
+  return artist.replace(/\s+-\s+Topic\s*$/i, "");
 }
 
-/** Rendition markers that change the timing itself — a match to the normal
- * studio cut can never stay in sync with these, no matter the offset. */
-const EDITION_MARKERS = /(sped[ -]?up|slowed(?:\s*(?:\+|and|&)?\s*(?:down|reverb))?|reverb|nightcore|daycore|super\s*(?:sped|slowed)|remix|bootleg|live)/i;
+/** The artist every source is asked with — BitChord's artistForLyricsSearch: the whole credit, " - Topic" off.
+ * A " & " or "," inside it is usually one name ("Simon & Garfunkel", "Earth, Wind & Fire", "Tyler, The Creator"). */
+function searchArtist(artist: string): string {
+  const credit = untopic(artist).trim();
+  return PLACEHOLDER_ARTISTS.has(credit.toLowerCase()) ? "" : credit;
+}
 
-/** The edition word on the upload's own title, when it names one. */
-function editionOf(title: string): string | null {
-  return EDITION_MARKERS.exec(title)?.[0]?.toLowerCase() ?? null;
+/** The credit in both of BitChord's forms: off a search, album or playlist row it lists the names "A, B, C"; off the
+ * queue it keeps YouTube's "A, B & C". BetterLyrics and Portato answer keyless clients only from what was asked
+ * before, so both are tried, the list first — a band named with "&" ("Simon & Garfunkel") answers to the second. */
+function creditForms(artist: string): string[] {
+  const credit = searchArtist(artist);
+  const list = credit.replace(/ & (?!.* & )/, ", ");
+  return list === credit ? [credit] : [list, credit];
 }
 
 /** How far a matched rendition's own runtime may sit from the playing track
@@ -135,12 +165,298 @@ function queryTitle(title: string): string {
 
 /** Strip the noise YouTube titles carry: "(Official Video)", "[HD]" … */
 function cleanTitle(title: string): string {
-  return title
-    .replace(/\((official\s+)?(music\s+)?(lyric[s]?\s+)?(video|audio|visualizer?|mv)\)/gi, "")
-    .replace(/\[(official\s+)?(music\s+)?(lyric[s]?\s+)?(video|audio|hd|4k)\]/gi, "")
-    .replace(/\s*-\s*(official|lyric|audio|video).*$/i, "")
-    .replace(/\|.*$/, "")
+  return (
+    title
+      .replace(/\((official\s+)?(music\s+)?(lyric[s]?\s+)?(video|audio|visualizer?|mv)\)/gi, "")
+      .replace(/\[(official\s+)?(music\s+)?(lyric[s]?\s+)?(video|audio|hd|4k)\]/gi, "")
+      // A label tail ("- Official Video HD", "- Lyrics (HD)"), never a song that starts with the word ("- Video Games").
+      .replace(
+        /\s*-\s*(?:official\s+)?(?:music\s+)?(?:lyrics?|lyrical|audio|video|visuali[sz]er|mv)\b(?=\s*(?:$|[-–—|(\[\/&+:]|(?:official|oficial|music|lyrics?|lyrical|audio|video|visuali[sz]er|song|mv|hd|hq|4k)\b)).*$/i,
+        ""
+      )
+      .replace(/\|.*$/, "")
+      // A K-pop upload's closing tag: "GANGNAM STYLE(강남스타일) M/V".
+      .replace(/\s+(?:official\s+)?m\/?v\s*$/i, "")
+      // An upload's unbracketed lyric label: "周杰倫 - 告白氣球 歌詞", "Artist - Song Lyrics".
+      .replace(/^(.+\s-\s.+?)\s+(?:with\s+)?(?:lyrics?|letra|歌詞|歌词|가사)\s*$/i, "$1")
+      .trim()
+  );
+}
+
+/**
+ * The title as a catalogue files it, for sources asked once and trusted:
+ * credits ("(feat. …)", "ft. …") and upload labels ("(Official Video)",
+ * "[Lyrics]") off, and everything else — "(Live)", "(Remix)", "(From …)" —
+ * kept, so the search asks for this recording rather than another one.
+ */
+function searchTitle(title: string): string {
+  const name = cleanTitle(title)
+    .replace(/\s*[(\[]\s*(?:feat\.?|ft\.?|featuring|with)\s[^)\]]*[)\]]/gi, " ")
+    .replace(/\s(?:feat\.?|ft\.?|featuring)\s.*$/i, " ")
+    .replace(
+      /\s*[(\[]\s*(?:official\s*)?(?:music\s*)?(?:hd\s*)?(?:video|audio|visuali[sz]er|lyrics?\s*video|lyrics?|m\/?v|hd|hq|4k|full\s*song|official)\s*[)\]]/gi,
+      " "
+    )
+    .replace(/\s+/g, " ")
+    .replace(/[\s,–—-]+$/, "")
     .trim();
+  return name || cleanTitle(title);
+}
+
+/* ---------------------- naming the playing recording --------------------- */
+
+/**
+ * Words that, in brackets or after a " - ", name a different recording rather
+ * than a different label: "Song (Live)", "Song - Acoustic", "(Sped Up)",
+ * "(Versión Pop)", a DJ's "(Hype Intro)" edit, "(TV ver.)", "(Japanese ver.)".
+ * A remaster note, "(From …)", "(feat. …)", "(Explicit)", a release label —
+ * "(Album/Main/Single Version)", 唱片版 — or a translated title name the same
+ * recording and stay out of the comparison.
+ */
+const VERSION_WORDS = new Set([
+  "live", "vivo", "directo", "concierto", "concert", "remix", "remixed", "rmx", "mix", "mixed", "mashup", "bootleg",
+  "flip", "rework", "vip", "dj", "edit", "extended", "intro", "outro", "acoustic", "acustico", "acustica", "unplugged",
+  "instrumental", "inst", "karaoke", "cappella", "acapella", "demo", "maqueta", "take", "outtake", "alternate",
+  "rehearsal", "session", "sessions", "version", "ver", "cover", "sped", "speed", "slowed", "slow", "reverb",
+  "nightcore", "daycore", "lofi", "chopped", "screwed", "8d", "orchestral", "symphonic", "reprise", "pt", "part",
+]);
+
+/** The same, as Chinese, Japanese and Korean catalogues write it: 现场版, 演唱会, DJ…版, 伴奏, 0.8x, ライブ, 라이브… */
+const VERSION_MARKS =
+  /演唱会|演唱會|音乐会|音樂會|라이브|版|现场|現場|混音|伴奏|翻唱|纯音乐|純音樂|片段|剪辑|剪輯|铃声|鈴聲|抖音|倍速|加速|降速|慢速|ライブ|リミックス|アコースティック|カラオケ|インスト|バージョン|\b\d+(?:\.\d+)?x\b/gi;
+
+/** One token per kind of version, in any language: "(En Vivo)" meets "(Live)", "演唱會" meets "现场". */
+const VERSION_SAME = new Map<string, string>([
+  ["vivo", "live"], ["directo", "live"], ["concierto", "live"], ["concert", "live"], ["演唱会", "live"],
+  ["演唱會", "live"], ["音乐会", "live"], ["音樂會", "live"], ["现场", "live"], ["現場", "live"], ["ライブ", "live"],
+  ["라이브", "live"], ["acustico", "acoustic"], ["acustica", "acoustic"], ["maqueta", "demo"],
+]);
+
+/** Qualifiers that only label a release: "(Album Version)", "(Main Version - Clean)", "(Explicit Ver.)". */
+const LABEL_WORDS = new Set(["album", "main", "single", "lp", "original", "explicit", "clean", "studio", "mono", "stereo"]);
+/** The same before 版: 唱片版, 录音室版, 正式版, 原版. */
+const LABEL_BAN = /^(?:唱片|录音室|錄音室|正式|原)$/;
+
+/** A tempo edit sings the same words at another speed: "(Sped Up Version)", "(Slowed + Reverb)", "(Nightcore)". */
+const TEMPO_EDIT = /\b(?:sped|speed|slowed|slow|reverb|nightcore|daycore|8d|lo-?fi|chopped|screwed)\b/i;
+
+/** A bracket, one level of brackets inside it included: "[The Official 2010 FIFA World Cup (TM) Song]". */
+const NAME_BRACKETS = /[(\[【「](?:[^()\[\]【】「」]|[(\[【「][^()\[\]【】「」]*[)\]】」])*[)\]】」]/g;
+const CREDIT_GROUP = /^.\s*(?:feat\.?|ft\.?|featuring|with|from|prod\.?|produced\s+by)\s/i;
+const LATIN = /\p{Script=Latin}/u;
+const HAN = /\p{Script=Han}/u;
+
+/** Lower case, Latin accents folded ("Versión" → "version", "Señorita" → "senorita"), Chinese in its Simplified
+ * form ("周杰倫" → "周杰伦"), only letters, marks and digits — Indic vowel signs and kana marks stay. */
+function plainWords(s: string): string {
+  return foldHan(
+    s
+      .normalize("NFKD")
+      .replace(/[̀-ͯ]/g, "")
+      .toLowerCase()
+      .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
+      .trim()
+  );
+}
+
+interface RecordingName {
+  /** The song's own name: brackets, an unbracketed "feat." and anything after " - " left out. */
+  core: string;
+  /** The same name in another script, from a bracket ("Échame La Culpa (把错都推给我吧)", "봄날 (Spring Day)"). */
+  aliases: string[];
+  /** Its version words, sorted — "" for the plain recording. */
+  versions: string;
+}
+
+const isVer = (w: string): boolean => w === "version" || w === "ver";
+
+/** "Song (Live) [feat. X] - 2011 Remaster" → core "song", versions "live". `plainText`: untimed words don't care
+ * how fast they are sung, so a tempo edit's group ("[Sped Up Version]") names nothing. */
+function recordingName(title: string, plainText = false): RecordingName {
+  const name = cleanTitle(title).normalize("NFKC");
+  const groups = name.match(NAME_BRACKETS) ?? [];
+  let core = name.replace(NAME_BRACKETS, " ");
+  const dash = core.indexOf(" - ");
+  const tail = dash >= 0 ? core.slice(dash + 3) : "";
+  if (dash >= 0) core = core.slice(0, dash);
+  core = plainWords(core.replace(/\s(?:feat\.?|ft\.?|featuring)\s.*$/i, "")) || plainWords(name);
+  const versions = new Set<string>();
+  const aliases: string[] = [];
+  for (const part of [...groups, tail]) {
+    if (!part.trim() || CREDIT_GROUP.test(part)) continue;
+    // "(2011 Remastered Version)" is still the same recording; "(Live … - Remastered)" is not.
+    const remaster = /remaster/i.test(part);
+    const tempo = plainText && TEMPO_EDIT.test(part);
+    // "Live版" → "live 版", "Lo-Fi" → "lofi": a word glued to a mark, or split by a hyphen, still counts.
+    const all = plainWords(part)
+      .replace(/(\p{Script=Latin})(\p{Script=Han})/gu, "$1 $2")
+      .replace(/(^| )lo fi(?= |$)/g, "$1lofi")
+      .split(" ")
+      .filter(Boolean);
+    const found: string[] = part.match(VERSION_MARKS) ?? [];
+    // "Live Version" is "Live" and "现场版" is "现场"; in plain text a tempo edit's words and filler drop out.
+    const words = all.filter((w) => VERSION_WORDS.has(w) && !isVer(w) && !(tempo && (TEMPO_EDIT.test(w) || w === "edit")));
+    const marks = found.filter((m) => m !== "版");
+    if (!words.length && !marks.length && !remaster && !tempo) {
+      // "(X Version)" alone: X names the version, unless it only labels the release.
+      // shortcut: qualifiers compare as written ("Versión en Español" ≠ "Spanish Version"); map language names if catalogues mix them.
+      const qualifier = [...new Set(all.filter((w) => !isVer(w) && !LABEL_WORDS.has(w)))].sort();
+      if (qualifier.length && all.some(isVer)) words.push(`version:${qualifier.join("+")}`);
+      // "(X版)" the same, X glued to 版: 粤语版 ≠ 国语版, and 唱片版 is a label.
+      if (found.includes("版")) {
+        for (const m of part.matchAll(/([^\s()\[\]【】「」]*?)版/g)) {
+          const x = plainWords(m[1]).replace(/\s+/g, "");
+          if (x && !LABEL_BAN.test(x)) marks.push(`版:${x}`);
+        }
+      }
+    }
+    for (const w of [...words, ...marks]) versions.add(VERSION_SAME.get(w.toLowerCase()) ?? w.toLowerCase());
+    // A bracket in another script that names no version is the title, translated.
+    const named = all.some((w) => VERSION_WORDS.has(w)) || found.length > 0;
+    if (part !== tail && !named && /\p{L}/u.test(part) && LATIN.test(part) !== LATIN.test(core)) {
+      const alias = plainWords(part);
+      if (alias) aliases.push(alias);
+    }
+  }
+  return { core, aliases, versions: [...versions].sort().join(" ") };
+}
+
+const ARTIST_SPLIT = /\s*(?:,|;|\/|&|\+|、|，|\s(?:and|x|×|with|feat\.?|ft\.?|featuring|vs\.?)\s)\s*/i;
+const CREDIT_LEAD = /^\s*(?:feat\.?|ft\.?|featuring|with)\s+/i;
+/** Bracket words that describe a credit rather than name one: "(Cover)", "(Originally Performed by …)", "(prod. …)". */
+const NOT_A_NAME = new Set([...VERSION_WORDS, "originally", "performed", "famous", "style", "tribute", "prod", "produced", "official"]);
+
+/** Credited artists, normalised: "A, B & C", "A x B", "A、B" (KuGou), "A feat. B". A bracket's names count too —
+ * "(Ft. A & B)", the same artist in another script ("버스커 버스커 (Busker Busker)", "Ed Sheeran (艾德·希兰)") —
+ * unless the bracket describes the recording ("(X Cover)") or is a bare mark (the "(G)" of "(G)I-DLE").
+ * Placeholder credits drop out. */
+function artistNames(artist: string): string[] {
+  const name = untopic(artist).normalize("NFKC");
+  const outside = name.replace(NAME_BRACKETS, " ").split(ARTIST_SPLIT).map(plainWords);
+  const inside = (name.match(NAME_BRACKETS) ?? [])
+    .map((b) => b.slice(1, -1))
+    .filter((b) => CREDIT_LEAD.test(b) || !plainWords(b).split(" ").some((w) => NOT_A_NAME.has(w)))
+    .flatMap((b) => b.replace(CREDIT_LEAD, "").split(ARTIST_SPLIT))
+    .map(plainWords)
+    .filter((a) => a.length > 1 && /\p{L}/u.test(a));
+  return [...outside, ...inside].filter((a) => a && !PLACEHOLDER_ARTISTS.has(a));
+}
+
+/** Whether two credit lists share an artist — whole names, either way round
+ * ("Daryl Hall & John Oates" shares "Hall"; "Pritam, Arijit Singh" shares "Arijit Singh"). Names are plainWords,
+ * so a Traditional and a Simplified spelling are already the same ("周杰倫" / "周杰伦"). */
+function shareArtist(a: string[], b: string[]): boolean {
+  const within = (name: string, list: string[]): boolean => list.some((other) => ` ${other} `.includes(` ${name} `));
+  return a.some((x) => within(x, b)) || b.some((y) => within(y, a));
+}
+
+function sameName(a: RecordingName, b: RecordingName): boolean {
+  return a.versions === b.versions && [a.core, ...a.aliases].some((x) => [b.core, ...b.aliases].includes(x));
+}
+
+const CREDIT_SCRIPTS = [LATIN, HAN, /\p{Script=Hangul}/u, /[\p{Script=Hiragana}\p{Script=Katakana}]/u];
+
+/** A bracket of upload labels only: "(Lyrics)", "(Letra/Lyrics)", "[Official Lyric Video HD]". */
+const UPLOAD_LABEL =
+  /\s*[(\[]\s*(?:(?:official|oficial|music|lyrics?|letra|lyrical|video|audio|visuali[sz]er|mv|hd|hq|4k|with|and|y)\b[\s\/&+,-]*)+[)\]]/gi;
+
+/** Whether two credit lists share a script — "Eason Chan" and "陈奕迅" don't, so no test can compare them. */
+function comparable(a: string[], b: string[]): boolean {
+  const used = (names: string[]): RegExp[] => CREDIT_SCRIPTS.filter((re) => names.some((n) => re.test(n)));
+  const x = used(a);
+  const y = used(b);
+  return !x.length || !y.length || x.some((re) => y.includes(re));
+}
+
+/** What else is known about the entry being checked. */
+export interface NameCheck {
+  /** The entry's own length in seconds. Within LRCRED_TOLERANCE_SEC of the playing track's, it stands in for
+   * credits written in scripts that can't be compared ("Eason Chan" / "陈奕迅"). */
+  length?: number | string | null;
+  /** Untimed text: a tempo edit ("Sped Up", "Slowed") reads the same words as the song. */
+  plainText?: boolean;
+}
+
+/**
+ * Whether a catalogue entry names the playing recording: the same song once
+ * credits and labels are gone, the same version words on both sides, and a
+ * shared artist. The artist test is skipped when either side has no real
+ * credit — the caller's length check has to carry the match then — and when
+ * the credits are in scripts that can't be compared but the entry's own
+ * length matches. An "Artist - Song" upload also reads as the song after the
+ * dash, as long as the part before it is one of the entry's artists: from the
+ * artist's own channel, or from anyone's when only labels ride along.
+ */
+export function namesRecording(
+  name: string,
+  artist: string,
+  q: Pick<LyricQuery, "title" | "artist"> & { duration?: number },
+  check: NameCheck = {}
+): boolean {
+  const title = cleanTitle(q.title || "").normalize("NFKC");
+  const theirName = recordingName(name, check.plainText);
+  const theirs = artistNames(artist);
+  const mine = artistNames(q.artist || "");
+  const length = Number(check.length);
+  const uncheckable =
+    !comparable(mine, theirs) && length > 0 && !!q.duration && Math.abs(length - q.duration) <= LRCRED_TOLERANCE_SEC;
+  const credited = !mine.length || !theirs.length || uncheckable || shareArtist(mine, theirs);
+  if (credited && sameName(recordingName(title, check.plainText), theirName)) return true;
+  const dash = title.indexOf(" - ");
+  if (dash <= 0 || !theirs.length) return false;
+  const lead = artistNames(title.slice(0, dash));
+  const rest = title.slice(dash + 3);
+  // Someone else's upload ("Avicii - Wake Me Up (Lyrics)" by 7clouds) names the song only when nothing but credits
+  // and labels ride along: "| Piano Tutorial", "(Glastonbury 2019)", "( s l o w e d )", "[1 HOUR]" are other recordings.
+  // A bracket in another script ("(강남스타일)", "(가사)") is the title translated or a label; its version marks
+  // still count, through the name comparison below.
+  const labels = rest
+    .replace(/\s(?:feat\.?|ft\.?|featuring)\s.*?(?=\s-\s|[(\[]|$)/i, " ")
+    .replace(UPLOAD_LABEL, " ")
+    .replace(/[(\[【「][^\p{Script=Latin}\d()\[\]【】「」]*[)\]】」]/gu, " ");
+  const bare =
+    !/[|｜]/.test(q.title || "") &&
+    !/[(\[【「]| - /.test(searchTitle(labels)) &&
+    !(title.slice(0, dash).match(NAME_BRACKETS) ?? []).some((g) => /[\p{Script=Latin}\d]/u.test(g));
+  return (
+    (credited || bare) &&
+    lead.length > 0 &&
+    shareArtist(lead, theirs) &&
+    sameName(recordingName(rest, check.plainText), theirName)
+  );
+}
+
+/** "Lyrics by：…", "作曲：…" — a credit stamped like a lyric. */
+const CREDIT_LINE = /^[^:：]{1,40}[:：]\s*\S/;
+
+/** The "Title - Artist" line QQ and KuGou stamp at the head of a file, split at its dash. */
+function openingName(lines: SyncedLyricLine[]): [string, string] | null {
+  const first = lines.find((l) => l.text.trim());
+  if (!first || first.time > 2) return null;
+  const text = first.text.trim();
+  const cut = text.lastIndexOf(" - ");
+  return cut > 0 ? [text.slice(0, cut), text.slice(cut + 3)] : null;
+}
+
+/** Whether a file's opening name line names the playing recording, read either way round
+ * ("Title - Artist" or "Artist - Title"); null when the file has no such line. */
+function openingNameFits(
+  lines: SyncedLyricLine[],
+  q: Pick<LyricQuery, "title" | "artist"> & { duration?: number },
+  length?: number | null
+): boolean | null {
+  const name = openingName(lines);
+  if (!name) return null;
+  return namesRecording(name[0], name[1], q, { length }) || namesRecording(name[1], name[0], q, { length });
+}
+
+/** The lyrics without that opening name line and the credits stamped next to it or at the very end. */
+function withoutOpening(lines: SyncedLyricLine[]): SyncedLyricLine[] {
+  let start = openingName(lines) ? lines.findIndex((l) => l.text.trim()) + 1 : 0;
+  while (start < lines.length && (!lines[start].text.trim() || CREDIT_LINE.test(lines[start].text))) start++;
+  let end = lines.length;
+  while (end > start && (!lines[end - 1].text.trim() || CREDIT_LINE.test(lines[end - 1].text))) end--;
+  return lines.slice(start, end);
 }
 
 /** Insert gap markers where ≥5s of nobody sings — instrumental sections. */
@@ -168,6 +484,11 @@ function lineEndSec(line: SyncedLyricLine, nextStart: number): number {
 
 function toResult(source: string, lines: SyncedLyricLine[]): ProviderResult | null {
   if (!lines.length) return null;
+  // Every stamp at 0:00 is unsynced text in LRC form; BitChord reads it as plain (its timeMs > 0 test).
+  if (!lines.some((l) => l.time > 0 || l.words?.length)) {
+    const plainText = lines.map((l) => l.text.trim()).filter(Boolean).join("\n");
+    return plainText ? { source, wordSynced: false, lines: [], plainText } : null;
+  }
   return { source, wordSynced: lines.some((l) => (l.words?.length ?? 0) > 0), lines: withInstrumentalGaps(lines) };
 }
 
@@ -400,26 +721,16 @@ function parseProviderAny(raw: string): SyncedLyricLine[] | { plain: string } | 
 
 /* --------------------------------- TTML --------------------------------- */
 
-/** TTML time → SECONDS ("27.395", "H:MM:SS.mmm", "M:SS.mmm"). */
+/** TTML time → SECONDS: "27.395", "12.5s", "800ms", "H:MM:SS.mmm", "M:SS.mmm", "02:39", "1:3.188". */
 function attrTimeSeconds(attrs: string, name: string): number | null {
   const m = new RegExp(`${name}\\s*=\\s*"([^"]+)"`).exec(attrs);
   if (!m) return null;
-  const v = m[1];
-  if (/^\d+(\.\d+)?$/.test(v)) return parseFloat(v);
-  const clock = /^(\d+):(\d{2}):(\d{2})\.(\d{1,3})$/.exec(v);
-  if (clock) {
-    return (
-      parseInt(clock[1], 10) * 3600 +
-      parseInt(clock[2], 10) * 60 +
-      parseInt(clock[3], 10) +
-      parseInt(clock[4].padEnd(3, "0"), 10) / 1000
-    );
-  }
-  const short = /^(\d+):(\d{2})\.(\d{1,3})$/.exec(v);
-  if (short) {
-    return parseInt(short[1], 10) * 60 + parseInt(short[2], 10) + parseInt(short[3].padEnd(3, "0"), 10) / 1000;
-  }
-  return null;
+  const v = m[1].trim();
+  const ms = /^(\d+(?:\.\d+)?)ms$/.exec(v);
+  if (ms) return parseFloat(ms[1]) / 1000;
+  const parts = v.replace(/s$/, "").split(":");
+  if (parts.length > 3 || !parts.every((p) => /^\d+(\.\d+)?$/.test(p))) return null;
+  return parts.reduce((sum, p) => sum * 60 + parseFloat(p), 0);
 }
 
 const TTML_TRANSLATION_ROLE = /(?:ttm:role|x-role)\s*=\s*"x-translation"/;
@@ -600,6 +911,15 @@ const LYRICSPLUS_MIRRORS = [
 ];
 let lyricsPlusLastGood: string | null = null;
 
+/**
+ * Mirrors that didn't answer at all last time — gone from DNS, or hanging to
+ * the timeout — sit out for a while. Answers are taken in priority order, so
+ * a mirror that never answers would hold every lookup below LyricsPlus to its
+ * timeout; one that answers "not found" is quick and stays in.
+ */
+const lyricsPlusBenched = new Map<string, number>();
+const LYRICSPLUS_BENCH_MS = 10 * 60_000;
+
 interface PlusSyllable {
   time?: number; // ms
   duration?: number; // ms
@@ -672,51 +992,43 @@ function parsePlusResponse(response: { lyrics?: PlusLine[] | null }): SyncedLyri
 }
 
 async function fetchLyricsPlusOne(host: string, q: LyricQuery, isrc?: string): Promise<SyncedLyricLine[] | null> {
-  const parse = (body: string | null): SyncedLyricLine[] | null => {
-    if (!body) return null;
-    try {
-      const lines = parsePlusResponse(JSON.parse(body));
-      return lines.length ? lines : null;
-    } catch {
+  // One question, asked the way BitChord asks it: the catalogue name with its
+  // version words, the length, the album and — once lrc.red has named it —
+  // the recording's ISRC. The looser retries this used to make (bare title,
+  // no length) were where other recordings came back.
+  const params = new URLSearchParams({ title: searchTitle(q.title), artist: searchArtist(q.artist || "") });
+  if (q.duration > 0) params.set("duration", String(Math.round(q.duration)));
+  if (q.album) params.set("album", cleanTitle(q.album));
+  // Sent alongside the name rather than instead of it: this backend
+  // aggregates several catalogues, and the ones with no ISRC index still
+  // need something to match on.
+  if (isrc) params.set("isrc", isrc);
+  const body = await getText(`${host}/v2/lyrics/get?${params.toString()}`, 6000, {}, () =>
+    lyricsPlusBenched.set(host, Date.now() + LYRICSPLUS_BENCH_MS)
+  );
+  if (!body) return null;
+  try {
+    const json = JSON.parse(body);
+    // The backend breaks ties on length, which can land on a remix or a
+    // translated version; its own metadata says which recording it sent.
+    const meta = json?.metadata;
+    if (typeof meta?.title === "string" && meta.title && !namesRecording(meta.title, String(meta.artist ?? ""), q)) {
       return null;
     }
-  };
-  // The rendition the upload names is asked for first — Apple-backed backends
-  // index the actual "(Sped Up)" releases — then the stripped title.
-  const stripped = queryTitle(q.title);
-  const full = cleanTitle(q.title).trim();
-  const titles = full && full.toLowerCase() !== stripped.toLowerCase() ? [full, stripped] : [stripped];
-  const attempt = (title: string, withDuration: boolean): string => {
-    const params = new URLSearchParams({ title, artist: primaryArtist(q.artist || "") });
-    if (withDuration && q.duration > 0) params.set("duration", String(Math.round(q.duration)));
-    if (q.album) params.set("album", cleanTitle(q.album));
-    // Sent alongside the name rather than instead of it: this backend
-    // aggregates several catalogues, and the ones with no ISRC index still
-    // need something to match on.
-    if (isrc) params.set("isrc", isrc);
-    return `${host}/v2/lyrics/get?${params.toString()}`;
-  };
-
-  // Strict first: the duration disambiguates remixes. But when the YouTube
-  // upload runs longer or shorter than every catalogue version (music videos
-  // with intros, extended cuts), a hard duration filter rejects the REAL
-  // song and a keyword fallback answers with someone else's lyrics — so a
-  // strict miss retries once on title+artist alone.
-  for (const title of titles) {
-    const lines = parse(await getText(attempt(title, true), 7000));
-    if (lines) return lines;
-    if (q.duration > 0) {
-      const loose = parse(await getText(attempt(title, false), 7000));
-      if (loose) return loose;
-    }
+    const lines = parsePlusResponse(json);
+    return lines.length ? lines : null;
+  } catch {
+    return null;
   }
-  return null;
 }
 
 async function fetchLyricsPlus(q: LyricQuery, isrc?: string): Promise<ProviderResult | null> {
-  const hosts = lyricsPlusLastGood
-    ? [lyricsPlusLastGood, ...LYRICSPLUS_MIRRORS.filter((m) => m !== lyricsPlusLastGood)]
-    : LYRICSPLUS_MIRRORS;
+  const now = Date.now();
+  const awake = LYRICSPLUS_MIRRORS.filter((m) => (lyricsPlusBenched.get(m) ?? 0) <= now);
+  const pool = awake.length ? awake : LYRICSPLUS_MIRRORS;
+  const hosts = lyricsPlusLastGood && pool.includes(lyricsPlusLastGood)
+    ? [lyricsPlusLastGood, ...pool.filter((m) => m !== lyricsPlusLastGood)]
+    : pool;
   // All mirrors are asked at once; the first to answer with something usable
   // wins the moment it lands — completion order, not mirror order. A slow
   // mirror that will come back empty must not hold up one that already has
@@ -767,18 +1079,6 @@ function appleClean(s: string): string {
       ""
     )
     .trim();
-}
-
-function appleScore(track: { name: string; artist: string }, title: string, artist: string): number {
-  const name = track.name.trim().toLowerCase();
-  const wantTitle = title.trim().toLowerCase();
-  const haveArtist = track.artist.trim().toLowerCase();
-  const wantArtist = artist.trim().toLowerCase();
-  let score = 0;
-  if (name === wantTitle) score += 80;
-  else if (name.includes(wantTitle) || wantTitle.includes(name)) score += 40;
-  if (haveArtist.includes(wantArtist) || wantArtist.includes(haveArtist)) score += 40;
-  return score;
 }
 
 async function scrapeAppleToken(): Promise<string | null> {
@@ -905,12 +1205,11 @@ function parsePaxStructured(root: unknown): SyncedLyricLine[] {
 
 async function fetchPaxSenix(q: LyricQuery): Promise<ProviderResult | null> {
   const stripped = queryTitle(q.title);
-  const artist = appleClean(primaryArtist(q.artist || ""));
+  const artist = appleClean(searchArtist(q.artist || ""));
   if (!stripped) return null;
-  const edition = editionOf(q.title || "");
   // Apple indexes the actual edits — "Song (Sped Up)" is a real release — so
   // the rendition the upload names is queried before the stripped title.
-  const full = cleanTitle(q.title).trim();
+  const full = searchTitle(q.title);
   const titles = full && full.toLowerCase() !== stripped.toLowerCase() ? [full, stripped] : [stripped];
 
   let token = await getAppleToken();
@@ -929,48 +1228,45 @@ async function fetchPaxSenix(q: LyricQuery): Promise<ProviderResult | null> {
     return results;
   };
 
-  // The YouTube upload's length must never veto the real song — music videos
-  // with intros run longer than the catalogue track, and a hard ±10s filter
-  // rejects Despacito-style songs wholesale. Title/artist score decides;
-  // duration proximity only breaks ties. One exception: an upload that names
-  // an edition ("Sped Up", "Slowed + Reverb") can only take a candidate whose
-  // runtime is near its own — the studio cut would sing at the wrong tempo,
-  // and no offset repairs that.
+  // Only a candidate that names the playing recording — the same song, the
+  // same version words, a shared artist — may answer; of those, the closest in
+  // length (a re-release, a remaster). The upload's length never vetoes the
+  // song on its own: music videos with intros run longer than the catalogue
+  // track.
   const durDelta = (t: AppleCandidate): number =>
     q.duration <= 0 || t.durationSec == null ? 99999 : Math.abs(t.durationSec - q.duration);
 
-  let best: AppleCandidate | undefined;
-  let firstResults: AppleCandidate[] | null = null;
+  let pool: AppleCandidate[] = [];
   for (const title of titles) {
-    let results = await searchOnce(title);
-    if (!results?.length) continue;
-    firstResults = firstResults ?? results;
-    if (edition && q.duration > 0) {
-      const near = results.filter((t) => withinTolerance(t.durationSec, q.duration));
-      if (!near.length) continue; // this query only found the wrong edition
-      results = near;
-    }
-    best = [...results].sort(
-      (a, b) => appleScore(b, title, artist) - appleScore(a, title, artist) || durDelta(a) - durDelta(b),
-    )[0];
-    if (best?.id) break;
+    const named = (await searchOnce(title))?.filter((t) => t.id && namesRecording(t.name, t.artist, q, { length: t.durationSec })) ?? [];
+    pool = named.sort((a, b) => durDelta(a) - durDelta(b));
+    if (pool.length) break;
   }
-  if (!best?.id) {
-    // Nothing edition-compatible anywhere: fall through to the plain best
-    // match only for non-edition titles.
-    if (edition || !firstResults?.length) return null;
-    best = [...firstResults].sort(
-      (a, b) =>
-        appleScore(b, stripped, artist) - appleScore(a, stripped, artist) || durDelta(a) - durDelta(b),
-    )[0];
-  }
-  if (!best?.id) return null;
-
-  const body = await getText(
-    `${PAXSENIX_PROXY}/apple-music/lyrics?id=${encodeURIComponent(best.id)}&ttml=true`,
-    8000
+  // The same recording is often listed under several releases (single, album,
+  // soundtrack), and the proxy has lyrics for some of them only — releases of
+  // the same length as the first, that is; "Faded (Restrung)" is another
+  // arrangement. A release the proxy said no to (a 404, a busy 503) gives the
+  // next its turn; one that didn't answer at all would only be waited on again.
+  const sameRecording = pool.filter(
+    (t) =>
+      t === pool[0] ||
+      (t.durationSec != null && pool[0].durationSec != null && Math.abs(t.durationSec - pool[0].durationSec) <= LRCRED_TOLERANCE_SEC)
   );
-  if (!body) return null;
+  for (const candidate of sameRecording.slice(0, 3)) {
+    const lyrics = await paxSenixLyrics(candidate.id);
+    if (lyrics !== null) return lyrics ?? null;
+  }
+  return null;
+}
+
+/** The proxy's lyrics for one Apple id: undefined when the host never answered, null when it answered without
+ * lyrics (an HTTP error included). */
+async function paxSenixLyrics(id: string): Promise<ProviderResult | null | undefined> {
+  let unreachable = false;
+  const body = await getText(`${PAXSENIX_PROXY}/apple-music/lyrics?id=${encodeURIComponent(id)}&ttml=true`, 8000, {}, () => {
+    unreachable = true;
+  });
+  if (!body) return unreachable ? undefined : null;
   try {
     const json: PaxLyricsResponse = JSON.parse(body);
     const structured = parsePaxStructured(json);
@@ -990,7 +1286,7 @@ async function fetchPaxSenix(q: LyricQuery): Promise<ProviderResult | null> {
       }
     }
     console.log(
-      `[bytune][lyrics-net] paxsenix no synced content for ${best.id}: keys=${Object.keys(json).join(",")} ttmlLen=${(json.ttmlContent ?? "").length}`
+      `[bytune][lyrics-net] paxsenix no synced content for ${id}: keys=${Object.keys(json).join(",")} ttmlLen=${(json.ttmlContent ?? "").length}`
     );
     return null;
   } catch {
@@ -1002,60 +1298,25 @@ async function fetchPaxSenix(q: LyricQuery): Promise<ProviderResult | null> {
 /* ---------------------------- BetterLyrics ------------------------------ */
 
 async function fetchBetterLyrics(q: LyricQuery): Promise<ProviderResult | null> {
-  const enc = encodeURIComponent;
-  // Edition-titled uploads are asked under their own name first — the backend
-  // indexes Apple's actual "(Sped Up)" releases — then the stripped title.
-  const blStripped = queryTitle(q.title);
-  const blFull = cleanTitle(q.title).trim();
-  const titles =
-    blFull && blFull.toLowerCase() !== blStripped.toLowerCase() ? [blFull, blStripped] : [blStripped];
-  const attempt = (title: string, withDuration: boolean): string => {
-    const params = new URLSearchParams({ s: title, a: primaryArtist(q.artist || "") });
-    if (withDuration && q.duration > 0) params.set("d", String(Math.round(q.duration)));
+  // Asked the way BitChord asks: the catalogue name with its version words, at
+  // the upload's length, under each form of the credit. The document carries
+  // no name to check, so a looser retry (the bare title, no length) could only
+  // ever bring back another recording.
+  for (const a of creditForms(q.artist || "")) {
+    const params = new URLSearchParams({ s: searchTitle(q.title), a });
+    if (q.duration > 0) params.set("d", String(Math.round(q.duration)));
     if (q.album) params.set("al", cleanTitle(q.album));
-    return `https://lyrics-api.boidu.dev/getLyrics?${params.toString()}`;
-  };
-  // Same rule as the other word-synced sources: a strict duration miss
-  // (YouTube video ≠ catalogue runtime) retries on title+artist alone.
-  let body: string | null = null;
-  for (const title of titles) {
-    body = await getText(attempt(title, true));
-    if (!body && q.duration > 0) body = await getText(attempt(title, false));
-    if (body) break;
+    const body = await getText(`https://lyrics-api.boidu.dev/getLyrics?${params.toString()}`);
+    if (!body) continue;
+    try {
+      const ttml = JSON.parse(body)?.ttml;
+      const found = typeof ttml === "string" && ttml ? toResult("BetterLyrics", parseTtml(ttml)) : null;
+      if (found) return found;
+    } catch {
+      /* unreadable: the next form */
+    }
   }
-  if (!body) return null;
-  try {
-    const json = JSON.parse(body);
-    const ttml = typeof json?.ttml === "string" ? json.ttml : null;
-    if (!ttml) return null;
-    return toResult("BetterLyrics", parseTtml(ttml));
-  } catch {
-    return null;
-  }
-}
-
-/* ------------------------------ SimpMusic ------------------------------- */
-
-async function fetchSimpMusic(q: LyricQuery): Promise<ProviderResult | null> {
-  if (!q.id || q.id.includes(":")) return null; // keyed on YouTube video ids only
-  const body = await getText(`https://api-lyrics.simpmusic.org/v1/${encodeURIComponent(q.id)}`);
-  if (!body) return null;
-  try {
-    const json = JSON.parse(body);
-    if (!json?.success || !Array.isArray(json?.data)) return null;
-    const tolerance = 10;
-    const track = (json.data as any[])
-      .filter((t) => q.duration <= 0 || Math.abs((t.duration ?? 0) - q.duration) <= tolerance)
-      .sort((a, b) => Math.abs((a.duration ?? 0) - q.duration) - Math.abs((b.duration ?? 0) - q.duration))[0];
-    if (!track) return null;
-    const rich = typeof track.richSyncLyrics === "string" && track.richSyncLyrics.trim() ? parseEnhancedLrc(track.richSyncLyrics) : [];
-    if (rich.length) return toResult("SimpMusic", rich);
-    const synced = typeof track.syncedLyrics === "string" && track.syncedLyrics.trim() ? parseLrc(track.syncedLyrics) : [];
-    if (synced.length) return toResult("SimpMusic", synced);
-    return null;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 /* -------------------------------- KuGou --------------------------------- */
@@ -1093,12 +1354,37 @@ function kugouStripCredits(lrc: string): string {
   return body.slice(0, body.length - tailCut).join("\n");
 }
 
+/**
+ * A downloaded KuGou file as lyrics. Null for its "纯音乐，请欣赏" ("pure music,
+ * please enjoy") notice, and when the file names another recording — in its
+ * opening "Title - Artist" line, else in its [ti:]/[ar:] tags. A remix or a
+ * DJ edit is filed under the plain title in the search, and only the file
+ * itself says what it is. `mustName`: a file that names nothing is refused.
+ * `length`: the candidate's own seconds, for credits in another script.
+ */
+export function kugouLines(lrc: string, q: LyricQuery, mustName: boolean, length?: number | null): SyncedLyricLine[] | null {
+  const lines = parseLrc(kugouStripCredits(lrc));
+  if (!lines.length || lines.every((l) => !l.text.trim() || /纯音乐|純音樂/.test(l.text))) return null;
+  // The name line is read before the 词/曲 credits next to it are cut away together with it.
+  let fits = openingNameFits(parseLrc(lrc), q, length);
+  if (fits === null) {
+    const tag = (key: string): string => new RegExp(`^\\[${key}:(.*)\\]\\s*$`, "im").exec(lrc)?.[1]?.trim() ?? "";
+    if (tag("ti")) fits = namesRecording(tag("ti"), tag("ar"), q, { length });
+  }
+  if (fits === false || (mustName && fits !== true)) return null;
+  const sung = withoutOpening(lines);
+  return sung.length ? sung : null;
+}
+
 async function fetchKuGou(q: LyricQuery): Promise<ProviderResult | null> {
   const stripParen = (s: string): string => s.replace(/[(（].*?[)）]/g, "").trim() || s;
-  // "Title - Artist", or just the title when the row carried no real credit.
-  const keyword = [stripParen(cleanTitle(q.title)), stripParen(primaryArtist(q.artist || ""))]
+  // BitChord's keyword: "Title - Artist", then the album when there is one.
+  const keyword = [
+    [stripParen(searchTitle(q.title)), stripParen(searchArtist(q.artist || ""))].filter(Boolean).join(" - "),
+    q.album ? cleanTitle(q.album) : "",
+  ]
     .filter(Boolean)
-    .join(" - ");
+    .join(" ");
   const seconds = Math.round(q.duration);
 
   const download = async (id: string, accessKey: string): Promise<string | null> => {
@@ -1135,18 +1421,25 @@ async function fetchKuGou(q: LyricQuery): Promise<ProviderResult | null> {
       const json = JSON.parse(body);
       const candidates = Array.isArray(json?.candidates) ? json.candidates : [];
       return (candidates as any[])
-        .map((c: any) => ({
-          id: String(c?.id ?? ""),
-          accesskey: String(c?.accesskey ?? ""),
-          duration: Number(c?.duration) || 0,
-        }))
+        .map((c: any) => {
+          const d = Number(c?.duration) || 0;
+          return {
+            id: String(c?.id ?? ""),
+            accesskey: String(c?.accesskey ?? ""),
+            song: String(c?.song ?? ""),
+            // Milliseconds, like the duration it was asked with.
+            duration: d > 10000 ? d / 1000 : d,
+          };
+        })
         .filter((c) => c.id && c.accesskey);
     } catch {
       return [];
     }
   };
 
-  // Path 1: hash chain, restricted to cuts within tolerance.
+  // Path 1: hash chain, restricted to songs that name the playing recording
+  // (the row's songname carries its version — "Despacito (DNMO Remix)",
+  // "Despacito 缓缓 (Mandarin Version)") and run within tolerance of it.
   if (seconds > 0) {
     const songBody = await getText(
       `https://mobileservice.kugou.com/api/v3/search/song?${new URLSearchParams({
@@ -1160,20 +1453,26 @@ async function fetchKuGou(q: LyricQuery): Promise<ProviderResult | null> {
     if (songBody) {
       try {
         const json = JSON.parse(songBody);
-        const info: { hash?: string; duration?: number }[] = json?.data?.info ?? [];
-        const hashes = info
-          .filter((i) => i.hash && Math.abs((i.duration ?? -1) - seconds) <= KUGOU_TOLERANCE)
-          .sort((a, b) => Math.abs((a.duration ?? 0) - seconds) - Math.abs((b.duration ?? 0) - seconds))
-          .map((i) => i.hash as string);
-        for (const hash of hashes) {
-          const candidates = await searchLyrics({ hash });
-          if (candidates.length) {
-            const lrc = await download(candidates[0].id, candidates[0].accesskey);
-            if (lrc) {
-              const lines = parseLrc(kugouStripCredits(lrc));
-              if (lines.length) return toResult("KuGou", lines);
-            }
-          }
+        const info: { hash?: string; duration?: number; songname?: string; singername?: string }[] =
+          json?.data?.info ?? [];
+        const rows = info
+          .filter(
+            (i) =>
+              i.hash &&
+              Math.abs((i.duration ?? -1) - seconds) <= KUGOU_TOLERANCE &&
+              namesRecording(i.songname ?? "", i.singername ?? "", q, { length: i.duration })
+          )
+          .sort((a, b) => Math.abs((a.duration ?? 0) - seconds) - Math.abs((b.duration ?? 0) - seconds));
+        for (const row of rows) {
+          // The lyric files filed under a song's hash can be for its other cuts too.
+          const song = recordingName(row.songname ?? "");
+          const candidate = (await searchLyrics({ hash: row.hash })).find(
+            (c) => !c.song || sameName(recordingName(c.song), song)
+          );
+          if (!candidate) continue;
+          const lrc = await download(candidate.id, candidate.accesskey);
+          const lines = lrc ? kugouLines(lrc, q, false, candidate.duration || row.duration) : null;
+          if (lines) return toResult("KuGou", lines);
         }
       } catch {
         /* fall through to the keyword path */
@@ -1182,20 +1481,15 @@ async function fetchKuGou(q: LyricQuery): Promise<ProviderResult | null> {
   }
 
   // Path 2: keyword search fallback, scored by runtime proximity so the
-  // studio cut doesn't outrank the sped-up edit that shares its name. An
-  // upload that names an edition only accepts cuts within tolerance — a
-  // different tempo never syncs, no matter the offset.
+  // studio cut doesn't outrank the sped-up edit that shares its name. Nothing
+  // here has been checked against the playing recording, so the file has to
+  // name it.
   const candidates = await searchLyrics({ keyword, seconds });
   if (candidates.length) {
     let pool = candidates;
     if (seconds > 0) {
       const near = pool.filter((c) => withinTolerance(c.duration, seconds));
-      if (editionOf(q.title || "")) {
-        if (!near.length) return null; // only the wrong edition answered
-        pool = near;
-      } else if (near.length) {
-        pool = near;
-      }
+      if (near.length) pool = near;
     }
     pool = [...pool].sort(
       (a, b) =>
@@ -1203,10 +1497,8 @@ async function fetchKuGou(q: LyricQuery): Promise<ProviderResult | null> {
     );
     for (const candidate of pool.slice(0, 3)) {
       const lrc = await download(candidate.id, candidate.accesskey);
-      if (lrc) {
-        const lines = parseLrc(kugouStripCredits(lrc));
-        if (lines.length) return toResult("KuGou", lines);
-      }
+      const lines = lrc ? kugouLines(lrc, q, true, candidate.duration) : null;
+      if (lines) return toResult("KuGou", lines);
     }
   }
   return null;
@@ -1234,54 +1526,63 @@ function lyricsFromLrclibRecord(rec: any): ProviderResult | null {
 }
 
 async function fetchLrclib(q: LyricQuery): Promise<ProviderResult | null> {
-  const artist = primaryArtist(q.artist || "");
+  const artist = searchArtist(q.artist || "");
   const stripped = queryTitle(q.title || "");
   if (!stripped) return null;
   const enc = encodeURIComponent;
-  const edition = editionOf(q.title || "");
   // The rendition the upload names is queried first: "(Sped Up)" is a real
   // catalogue entry often enough, and the stripped title can only ever
   // answer with the normal cut.
   const full = cleanTitle(q.title || "").trim();
   const titles = full && full.toLowerCase() !== stripped.toLowerCase() ? [full, stripped] : [stripped];
 
+  let plainOnly: ProviderResult | null = null;
   for (const title of titles) {
     if (artist && q.duration > 0) {
       const album = q.album ? `&album_name=${enc(cleanTitle(q.album))}` : "";
       const rec = await lrclibGet(
         `/get?artist_name=${enc(artist)}&track_name=${enc(title)}${album}&duration=${Math.round(q.duration)}`
       );
-      const exact = lyricsFromLrclibRecord(rec);
-      if (exact) return exact;
+      // Asked with the stripped title, /get answers with the plain song for a
+      // version upload ("Bailando" for "Bailando (English Version)").
+      const exact = rec && namesRecording(String(rec.trackName ?? ""), String(rec.artistName ?? ""), q, { length: rec.duration })
+        ? lyricsFromLrclibRecord(rec)
+        : null;
+      // BitChord's exactMatch takes synced lyrics only: a plain-only record can have a synced sibling the searches find.
+      if (exact?.lines.length) return exact;
+      plainOnly = plainOnly ?? exact;
     }
     if (artist) {
       const results = await lrclibGet(`/search?track_name=${enc(title)}&artist_name=${enc(artist)}`);
-      const hit = pickLrclibSearchHit(results, q, edition);
+      const hit = pickLrclibSearchHit(results, q);
       if (hit) return hit;
     }
   }
   const qResults = await lrclibGet(`/search?q=${enc(`${artist} ${stripped}`.trim())}`);
-  return pickLrclibSearchHit(qResults, q, edition);
+  return pickLrclibSearchHit(qResults, q) ?? plainOnly;
 }
 
 /**
- * Of the search records carrying synced lyrics, take the one whose own
- * runtime sits closest to the playing track — BitChord mobile's rule, and
- * the difference between the studio cut and the sped-up edit that shares
- * its name. When the upload itself names an edition, "closest" tightens to
- * "within tolerance": the studio cut is rejected outright, because no
- * offset can repair a different tempo.
+ * Of the search records carrying synced lyrics that name the playing
+ * recording, take the one whose own runtime sits closest to the playing
+ * track — BitChord mobile's rule, and the difference between the studio cut
+ * and the sped-up edit that shares its name. With no credit to check, the
+ * length has to carry the match: only a record within tolerance.
  */
-function pickLrclibSearchHit(results: any, q: LyricQuery, edition: string | null): ProviderResult | null {
+function pickLrclibSearchHit(results: any, q: LyricQuery): ProviderResult | null {
   if (!Array.isArray(results)) return null;
   const synced = results.filter(
-    (rec: any) => typeof rec?.syncedLyrics === "string" && rec.syncedLyrics.trim()
+    (rec: any) =>
+      typeof rec?.syncedLyrics === "string" &&
+      rec.syncedLyrics.trim() &&
+      namesRecording(String(rec?.trackName ?? ""), String(rec?.artistName ?? ""), q, { length: rec?.duration })
   );
   if (!synced.length) return null;
+  const credited = artistNames(q.artist || "").length > 0;
   const seconds = Math.round(q.duration);
-  if (seconds <= 0) return lyricsFromLrclibRecord(synced[0]);
+  if (seconds <= 0) return credited ? lyricsFromLrclibRecord(synced[0]) : null;
   const near = synced.filter((rec: any) => withinTolerance(rec?.duration, seconds));
-  if (edition && !near.length) return null; // only the wrong edition answered
+  if (!credited && !near.length) return null;
   const pool = near.length ? near : synced;
   const best = pool.reduce((a: any, b: any) =>
     Math.abs((b?.duration ?? 1e9) - seconds) < Math.abs((a?.duration ?? 1e9) - seconds) ? b : a
@@ -1289,21 +1590,193 @@ function pickLrclibSearchHit(results: any, q: LyricQuery, edition: string | null
   return lyricsFromLrclibRecord(best);
 }
 
+/* -------------------------------- lrc.red -------------------------------- */
+
+/**
+ * lrc.red — Apple Music TTML, per syllable, filed by ISRC: every document
+ * lives at https://lrc.red/s/{ISRC}.ttml, so a track whose recording is
+ * already known costs one request and cannot come back as the wrong edit.
+ * The recording comes from the identify step (BiniLyrics' search, below) or
+ * from an earlier play of the same video. Without one, lrc.red's own search
+ * is asked, and its hits are matched here rather than trusted in order — the
+ * search is a free-text one and ranks "Bohemian Rhapsody (Operatic Section /
+ * 2011 A Cappella Mix)" above the song itself. (BitChord's LrcRed, ported.)
+ */
+const LRCRED = "https://lrc.red";
+const IDENTIFY_TIMEOUT_MS = 2500;
+
+/**
+ * How far a hit's length may be from the playing track's — BitChord's figure.
+ * YouTube reports whole seconds and the same recording lists within one or
+ * two of that; a radio edit sits further out, and the version words have to
+ * tell the closer cases apart.
+ */
+const LRCRED_TOLERANCE_SEC = 3;
+
+/** `CC-XXX-YY-NNNNN` without the dashes — and nothing else goes into a path. */
+const ISRC_FORMAT = /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/;
+
+/** The document a recording's lyrics live at, for a well-formed ISRC only. */
+function lrcRedDocument(isrc: string | null | undefined): string | null {
+  const code = (isrc ?? "").trim().toUpperCase();
+  return ISRC_FORMAT.test(code) ? `${LRCRED}/s/${code}.ttml` : null;
+}
+
+/** How one lookup fetches a document — shared, because lrc.red and BiniLyrics want the very same file. */
+type DocumentFetch = (url: string) => Promise<string | null>;
+
+function sharedDocuments(): DocumentFetch {
+  const inFlight = new Map<string, Promise<string | null>>();
+  return (url) => {
+    let doc = inFlight.get(url);
+    if (!doc) {
+      doc = getText(url, 7000, { Accept: "*/*" });
+      inFlight.set(url, doc);
+    }
+    return doc;
+  };
+}
+
+async function ttmlAnswer(source: string, url: string | null, get: DocumentFetch): Promise<ProviderResult | null> {
+  if (!url) return null;
+  const ttml = await get(url);
+  return ttml ? toResult(source, parseTtml(ttml)) : null;
+}
+
+/** One lrc.red search hit (`/search.json`). */
+export interface LrcRedHit {
+  isrc?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  /** seconds, fractional */
+  duration?: number;
+}
+
+/**
+ * The hit that is the playing recording, or null if none surely is. A miss is
+ * recoverable — the sources behind this one get their turn — and the wrong
+ * words scrolling in time with the right song are not, so every test is a
+ * requirement rather than a score: a well-formed ISRC, the same song and
+ * version words with a shared artist (namesRecording), and a length within
+ * LRCRED_TOLERANCE_SEC when both are known. With no credit to check, a name
+ * alone is not enough. Of the hits that pass: the playing album's, then the
+ * closest in length, then the search's own order.
+ */
+export function pickLrcRedHit(
+  hits: LrcRedHit[],
+  q: Pick<LyricQuery, "title" | "artist" | "duration" | "album">
+): LrcRedHit | null {
+  const timed = q.duration > 0;
+  if (!timed && !artistNames(q.artist || "").length) return null;
+  const gap = (h: LrcRedHit): number => (timed && h.duration != null ? Math.abs(Number(h.duration) - q.duration) : 0);
+  const album = plainWords(releaseName(q.album || ""));
+  const fromAlbum = (h: LrcRedHit): number => (album && plainWords(releaseName(h.album ?? "")) === album ? 0 : 1);
+  return (
+    hits
+      .filter(
+        (h) =>
+          !!lrcRedDocument(h?.isrc) &&
+          (namesRecording(h.title ?? "", h.artist ?? "", q, { length: h.duration }) ||
+            namesReleaseRecording(h.title ?? "", h.artist ?? "", h.album, q)) &&
+          gap(h) <= LRCRED_TOLERANCE_SEC
+      )
+      .sort((a, b) => fromAlbum(a) - fromAlbum(b) || gap(a) - gap(b))[0] ?? null
+  );
+}
+
+/** An album name without the store's " - Single" / " - EP" suffix. */
+function releaseName(album: string): string {
+  return cleanTitle(album).replace(/\s+[-–]\s+(?:single|ep)\s*$/i, "");
+}
+
+/**
+ * An entry of the playing release named as the release is, when the playing
+ * title is that name without its version words: YT Music files the single
+ * "Despacito (Versión Pop)" as "Despacito", and Apple as "Despacito (Versión
+ * Pop)". Only on the playing album, so a plain title never borrows another
+ * release's version.
+ */
+function namesReleaseRecording(
+  name: string,
+  artist: string,
+  album: string | undefined,
+  q: Pick<LyricQuery, "title" | "artist" | "album">
+): boolean {
+  if (!q.album || plainWords(releaseName(album ?? "")) !== plainWords(releaseName(q.album))) return false;
+  const release = releaseName(q.album);
+  const r = recordingName(release);
+  const t = recordingName(q.title || "");
+  return !!r.versions && !t.versions && r.core === t.core && namesRecording(name, artist, { title: release, artist: q.artist });
+}
+
+async function lrcRedSearch(q: LyricQuery): Promise<LrcRedHit[]> {
+  const term = [searchTitle(q.title), searchArtist(q.artist || "")].filter(Boolean).join(" ");
+  const body = await getText(`${LRCRED}/search.json?${new URLSearchParams({ q: term }).toString()}`);
+  if (!body) return [];
+  try {
+    const hits = JSON.parse(body)?.hits;
+    return Array.isArray(hits) ? hits : [];
+  } catch {
+    return [];
+  }
+}
+
+async function fetchLrcRed(
+  q: LyricQuery,
+  recording: Promise<RecordingHit | null>,
+  get: DocumentFetch
+): Promise<ProviderResult | null> {
+  const identified = recording.then((hit) => lrcRedDocument(hit?.isrc));
+  const search = (): Promise<string | null> =>
+    lrcRedSearch(q).then((hits) => lrcRedDocument(pickLrcRedHit(hits, q)?.isrc));
+  // BitChord's order: the recording identify named, and lrc.red's own search
+  // only when it named none. The search starts alongside, so a miss costs no
+  // extra round trip, but it never goes first: one song released in four
+  // languages at one length ties every test, and the search's pick among them
+  // is arbitrary. (A recording remembered from an earlier play needs no search.)
+  const searched = q.id && isrcCache.has(q.id) ? null : search();
+  const doc = (await identified) ?? (searched ? await searched : null);
+  const answer = await ttmlAnswer("lrc.red", doc, get);
+  if (answer) return answer;
+  // A recording lrc.red has no document for is often filed under a sibling
+  // release's code, so the other way of naming it still gets its turn.
+  const other = (await Promise.all([identified, searched ?? search()])).find((d) => d && d !== doc) ?? null;
+  return other ? ttmlAnswer("lrc.red", other, get) : null;
+}
+
 /* ------------------------------ BiniLyrics ------------------------------- */
 
 /**
- * Apple Music TTML from the Bini backend — and the only source here that
- * will answer to a recording rather than to a name. Its search also reports
- * the ISRC of whatever it matched, which is remembered against the video id
- * and handed to the sources that can use it (LyricsPlus takes one; Bini's own
- * re-lookups go straight to the recording).
+ * Apple Music TTML through the Bini backend — the one search here that will
+ * answer to a recording rather than to a name, and that reports the ISRC of
+ * what it matched. It runs first, as the identify step: its answer is a name
+ * every other source can use (lrc.red fetches that recording's document,
+ * LyricsPlus asks for it by ISRC), and it is remembered against the video id
+ * so a track asked about twice pays for it once. It is asked with the album
+ * too, which the backend takes as a strict filter: a hit is that very
+ * release. BitChord takes the first row as it comes; here it must also name
+ * the playing recording, the same test lrc.red's hits pass. Its document is
+ * lrc.red's file, fetched once between the two. (BitChord's BiniLyrics.)
  */
-const BINI_BASE = "https://lyrics-api.binimum.org";
-const IDENTIFY_TIMEOUT_MS = 2500;
+const BINI = "https://lyrics-api.binimum.org/";
 
 interface RecordingHit {
   isrc: string | null;
   lyricsUrl: string | null;
+}
+
+/** One row of a Bini search (the lrc.red catalogue behind it). */
+export interface LrcRedRow {
+  isrc?: string;
+  lyricsUrl?: string;
+  track_name?: string;
+  artist_name?: string;
+  album_name?: string;
+  /** seconds, sent as a string */
+  duration?: string | number;
+  /** "word", "line" or "none" (no lyrics) */
+  timing_type?: string;
 }
 
 const isrcCache = new Map<string, string>();
@@ -1319,81 +1792,103 @@ function rememberIsrc(videoId: string, isrc: string): void {
   }
 }
 
-interface BiniSearchParams {
-  isrc?: string;
-  track?: string;
-  artist?: string;
-  album?: string;
-  duration?: number;
-}
-
-async function biniSearch(opts: BiniSearchParams): Promise<RecordingHit | null> {
-  const params = new URLSearchParams();
-  if (opts.isrc) {
-    // Nothing else is worth sending: the recording is named, and a title
-    // alongside it could only ever disagree with it.
-    params.set("isrc", opts.isrc);
-  } else {
-    if (!opts.track) return null;
-    params.set("track", opts.track);
-    if (opts.artist) params.set("artist", opts.artist);
-    if (opts.album) params.set("album", opts.album);
-    if (opts.duration && opts.duration > 0) params.set("duration", String(Math.round(opts.duration)));
-  }
-  const body = await getText(`${BINI_BASE}/?${params.toString()}`, 2500);
-  if (!body) return null;
+async function biniSearch(params: Record<string, string>): Promise<LrcRedRow[]> {
+  const body = await getText(`${BINI}?${new URLSearchParams(params).toString()}`);
+  if (!body) return [];
   try {
     const json = JSON.parse(body);
-    const hit = Array.isArray(json?.results) ? json.results[0] : null;
-    if (!hit) return null;
-    return { isrc: hit.isrc ?? null, lyricsUrl: hit.lyricsUrl ?? null };
+    return Array.isArray(json?.results) ? json.results : [];
   } catch {
-    return null;
+    return [];
   }
 }
 
 /**
- * Which recording this is, before anybody is asked for words. One small
- * search; its ISRC is kept against the video id so a track asked about twice
- * pays for this once. Capped well under the sweep deadline — a slow identify
- * is a skipped source, never a late lyric.
+ * The row that IS the playing recording. The backend ranks on runtime —
+ * "Despacito (Mandarin Version)" or "Baby (Acoustic)" comes first whenever it
+ * runs a second closer — so a row must carry timed words, name the playing
+ * recording and fit within LRCRED_TOLERANCE_SEC; with no credit to check, the
+ * length is required. A music video — no album, no version words, a credit —
+ * may run past the catalogue cut it was filmed to (BitChord's identify takes
+ * its row at any length), and the renderer's onset alignment takes up the
+ * intro; nothing repairs an upload shorter than the cut. Of the rows that
+ * pass: one within tolerance, then the playing album's, then word timing over
+ * line timing, then the closest length.
  */
-function identifyRecording(q: LyricQuery): Promise<RecordingHit | null> {
-  const cached = q.id ? isrcCache.get(q.id) : undefined;
-  if (cached) return Promise.resolve({ isrc: cached, lyricsUrl: null });
-  const search = biniSearch({
-    track: cleanTitle(q.title || ""),
-    artist: primaryArtist(q.artist || ""),
-    album: q.album ? cleanTitle(q.album) : undefined,
-    duration: q.duration,
-  })
-    .then((hit) => {
-      if (hit?.isrc && q.id) rememberIsrc(q.id, hit.isrc);
-      return hit;
-    })
-    .catch((): RecordingHit | null => null);
-  return Promise.race([
-    search,
-    new Promise<null>((resolve) => setTimeout(() => resolve(null), IDENTIFY_TIMEOUT_MS)),
-  ]);
+export function pickLrcRedRow(
+  rows: LrcRedRow[],
+  q: Pick<LyricQuery, "title" | "artist" | "duration" | "album">
+): LrcRedRow | null {
+  const timed = q.duration > 0;
+  if (!timed && !artistNames(q.artist || "").length) return null;
+  const gap = (r: LrcRedRow): number => (timed ? Math.abs(Number(r.duration) - q.duration) : 0);
+  const close = (r: LrcRedRow): boolean => !timed || gap(r) <= LRCRED_TOLERANCE_SEC;
+  const video = !q.album && !recordingName(q.title || "").versions && artistNames(q.artist || "").length > 0;
+  const fits = rows.filter(
+    (r) =>
+      !!lrcRedDocument(r?.isrc) &&
+      !!r.lyricsUrl &&
+      (r.timing_type === "word" || r.timing_type === "line") &&
+      (namesRecording(r.track_name ?? "", r.artist_name ?? "", q, { length: r.duration }) ||
+        namesReleaseRecording(r.track_name ?? "", r.artist_name ?? "", r.album_name, q)) &&
+      (close(r) || (video && artistNames(r.artist_name ?? "").length > 0 && Number(r.duration) < q.duration))
+  );
+  const album = plainWords(releaseName(q.album || ""));
+  const fromAlbum = (r: LrcRedRow): number => (album && plainWords(releaseName(r.album_name ?? "")) === album ? 0 : 1);
+  fits.sort(
+    (a, b) =>
+      Number(close(b)) - Number(close(a)) ||
+      fromAlbum(a) - fromAlbum(b) ||
+      Number(b.timing_type === "word") - Number(a.timing_type === "word") ||
+      gap(a) - gap(b)
+  );
+  return fits[0] ?? null;
 }
 
-async function fetchBini(q: LyricQuery, hitPromise: Promise<RecordingHit | null>): Promise<ProviderResult | null> {
-  const hit = await hitPromise;
-  if (!hit) return null;
-  let url = hit.lyricsUrl;
-  // A remembered ISRC names the recording but carries no document URL — one
-  // exact search fills it in.
-  if (!url && hit.isrc) {
-    const fresh = await biniSearch({ isrc: hit.isrc });
-    if (!fresh?.lyricsUrl) return null;
-    url = fresh.lyricsUrl;
+/**
+ * Which recording this is, before anybody is asked for words. `hit` is capped
+ * at IDENTIFY_TIMEOUT_MS — knowing the recording makes every match better,
+ * but a lyrics view held up by one slow host is a worse failure than a fuzzy
+ * match; `full` is the same search uncapped, for BiniLyrics' own answer.
+ */
+function identifyRecording(q: LyricQuery): { hit: Promise<RecordingHit | null>; full: Promise<RecordingHit | null> } {
+  const cached = q.id ? isrcCache.get(q.id) : undefined;
+  if (cached) {
+    const known = Promise.resolve({ isrc: cached, lyricsUrl: null });
+    return { hit: known, full: known };
   }
-  if (!url) return null;
-  const ttml = await getText(url, 7000, { Accept: "*/*" });
-  if (!ttml) return null;
-  const lines = parseTtml(ttml);
-  return lines.length ? toResult("BiniLyrics", lines) : null;
+  const params: Record<string, string> = { track: searchTitle(q.title || "") };
+  const artist = searchArtist(q.artist || "");
+  if (artist) params.artist = artist;
+  if (q.album) params.album = cleanTitle(q.album);
+  if (q.duration > 0) params.duration = String(Math.round(q.duration));
+  const full = biniSearch(params)
+    .then((rows): RecordingHit | null => {
+      const row = pickLrcRedRow(rows, q);
+      if (!row?.isrc) return null;
+      // A pick made on title and length alone is a guess: used for this play,
+      // never remembered for the next one.
+      if (q.id && artistNames(q.artist || "").length) rememberIsrc(q.id, row.isrc);
+      return { isrc: row.isrc, lyricsUrl: row.lyricsUrl ?? null };
+    })
+    .catch((): RecordingHit | null => null);
+  const hit = Promise.race([
+    full,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), IDENTIFY_TIMEOUT_MS)),
+  ]);
+  return { hit, full };
+}
+
+async function fetchBini(recording: Promise<RecordingHit | null>, get: DocumentFetch): Promise<ProviderResult | null> {
+  const hit = await recording;
+  let url = hit?.lyricsUrl ?? null;
+  // A remembered recording carries no document address: ask for it by ISRC.
+  // Nothing else is worth sending — a title alongside could only disagree.
+  if (!url && hit?.isrc) {
+    const isrc = hit.isrc;
+    url = (await biniSearch({ isrc })).find((r) => r?.isrc === isrc)?.lyricsUrl ?? null;
+  }
+  return ttmlAnswer("BiniLyrics", url, get);
 }
 
 /* -------------------------- BetterLyrics Portato ------------------------- */
@@ -1409,21 +1904,13 @@ async function fetchBini(q: LyricQuery, hitPromise: Promise<RecordingHit | null>
 let portatoKeyGated = false;
 
 async function fetchPortato(q: LyricQuery): Promise<ProviderResult | null> {
-  if (portatoKeyGated) return null;
-  const stripped = queryTitle(q.title);
-  const full = cleanTitle(q.title).trim();
-  const titles = full && full.toLowerCase() !== stripped.toLowerCase() ? [full, stripped] : [stripped];
-  const attempt = (title: string, withDuration: boolean): string => {
-    const params = new URLSearchParams({ s: title, a: primaryArtist(q.artist || "") });
-    if (withDuration && q.duration > 0) params.set("d", String(Math.round(q.duration)));
+  // Asked like BetterLyrics, once per form of the credit.
+  for (const a of creditForms(q.artist || "")) {
+    if (portatoKeyGated) return null;
+    const params = new URLSearchParams({ s: searchTitle(q.title), a });
+    if (q.duration > 0) params.set("d", String(Math.round(q.duration)));
     if (q.album) params.set("al", cleanTitle(q.album));
-    return `https://lyrics-api.boidu.dev/qq/getLyrics?${params.toString()}`;
-  };
-  for (const title of titles) {
-    let body = await getText(attempt(title, true));
-    // Same rule as the other word-synced sources: a strict duration miss
-    // (YouTube video ≠ catalogue runtime) retries on title+artist alone.
-    if (!body && q.duration > 0) body = await getText(attempt(title, false));
+    const body = await getText(`https://lyrics-api.boidu.dev/qq/getLyrics?${params.toString()}`);
     if (!body) continue;
     if (/API key required/i.test(body)) {
       portatoKeyGated = true;
@@ -1432,7 +1919,13 @@ async function fetchPortato(q: LyricQuery): Promise<ProviderResult | null> {
     const parsed = parseProviderAny(body);
     if (!parsed) continue;
     if ("plain" in parsed) return { source: "Portato", wordSynced: false, lines: [], plainText: parsed.plain };
-    return toResult("Portato", parsed);
+    // QQ's file names its own recording in its opening line — the only place a
+    // live cut or another singer's version says what it is.
+    if (openingNameFits(parsed, q) === false) continue;
+    // Still sung after the track has ended: another song's file (QQ answered "벚꽃 엔딩" with 孤星泪 by 刘德华).
+    if (q.duration > 0 && parsed.some((l) => l.text.trim() && l.time > q.duration + LRCRED_TOLERANCE_SEC)) continue;
+    const found = toResult("Portato", withoutOpening(parsed));
+    if (found) return found;
   }
   return null;
 }
@@ -1446,23 +1939,34 @@ async function fetchPortato(q: LyricQuery): Promise<ProviderResult | null> {
  * Apple-style TTML, stamped LRC, or plain text with no timing at all.
  */
 async function fetchUnison(q: LyricQuery): Promise<ProviderResult | null> {
-  const artist = primaryArtist(q.artist || "");
+  const artist = searchArtist(q.artist || "");
   // The endpoint 400s on an empty artist rather than searching song-only.
   if (!artist) return null;
   const params = new URLSearchParams({
-    song: queryTitle(q.title),
+    song: searchTitle(q.title),
     artist,
   });
   if (q.album) params.set("album", cleanTitle(q.album));
   if (q.duration > 0) params.set("duration", String(Math.round(q.duration)));
   const body = await getText(`https://unison.boidu.dev/lyrics?${params.toString()}`);
   if (!body) return null;
-  let entry: { lyrics?: unknown; format?: unknown; syncType?: unknown };
+  let entry: { lyrics?: unknown; format?: unknown; syncType?: unknown; song?: unknown; artist?: unknown; videoId?: unknown };
   try {
     const json = JSON.parse(body);
     if (json?.success !== true) return null;
     entry = json.data ?? {};
   } catch {
+    return null;
+  }
+  // Contributed for a song by name, and matched within a couple of seconds:
+  // it must name the playing recording, version words and all — unless it was
+  // made for this very video.
+  if (
+    entry.videoId !== q.id &&
+    typeof entry.song === "string" &&
+    entry.song &&
+    !namesRecording(entry.song, String(entry.artist ?? ""), q)
+  ) {
     return null;
   }
   const text = typeof entry.lyrics === "string" ? entry.lyrics : "";
@@ -1475,10 +1979,8 @@ async function fetchUnison(q: LyricQuery): Promise<ProviderResult | null> {
       .join("\n");
     return joined ? { source: "Unison", wordSynced: false, lines: [], plainText: joined } : null;
   };
-  if (String(entry.format ?? "").toLowerCase() === "ttml") {
-    const lines = parseTtml(text);
-    if (lines.length) return toResult("Unison", lines);
-  }
+  // A TTML document nobody can read is no answer — never its markup shown as text (BitChord's Unison).
+  if (String(entry.format ?? "").toLowerCase() === "ttml") return toResult("Unison", parseTtml(text));
   if (String(entry.syncType ?? "").toLowerCase() === "plain") return plain();
   const enhanced = parseEnhancedLrc(text);
   if (enhanced.length) return toResult("Unison", enhanced);
@@ -1516,34 +2018,6 @@ async function fetchYouTubeMusic(
   return text && text.trim()
     ? { source: "YouTube Music", wordSynced: false, lines: [], plainText: text }
     : null;
-}
-
-/* ------------------------------- Megalobiz ------------------------------- */
-
-/** Line-synced community LRC scraped from Megalobiz. */
-async function fetchMegalobiz(q: LyricQuery): Promise<ProviderResult | null> {
-  const stripParen = (s: string): string => s.replace(/[(（].*?[)）]/g, "").trim() || s;
-  const keyword = [stripParen(primaryArtist(q.artist || "")), stripParen(queryTitle(q.title))]
-    .filter(Boolean)
-    .join(" ");
-  if (!keyword) return null;
-  const page = await getText(
-    `https://www.megalobiz.com/searchall?qry=${encodeURIComponent(keyword)}`,
-    7000,
-    { Accept: "text/html" }
-  );
-  if (!page) return null;
-  const path = /href=["']([^"']*\/lrc\/maker\/download\/[^"']+)["']/i.exec(page)?.[1];
-  if (!path) return null;
-  const detail = await getText(`https://www.megalobiz.com${path.replace(/&amp;/g, "&")}`, 7000, {
-    Accept: "text/html",
-  });
-  if (!detail) return null;
-  const raw = /id=["']lrc_[^"']*_details["'][^>]*>([\s\S]*?)<\/span>/i.exec(detail)?.[1];
-  if (!raw) return null;
-  const lrc = raw.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "");
-  const lines = parseLrc(decodeEntities(lrc));
-  return lines.some((l) => l.text.trim()) ? toResult("Megalobiz", lines) : null;
 }
 
 /* ------------------------------- Musixmatch ------------------------------ */
@@ -1613,14 +2087,27 @@ async function mxGetSecret(): Promise<string> {
   return mxSecret;
 }
 
+/** token.get answers some networks with a 403 for every client (BitChord's too): parked until restart, like Portato.
+ * Only on that status — a timeout or a 5xx at startup must not switch the source off where it works. */
+let mxBlocked = false;
+
 async function mxGetToken(secret: string): Promise<string | null> {
   if (mxToken) return mxToken;
+  if (mxBlocked) return null;
   const url = `${MUSIXMATCH_BASE}/token.get?${new URLSearchParams({
     app_id: MUSIXMATCH_APP_ID,
     guid: mxGuid,
     format: "json",
   })}`;
-  const body = await getText(mxSign(url, secret), 8000, { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9" });
+  const body = await getText(
+    mxSign(url, secret),
+    8000,
+    { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9" },
+    undefined,
+    (status) => {
+      if (status === 403) mxBlocked = true;
+    }
+  );
   if (!body) return null;
   try {
     const json = JSON.parse(body);
@@ -1771,7 +2258,7 @@ function mxSubtitleToLrc(body: string): string | null {
 }
 
 async function fetchMusixmatch(q: LyricQuery): Promise<ProviderResult | null> {
-  const artist = primaryArtist(q.artist || "");
+  const artist = searchArtist(q.artist || "");
   const seconds = Math.round(q.duration);
   const stripped = queryTitle(q.title);
   const full = cleanTitle(q.title).trim();
@@ -1807,6 +2294,9 @@ async function fetchMusixmatch(q: LyricQuery): Promise<ProviderResult | null> {
           hasSubtitles: t.has_subtitles ?? null,
           hasRichsync: t.has_richsync ?? null,
         };
+        // The score only ranks real matches; it never makes one — a same-artist
+        // live take near a music video's length used to outscore the song.
+        if (!namesRecording(candidate.trackName, candidate.artistName, q, { length: candidate.trackLength })) continue;
         if (!best || mxScore(candidate, title, artist, seconds) > mxScore(best, title, artist, seconds)) {
           best = candidate;
         }
@@ -1905,18 +2395,22 @@ function geniusCleanQuery(text: string): string {
 function geniusBestMatch(
   candidates: { url?: unknown; path?: unknown; title?: unknown; artistNames?: unknown }[],
   title: string,
-  artist: string
+  artist: string,
+  q: LyricQuery
 ): string | null {
   const normTitle = title.toLowerCase();
   const normArtist = artist.toLowerCase();
   let bestUrl: string | null = null;
   let bestScore = 0;
   for (const item of candidates) {
+    // Matched on the playing title with both names required: a title alone
+    // gave Adele's "Hello" to a Hindi film song of the same name. Plain text:
+    // a sped-up or slowed upload still reads the song's own page.
+    if (!namesRecording(String(item.title ?? ""), String(item.artistNames ?? ""), q, { plainText: true })) continue;
     const t = String(item.title ?? "").toLowerCase();
     const a = String(item.artistNames ?? "").toLowerCase();
     const titleMatches = !!normTitle && (t === normTitle || t.includes(normTitle) || normTitle.includes(t));
     const artistMatches = !!normArtist && (a === normArtist || a.includes(normArtist) || normArtist.includes(a));
-    if (!titleMatches && !artistMatches) continue;
     let score = 0;
     if (t === normTitle) score += 50;
     else if (titleMatches) score += 25;
@@ -1970,7 +2464,7 @@ async function geniusExtractLyrics(html: string): Promise<string | null> {
 }
 
 async function fetchGenius(q: LyricQuery): Promise<ProviderResult | null> {
-  const artist = primaryArtist(q.artist || "");
+  const artist = searchArtist(q.artist || "");
   const title = queryTitle(q.title);
   if (!title) return null;
   const cleanTitle2 = geniusCleanQuery(title);
@@ -2005,7 +2499,7 @@ async function fetchGenius(q: LyricQuery): Promise<ProviderResult | null> {
         .map((h) => h?.result)
         .filter(Boolean)
         .map((r) => ({ url: r.url, path: r.path, title: r.title, artistNames: r.artist_names }));
-      const best = geniusBestMatch(candidates, attempt.title, attempt.artist);
+      const best = geniusBestMatch(candidates, attempt.title, attempt.artist, q);
       if (best) {
         songUrl = best;
         break;
@@ -2030,182 +2524,155 @@ export interface FetchedLyrics {
   plain: string | null;
 }
 
-/**
- * Collect the provider sweep's answers as they land, but stop waiting at the
- * deadline: healthy sources answer in a few hundred milliseconds, while the
- * slow chains (a cold Apple token scrape, Musixmatch's signed handshake, a
- * KuGou hash walk) can run for several seconds — and an all-settled wait made
- * every track's lyrics late by the slowest provider. At the deadline the pick
- * runs on whatever has landed, while the stragglers keep running in the
- * background where they still warm their session caches (Apple token,
- * Musixmatch secret, last-good LyricsPlus mirror) for the next track.
- *
- * When NOTHING has landed by the fast deadline the wait extends once: on an
- * obscure track the slow chains are often the only ones that carry it, and
- * cutting them at 1.5s would answer "no lyrics" to exactly the songs the
- * sweep was asked for. The extension is bounded (HARD_DEADLINE) so a sweep
- * can never hold the view open indefinitely; a genuinely dead network still
- * resolves fast, because its providers fail their connections rather than
- * hang.
- */
-const SWEEP_DEADLINE_MS = 1500;
-const SWEEP_HARD_DEADLINE_MS = 5000;
-
-async function settledWithin(
-  jobs: Promise<ProviderResult | null>[]
-): Promise<{ results: (ProviderResult | null)[]; arrived: boolean[] }> {
-  const results: (ProviderResult | null)[] = new Array(jobs.length).fill(null);
-  const arrived: boolean[] = new Array(jobs.length).fill(false);
-  return new Promise((resolve) => {
-    let pending = jobs.length;
-    let finished = false;
-    const finish = (): void => {
-      if (!finished) {
-        finished = true;
-        clearTimeout(fastTimer);
-        clearTimeout(hardTimer);
-        resolve({ results, arrived });
-      }
-    };
-    const fastTimer = setTimeout(() => {
-      // A provider that merely SETTLED isn't enough — with fourteen sources,
-      // the quick failures (a gated endpoint, a 403, a miss) always beat the
-      // slow chains, and settling on them would turn the extension off for
-      // exactly the obscure tracks it exists for. Only a usable answer ends
-      // the fast window.
-      if (results.some(Boolean)) finish();
-    }, SWEEP_DEADLINE_MS);
-    const hardTimer = setTimeout(finish, SWEEP_HARD_DEADLINE_MS);
-    // Each job already swallows its own rejections (.catch → null).
-    jobs.forEach((job, i) => {
-      void job.then((v) => {
-        results[i] = v;
-        arrived[i] = true;
-        if (--pending === 0) {
-          finish();
-        }
-      });
-    });
-  });
+/** A local file's own lyrics tag, when it is timed LRC — BitChord's EmbeddedLyrics, read before any source is
+ * asked. Untimed text is no answer here: the sources are asked instead. */
+export function embeddedLrc(raw: string): FetchedLyrics | null {
+  const word = parseEnhancedLrc(raw);
+  // Credited "Lyrics from this file".
+  const r = toResult("this file", word.length ? word : parseLrc(raw));
+  return r?.lines.some((l) => l.text.trim()) ? { source: r.source, wordSynced: r.wordSynced, synced: r.lines, plain: null } : null;
 }
 
 /**
- * Default priority order — BitChord mobile's: the word-synced sources lead
- * (BiniLyrics, BetterLyrics, Portato, PaxSenix, LyricsPlus, SimpMusic),
- * then Unison and the playing video's own captions/lyrics tab, then the
- * line-synced workhorses (Megalobiz, KuGou, LRCLIB, Musixmatch), with
- * Genius's plain text last. Every provider is asked at once; answers are
- * taken in priority order. The sweep is deadline-bounded (settledWithin) so
- * the lyrics land within ~1.5s of the track change even when a provider
- * chain crawls.
+ * The longest a lookup waits for the racing sources. BitChord waits on each
+ * source only as long as that source's own requests allow; this is the safety
+ * net under that — for a chain of slow requests, or a promise that never
+ * settles. When it passes, the pick goes on with whatever has landed. Genius,
+ * asked only when nothing answered, is bounded by its own request timeouts.
  */
+const SWEEP_CEILING_MS = 12_000;
+
+/**
+ * Take the sources' answers in priority order — BitChord's loop. Every source
+ * but the lazy ones is asked at once, and their answers are awaited one at a
+ * time in order, so a lower source finishing first never beats one still
+ * pending above it. A word-timed answer wins outright; with
+ * `prioritizeWordSync` off (BitChord's default) so does any timed answer —
+ * priority is priority. Otherwise the first answer is kept as the fallback
+ * and the rest of the list is searched for word timing. A lazy source (Genius,
+ * a scraper) is only asked when nothing above it answered at all.
+ */
+export async function takeInPriorityOrder(
+  starts: (() => Promise<ProviderResult | null>)[],
+  lazy: boolean[],
+  prioritizeWordSync: boolean,
+  ceilingMs = SWEEP_CEILING_MS
+): Promise<{ pick: ProviderResult | null; settled: Map<number, ProviderResult | null> }> {
+  const settled = new Map<number, ProviderResult | null>();
+  const begin = (i: number): Promise<ProviderResult | null> =>
+    starts[i]()
+      .catch((): ProviderResult | null => null)
+      .then((r) => {
+        settled.set(i, r);
+        return r;
+      });
+  const racing: (Promise<ProviderResult | null> | null)[] = starts.map((_, i) => (lazy[i] ? null : begin(i)));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const ceiling = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ceilingMs);
+  });
+  try {
+    let fallback: ProviderResult | null = null;
+    for (let i = 0; i < starts.length; i++) {
+      if (lazy[i] && fallback) continue;
+      const job = racing[i] ?? (racing[i] = begin(i));
+      // A lazy source runs whenever nothing answered (BitChord), however late that is.
+      const found = lazy[i] ? await job : await Promise.race([job, ceiling]);
+      if (!found) continue;
+      if (found.wordSynced || (!prioritizeWordSync && found.lines.length > 0)) return { pick: found, settled };
+      fallback = fallback ?? found;
+    }
+    return { pick: fallback, settled };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The sources, in BitChord's default order: the Apple hosts lead (lrc.red,
+ * then BiniLyrics, which names the recording for the rest), then QQ's karaoke
+ * timings, LyricsPlus' syllables and Unison's contributions; the playing
+ * video's own captions and Lyrics tab; the line-synced workhorses; and
+ * Genius's plain text last, asked only when nothing else answered. (BitChord
+ * keeps SimpMusic and Megalobiz hidden — one answers every request with a
+ * Cloudflare 403, the other's site lost its search page — and its two
+ * PaxSenix variants need a PaxSenix API key.)
+ */
+const PROVIDERS: { name: string; lazy?: boolean }[] = [
+  { name: "lrc.red" },
+  { name: "BiniLyrics" },
+  { name: "BetterLyrics" },
+  { name: "Portato" },
+  { name: "PaxSenix" },
+  { name: "LyricsPlus" },
+  { name: "Unison" },
+  { name: "YouTube Captions" },
+  { name: "YouTube Music" },
+  { name: "KuGou" },
+  { name: "LRCLIB" },
+  { name: "Musixmatch" },
+  { name: "Genius", lazy: true },
+];
+
 export interface FetchLyricsHelpers {
-  /** Plain lyrics from YT Music's own Lyrics tab — ranked source and final fallback. */
+  /** Plain lyrics from YT Music's own Lyrics tab, ranked as a source of its own. */
   ytMusicPlain?: (videoId: string) => Promise<string | null>;
   /** Timed captions for the exact playing video, via the YouTube session. */
   ytTranscript?: (videoId: string) => Promise<SyncedLyricLine[] | null>;
 }
-
-const PROVIDER_NAMES = [
-  "BiniLyrics",
-  "BetterLyrics",
-  "Portato",
-  "PaxSenix",
-  "LyricsPlus",
-  "SimpMusic",
-  "Unison",
-  "YouTube Captions",
-  "YouTube Music",
-  "Megalobiz",
-  "KuGou",
-  "LRCLIB",
-  "Musixmatch",
-  "Genius",
-] as const;
 
 export async function fetchLyrics(
   q: LyricQuery,
   opts: { prioritizeWordSync: boolean },
   helpers: FetchLyricsHelpers
 ): Promise<FetchedLyrics | null> {
-  // Which recording is this? One small ISRC search, run alongside the sweep:
-  // BiniLyrics consumes its document URL, and the ISRC it reports is kept
-  // against the video id for LyricsPlus and Bini's own later lookups.
-  const hitPromise = identifyRecording(q);
+  // Which recording is this? Settled before the sources that can name it are
+  // asked: lrc.red fetches that recording's document, and LyricsPlus asks for
+  // it by ISRC. The rest don't wait for it.
+  const recording = identifyRecording(q);
   const cachedIsrc = q.id ? isrcCache.get(q.id) : undefined;
+  const get = sharedDocuments();
 
-  const jobs: Promise<ProviderResult | null>[] = [
-    fetchBini(q, hitPromise),
-    fetchBetterLyrics(q),
-    fetchPortato(q),
-    fetchPaxSenix(q),
-    fetchLyricsPlus(q, cachedIsrc),
-    fetchSimpMusic(q),
-    fetchUnison(q),
-    fetchYouTubeTranscript(q, helpers.ytTranscript),
-    fetchYouTubeMusic(q, helpers.ytMusicPlain),
-    fetchMegalobiz(q),
-    fetchKuGou(q),
-    fetchLrclib(q),
-    fetchMusixmatch(q),
-    fetchGenius(q),
-  ].map((p) => p.catch((): ProviderResult | null => null));
-  const { results, arrived } = await settledWithin(jobs);
-  // Temporary diagnostics: which providers answered, and what won.
-  results.forEach((r, i) => {
-    const name = PROVIDER_NAMES[i];
-    if (!arrived[i]) {
+  const starts: (() => Promise<ProviderResult | null>)[] = [
+    () => fetchLrcRed(q, recording.hit, get),
+    () => fetchBini(recording.full, get),
+    () => fetchBetterLyrics(q),
+    () => fetchPortato(q),
+    () => fetchPaxSenix(q),
+    () => recording.hit.then((hit) => fetchLyricsPlus(q, hit?.isrc ?? cachedIsrc)),
+    () => fetchUnison(q),
+    () => fetchYouTubeTranscript(q, helpers.ytTranscript),
+    () => fetchYouTubeMusic(q, helpers.ytMusicPlain),
+    () => fetchKuGou(q),
+    () => fetchLrclib(q),
+    () => fetchMusixmatch(q),
+    () => fetchGenius(q),
+  ];
+  const began = Date.now();
+  const took = new Map<number, number>();
+  const { pick, settled } = await takeInPriorityOrder(
+    starts.map((start, i) => () => start().finally(() => took.set(i, Date.now() - began))),
+    PROVIDERS.map((p) => !!p.lazy),
+    opts.prioritizeWordSync
+  );
+
+  // Temporary diagnostics: what each provider said by the time the pick was made.
+  PROVIDERS.forEach(({ name }, i) => {
+    if (!settled.has(i)) {
       console.log(`[bytune][lyrics] ${name}: still running at the deadline`);
-    } else if (r) {
+      return;
+    }
+    const r = settled.get(i);
+    if (r) {
       const last = r.lines.length ? r.lines[r.lines.length - 1].time : null;
-      console.log(`[bytune][lyrics] ${name}: ${r.lines.length} lines last=${last?.toFixed(1)} plain=${!!r.plainText} word=${r.wordSynced}`);
+      console.log(`[bytune][lyrics] ${name}: ${r.lines.length} lines last=${last?.toFixed(1)} plain=${!!r.plainText} word=${r.wordSynced} in ${took.get(i)}ms`);
     } else {
-      console.log(`[bytune][lyrics] ${name}: rejected/failed`);
+      console.log(`[bytune][lyrics] ${name}: rejected/failed in ${took.get(i)}ms`);
     }
   });
+  console.log(`[bytune][lyrics] WINNER: ${pick?.source ?? "none"} lines=${pick?.lines.length ?? 0} plain=${!!pick?.plainText} after ${Date.now() - began}ms`);
 
-  // A lyrics answer must COVER the track: crowd mirrors sometimes answer with
-  // the first section only, and a complete line-synced set from a lower-priority
-  // source beats a third of a word-synced one. "Complete" means the last line
-  // lands past 60% of the runtime (when the runtime is known). And an upload
-  // that names an edition must never take a cut that keeps singing long after
-  // it ends — that is the studio cut of a sped-up upload, and every second of
-  // it would drift worse than the last.
-  const edition = editionOf(q.title || "");
-  const covers = (r: ProviderResult): boolean => {
-    if (!r.lines.length || q.duration <= 0) return true;
-    const last = r.lines[r.lines.length - 1].time;
-    if (last < q.duration * 0.6) return false;
-    if (edition && last > q.duration + Math.max(20, q.duration * 0.15)) return false;
-    return true;
-  };
-  const byKind = (pred: (r: ProviderResult) => boolean): ProviderResult | null =>
-    results.find((r) => r && pred(r)) ?? null;
-
-  const complete = (r: ProviderResult): boolean => r.lines.length > 0 && covers(r);
-  const wordComplete = byKind((r) => r.wordSynced && complete(r));
-  const lineComplete = byKind((r) => !r.wordSynced && complete(r));
-  const wordPartial = byKind((r) => r.wordSynced && r.lines.length > 0);
-  const linePartial = byKind((r) => r.lines.length > 0);
-  const plainRanked = byKind((r) => !!r.plainText);
-
-  // BitChord's rule: a word-timed answer wins outright; failing that, a
-  // line-timed one from the highest-priority source that has it; plain text
-  // only when nothing at all is timed. (ByTune keeps its completeness guard
-  // on top: a whole line-synced set beats a third of a word-synced one.)
-  const pick = opts.prioritizeWordSync
-    ? wordComplete ?? lineComplete ?? wordPartial ?? linePartial ?? plainRanked
-    : lineComplete ?? wordComplete ?? linePartial ?? wordPartial ?? plainRanked;
-  console.log(`[bytune][lyrics] WINNER: ${pick?.source ?? "none"} lines=${pick?.lines.length ?? 0} plain=${!!pick?.plainText}`);
-
-  if (pick) {
-    if (pick.plainText) {
-      return { source: pick.source, wordSynced: false, synced: null, plain: pick.plainText };
-    }
-    return { source: pick.source, wordSynced: pick.wordSynced, synced: pick.lines, plain: null };
-  }
-
-  const plain = (await helpers.ytMusicPlain?.(q.id)) ?? null;
-  if (plain) return { source: "YouTube Music", wordSynced: false, synced: null, plain };
-  return null;
+  if (!pick) return null;
+  if (pick.plainText) return { source: pick.source, wordSynced: false, synced: null, plain: pick.plainText };
+  return { source: pick.source, wordSynced: pick.wordSynced, synced: pick.lines, plain: null };
 }

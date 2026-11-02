@@ -27,7 +27,7 @@ import { PlayerBar } from "./PlayerBar";
 import { QueuePanel } from "./RightRail";
 import { LyricsView } from "./SyncedLyrics";
 import { requestLyrics } from "./LyricsCenter";
-import { usePlayer } from "../stores/player";
+import { usePlayer, shownTrack } from "../stores/player";
 import { useLibrary } from "../stores/library";
 import { useSettings } from "../stores/settings";
 import { useUI } from "../stores/ui";
@@ -270,9 +270,12 @@ export function NowPlaying() {
   }, [open]);
 
   const track = usePlayer((s) => s.queue[s.index] ?? null);
+  // What the screen shows: switches to the incoming song half way through a
+  // blend. Lyrics stay on `track`, whose clock they follow.
+  const shown = usePlayer(shownTrack);
   const playing = usePlayer((s) => s.playing);
 
-  const liked = useLibrary((s) => (track ? s.liked.some((t) => t.id === track.id) : false));
+  const liked = useLibrary((s) => (shown ? s.liked.some((t) => t.id === shown.id) : false));
   const toggleLike = useLibrary((s) => s.toggleLike);
 
   // Appearance switches that shape this view: full-bleed art strengthens the
@@ -282,7 +285,7 @@ export function NowPlaying() {
   const boost = useSettings((st) => st.fullBleedArtwork);
   const legacyMesh = useSettings((st) => st.legacyMeshGradient);
   const animatedCanvas = useSettings((st) => st.animatedCanvas);
-  const canvasUrl = useCanvas(track ?? null);
+  const canvasUrl = useCanvas(shown ?? null);
   const canvasVideoRef = useRef<HTMLVideoElement | null>(null);
   useEffect(() => {
     const v = canvasVideoRef.current;
@@ -291,7 +294,7 @@ export function NowPlaying() {
     else v.pause();
   }, [playing, canvasUrl]);
 
-  const palette: ArtworkPalette = useArtworkPalette(track?.thumb ?? null);
+  const palette: ArtworkPalette = useArtworkPalette(shown?.thumb ?? null);
 
   // Lyrics — the same cached lookup the centre-pane lyrics view uses (warmed
   // by prefetchLyrics the moment a track starts), plus the same audio-anchored
@@ -372,7 +375,7 @@ export function NowPlaying() {
     return () => window.clearTimeout(t);
   }, [open]);
 
-  const heroDrag = useDrag({ track: track ?? { id: "", title: "", artist: "", duration: 0, thumb: "" } });
+  const heroDrag = useDrag({ track: shown ?? { id: "", title: "", artist: "", duration: 0, thumb: "" } });
 
   if (!mounted) return null;
 
@@ -382,7 +385,7 @@ export function NowPlaying() {
         exiting ? "fs-exiting" : ""
       }`}
     >
-      <FsBackdrop artwork={track?.thumb ?? null} boost={boost} legacy={legacyMesh} />
+      <FsBackdrop artwork={shown?.thumb ?? null} boost={boost} legacy={legacyMesh} />
 
       <div className="relative h-full flex flex-col">
         {/* Fullscreen entry hint — Spotify's "To exit full screen, press Esc".
@@ -414,7 +417,7 @@ export function NowPlaying() {
           </button>
         </div>
 
-        {!track ? (
+        {!track || !shown ? (
           <div className="flex-1 grid place-items-center">
             <div className="text-center">
               <div className="w-16 h-16 rounded-[18px] glass grid place-items-center mx-auto mb-5">
@@ -457,7 +460,7 @@ export function NowPlaying() {
                     {canvasUrl && animatedCanvas ? (
                       <>
                         {/* Still art underneath: if the video stalls, the cover stands. */}
-                        <img src={upgradeArtwork(track.thumb, 1200)} alt="" className="absolute inset-0 w-full h-full object-cover" />
+                        <img src={upgradeArtwork(shown.thumb, 1200)} alt="" className="absolute inset-0 w-full h-full object-cover" />
                         <video
                           key={canvasUrl}
                           ref={canvasVideoRef}
@@ -469,10 +472,10 @@ export function NowPlaying() {
                           className="relative w-full h-full object-cover animate-fade-in"
                         />
                       </>
-                    ) : track.thumb ? (
+                    ) : shown.thumb ? (
                       <img
-                        key={track.id}
-                        src={upgradeArtwork(track.thumb, 1200)}
+                        key={shown.id}
+                        src={upgradeArtwork(shown.thumb, 1200)}
                         alt=""
                         className="w-full h-full object-cover animate-art-in"
                       />
@@ -486,20 +489,20 @@ export function NowPlaying() {
               {/* Song information — keyed per track so a song change replays
                   the small fade instead of hard-swapping the words. */}
               <div
-                key={`fsmeta-${track.id}`}
+                key={`fsmeta-${shown.id}`}
                 className="mt-7 flex flex-col items-center text-center max-w-full animate-meta-in"
               >
                 <div
                   className="font-display text-[26px] xl:text-[30px] font-extrabold tracking-[-0.03em] text-white truncate max-w-full"
-                  title={track.title}
+                  title={shown.title}
                 >
-                  {track.title}
+                  {shown.title}
                 </div>
                 <div className="text-[14px] xl:text-[15px] text-white/55 mt-1.5 truncate max-w-full">
-                  {track.artist}
+                  {shown.artist}
                 </div>
                 <button
-                  onClick={() => toggleLike(track)}
+                  onClick={() => toggleLike(shown)}
                   title={liked ? "Remove from Liked Songs" : "Add to Liked Songs"}
                   aria-pressed={liked}
                   className="mt-4 inline-flex items-center gap-2 h-8 px-4 rounded-full bg-white/[0.06] hover:bg-white/[0.11] text-white/60 hover:text-white text-[12.5px] font-semibold transition-all active:scale-95"

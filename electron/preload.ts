@@ -1,6 +1,6 @@
 /** Preload — exposes a minimal, typed API to the renderer via contextBridge. */
 import { contextBridge, ipcRenderer } from "electron";
-import type { AudioDetails, DownloadProgress, PodcastPage, RadioPage, Track } from "../src/types";
+import type { DownloadProgress, PodcastPage, RadioPage, Track } from "../src/types";
 
 // The PiP window loads this same preload but its scope requests are rejected
 // by design (main-window-only handler) — an eager invoke there would leave an
@@ -146,7 +146,8 @@ const api = {
   playlistExport: (name: string, m3u8: string, json: string): Promise<{ path?: string; cancelled?: boolean }> =>
     ipcRenderer.invoke("playlist:export", name, m3u8, json),
   playlistImport: (): Promise<{ name: string; text: string } | null> => ipcRenderer.invoke("playlist:import"),
-  audioDetails: (id: string): Promise<AudioDetails | null> => ipcRenderer.invoke("audio:details", id),
+  /** A local file's ReplayGain track gain (dB), for volume leveling. */
+  localGainDb: (id: string): Promise<number | null> => ipcRenderer.invoke("local:gainDb", id),
   getPodcast: (id: string): Promise<PodcastPage> => ipcRenderer.invoke("music:podcast", id),
   backupImport: () => ipcRenderer.invoke("backup:import"),
 

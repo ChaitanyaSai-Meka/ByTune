@@ -9,9 +9,9 @@
  * underline treatment, X returns to details). Lyrics live in the centre pane
  * (see LyricsCenter.tsx), not here.
  */
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { BadgeCheck, Heart, Music2, ThumbsDown, X } from "lucide-react";
-import { autoplayTail, isRadioSeed, usePlayer } from "../stores/player";
+import { autoplayTail, isRadioSeed, shownTrack, usePlayer } from "../stores/player";
 import { useSettings } from "../stores/settings";
 import { useUI, type MenuItem } from "../stores/ui";
 import { dontPlay, useAutoplayInfo } from "../lib/autoplay";
@@ -24,13 +24,13 @@ import { fmtTime } from "../lib/format";
 import { useArtistImage } from "../lib/artistImage";
 import { monthlyListenersLabel, useArtistAbout } from "../lib/artistAbout";
 import { useLibrary } from "../stores/library";
-import type { AudioDetails, Track } from "../types";
-import { audioEngineInfo } from "../lib/audio";
-import { LOUDNESS_LABEL } from "../stores/settings";
+import type { Track } from "../types";
 
 /** The queue's "Now playing" row — draggable like every other song row. */
-function QueueCurrentRow({ track, playing }: { track: Track; playing: boolean }) {
+function QueueCurrentRow({ track }: { track: Track }) {
   const drag = useDrag({ track });
+  // Read here, not in QueuePanel: play/pause then doesn't re-render every queue row.
+  const playing = usePlayer((s) => s.playing);
   return (
     <div
       {...drag.props}
@@ -101,7 +101,11 @@ function TrackRow({
       }}
       className={`group relative flex items-center gap-3 h-12 px-2 rounded-lg cursor-pointer select-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${
         isCurrent ? "bg-ink-hi/[0.14]" : "hover:bg-ink-hi/[0.05]"
-      } ${drag.dragging ? "opacity-40" : ""}`}
+      } ${drag.dragging ? "opacity-40" : ""} ${
+        // Long queues: off-screen rows skip layout and paint. 3rem is the row's own height (h-12),
+        // so rows never drawn still measure right for drag-to-reorder.
+        sortable ? "[content-visibility:auto] [contain-intrinsic-size:auto_3rem]" : ""
+      }`}
     >
       <Artwork src={track.thumb} className="w-9 h-9 rounded-md shrink-0" iconClassName="w-3.5 h-3.5" alt="" />
       <div className="flex-1 min-w-0">
@@ -145,7 +149,6 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<"queue" | "recent">("queue");
   const queue = usePlayer((s) => s.queue);
   const index = usePlayer((s) => s.index);
-  const playing = usePlayer((s) => s.playing);
   const repeat = usePlayer((s) => s.repeat);
   const jumpTo = usePlayer((s) => s.jumpTo);
   const removeAt = usePlayer((s) => s.removeAt);
@@ -330,7 +333,7 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
           </div>
           <div className="px-2 pb-2">
             {current ? (
-              <QueueCurrentRow track={current} playing={playing} />
+              <QueueCurrentRow track={current} />
             ) : (
               <div className="px-3 py-6 text-center text-[13px] text-ink-hi/45">
                 Nothing playing — start a track to see your queue here.
@@ -412,7 +415,7 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
 /* ---------------------------------------------------------- song details */
 
 function DetailsBody() {
-  const track = usePlayer((s) => s.queue[s.index] ?? null);
+  const track = usePlayer(shownTrack);
   const { artistImage } = useArtistImage(track);
   const detailsDrag = useDrag({ track: track ?? { id: "", title: "", artist: "", duration: 0, thumb: "" } });
 
@@ -455,104 +458,7 @@ function DetailsBody() {
       </div>
 
       <AboutArtistCard track={track} fallbackImage={artistImage ?? track.thumb ?? null} />
-      <AudioDetailsCard track={track} />
     </div>
-  );
-}
-
-/**
- * Audio details: what is actually playing and what ByTune does to it — the
- * source, its format, the rate it reaches your speakers at, leveling, EQ and
- * limiter, speed and transitions. Plain facts; it never claims "bit-perfect".
- */
-function AudioDetailsCard({ track }: { track: Track }) {
-  const [details, setDetails] = useState<AudioDetails | null>(null);
-  const [, setTick] = useState(0);
-  const eqOn = useSettings((s) => s.eqEnabled);
-  const speed = useSettings((s) => s.playbackSpeed);
-  const crossfade = useSettings((s) => s.crossfadeSeconds);
-  const smart = useSettings((s) => s.smartFade);
-  const level = useSettings((s) => s.loudnessLevel);
-
-  useEffect(() => {
-    let alive = true;
-    setDetails(null);
-    const load = (): void => {
-      void window.bytune
-        ?.audioDetails(track.id)
-        .then((d) => {
-          if (alive && d) {
-            setDetails(d);
-            window.clearInterval(retry);
-          }
-        })
-        .catch(() => undefined);
-    };
-    // A stream's details land once it has resolved: keep asking until then.
-    const retry = window.setInterval(load, 2000);
-    load();
-    return () => {
-      alive = false;
-      window.clearInterval(retry);
-    };
-  }, [track.id]);
-  useEffect(() => {
-    const id = window.setInterval(() => setTick((t) => t + 1), 1000); // leveling and limiter are live
-    return () => window.clearInterval(id);
-  }, []);
-
-  const engine = audioEngineInfo(track.id);
-  const khz = (hz: number): string => `${Math.round(hz / 100) / 10} kHz`;
-  const isFile = details?.source === "file";
-  const source = !details
-    ? "Waiting for the stream…"
-    : isFile
-      ? "Your file"
-      : details.source === "Piped"
-        ? "YouTube, through a Piped mirror"
-        : `YouTube Music (${details.source})`;
-  const format = details
-    ? [
-        details.codec?.toUpperCase(),
-        details.kbps ? `${details.kbps} kbps` : null,
-        details.bitDepth ? `${details.bitDepth}-bit` : null,
-        details.sampleRate ? khz(details.sampleRate) : null,
-        details.channels === 1 ? "mono" : details.channels === 2 ? "stereo" : details.channels ? `${details.channels} channels` : null,
-      ]
-        .filter(Boolean)
-        .join(" · ") || "Unknown"
-    : null;
-  const resampled = details?.sampleRate && engine.outputRate && details.sampleRate !== engine.outputRate;
-  const output = engine.outputRate
-    ? `${khz(engine.outputRate)}${resampled ? ` (resampled from ${khz(details!.sampleRate!)})` : ""}`
-    : "Unknown";
-  const leveling =
-    level === "off"
-      ? "Off"
-      : isFile && typeof details?.gainDb !== "number"
-        ? "Not applied — this file has no ReplayGain tag"
-        : `${engine.levelingDb > -0.05 ? "0" : engine.levelingDb.toFixed(1)} dB (${LOUDNESS_LABEL[level]})`;
-  const rows: [string, string][] = [
-    ["Source", source],
-    ...(format ? ([["Format", format]] as [string, string][]) : []),
-    ["Output", output],
-    ["Volume leveling", leveling],
-    ["Equalizer", eqOn ? (engine.limitingDb < -0.1 ? `On, limiting ${engine.limitingDb.toFixed(1)} dB` : "On") : "Off"],
-    ...(speed !== 1 ? ([["Speed", `${speed}×`]] as [string, string][]) : []),
-    ["Transitions", smart ? "Automix" : crossfade ? `${crossfade} s crossfade` : "Off"],
-  ];
-  return (
-    <section aria-label="Audio details" className="rounded-xl bg-ink-hi/[0.05] p-4">
-      <h3 className="text-[14px] font-bold text-ink-hi mb-2">Audio details</h3>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[12.5px]">
-        {rows.map(([k, v]) => (
-          <div key={k} className="contents">
-            <dt className="text-ink-hi/55">{k}</dt>
-            <dd className="text-ink-hi/90 min-w-0 break-words">{v}</dd>
-          </div>
-        ))}
-      </dl>
-    </section>
   );
 }
 

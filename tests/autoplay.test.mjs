@@ -482,6 +482,7 @@ test("with shuffle and AutoPlay, every one of your songs plays before any sugges
       visited.push(short(h));
     }
     assert.deepEqual([...visited].sort(), own, "each of your songs exactly once");
+    assert.deepEqual(visited, ids(h).slice(0, own.length), "the play order is the queue order");
     p.getState().next(true);
     assert.equal(short(h), "s1", "then AutoPlay carries on");
   } finally {

@@ -15,7 +15,7 @@ async function harness(name, initial = null) {
     entryPoints: [fileURLToPath(new URL(`../src/stores/${name}.ts`, import.meta.url))],
     bundle: true, platform: "node", format: "cjs", write: false, external: ["react"],
     plugins: [{ name: "isolated-storage", setup(build) {
-      build.onLoad({ filter: /[\\/]lib[\\/]persist\.ts$/ }, () => ({ contents: "export const storage = globalThis.testStorage; export const coalescedStorage = globalThis.testStorage;", loader: "ts" }));
+      build.onLoad({ filter: /[\\/]lib[\\/]persist\.ts$/ }, () => ({ contents: "export const storage = globalThis.testStorage; export const coalescedStorage = globalThis.testObjectStorage;", loader: "ts" }));
     } }],
   })).outputFiles[0].text);
   let disk = initial, gate = null;
@@ -25,8 +25,14 @@ async function harness(name, initial = null) {
     async setItem(_name, value) { disk = JSON.parse(value); writes.push(disk); },
     async removeItem() { disk = null; },
   };
+  // coalescedStorage hands zustand objects, not JSON strings.
+  const objectStorage = {
+    async getItem() { const snapshot = disk; if (gate) await gate; return snapshot == null ? null : JSON.parse(JSON.stringify(snapshot)); },
+    async setItem(_name, value) { disk = JSON.parse(JSON.stringify(value)); writes.push(disk); },
+    async removeItem() { disk = null; },
+  };
   const module = { exports: {} };
-  vm.runInNewContext(codes.get(name), { module, exports: module.exports, require, console, Promise, testStorage: storage });
+  vm.runInNewContext(codes.get(name), { module, exports: module.exports, require, console, Promise, testStorage: storage, testObjectStorage: objectStorage });
   const store = module.exports[name === "library" ? "useLibrary" : "useRecents"];
   if (!store.persist.hasHydrated()) await new Promise((resolve) => {
     const off = store.persist.onFinishHydration(() => { off(); resolve(); });

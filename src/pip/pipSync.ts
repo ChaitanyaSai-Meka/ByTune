@@ -13,13 +13,13 @@
  * minimized.
  */
 import { useLibrary } from "../stores/library";
-import { usePlayer } from "../stores/player";
+import { shownTrack, usePlayer } from "../stores/player";
 import { useUI } from "../stores/ui";
 import type { PipCommand, PipSnapshot } from "./types";
 
 function buildSnapshot(): PipSnapshot {
   const p = usePlayer.getState();
-  const track = p.queue[p.index] ?? null;
+  const track = shownTrack(p);
   const lib = useLibrary.getState();
   return {
     track: track

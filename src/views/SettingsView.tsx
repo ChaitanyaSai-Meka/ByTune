@@ -886,26 +886,27 @@ export function SettingsView() {
       </SettingsGroup>
 
       <SettingsGroup header="Playback">
-        {!s.smartFade && (
-          <>
-            <SliderRow
-              icon={Activity}
-              title="Crossfade"
-              subtitle="Blend the end of one track into the next"
-              value={s.crossfadeSeconds === 0 ? "Off" : `${s.crossfadeSeconds}s`}
-              min={0}
-              max={12}
-              step={1}
-              current={s.crossfadeSeconds}
-              onChange={s.setCrossfadeSeconds}
-            />
-            <Divider />
-          </>
-        )}
+        {/* Also the Automix blend length, so it stays visible; at 0 Automix picks 6s. */}
+        <SliderRow
+          icon={Activity}
+          title="Crossfade"
+          subtitle="Blend the end of one track into the next"
+          value={s.crossfadeSeconds === 0 ? (s.smartFade ? "Auto" : "Off") : `${s.crossfadeSeconds}s`}
+          min={0}
+          max={12}
+          step={1}
+          current={s.crossfadeSeconds}
+          onChange={s.setCrossfadeSeconds}
+        />
+        <Divider />
         <SettingsRow
           icon={Sparkles}
           title="Automix"
-          subtitle={s.smartFade ? "Enabled: transitions decided per track pair" : "Disabled: uses the crossfade above"}
+          subtitle={
+            s.smartFade
+              ? "Blends where the music really ends and lines up beats when tempos match"
+              : "Off: blends use the crossfade length above"
+          }
           trailing={<Switch checked={s.smartFade} onChange={s.setSmartFade} />}
           onClick={() => s.setSmartFade(!s.smartFade)}
         />
@@ -913,7 +914,7 @@ export function SettingsView() {
         <SettingsRow
           icon={VolumeX}
           title="Skip silence"
-          subtitle="Jump over silent intros and gaps"
+          subtitle="Skip the silence at the start and end of songs"
           trailing={<Switch checked={s.skipSilence} onChange={s.setSkipSilence} />}
           onClick={() => s.setSkipSilence(!s.skipSilence)}
         />

@@ -1,8 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import vm from "node:vm";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -10,72 +7,119 @@ import { build } from "esbuild";
 
 const require = createRequire(import.meta.url);
 
-/** Load the REAL coalescing storage adapter with a counting backing store. */
-async function loadCoalescedStorage() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bytune-coalesce-"));
+/** Load the REAL coalescing storage adapter on a fake clock, with a counting bridge. */
+async function loadCoalescedStorage({ disk = {}, clone = false } = {}) {
   const { outputFiles } = await build({
     entryPoints: [fileURLToPath(new URL("../src/lib/persist.ts", import.meta.url))],
     bundle: true, platform: "node", format: "cjs", write: false,
     external: ["zustand/middleware"],
   });
+  let now = 1_000_000;
+  let seq = 0;
+  const timers = new Map();
+  const advance = (ms) => {
+    const end = now + ms;
+    for (;;) {
+      const next = [...timers.entries()].filter(([, t]) => t.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!next) break;
+      timers.delete(next[0]);
+      now = next[1].at;
+      next[1].fn();
+    }
+    now = end;
+  };
   const writes = [];
   const windowStub = {
     bytune: {
-      readData: async () => null,
-      writeData: async (name, data) => { writes.push({ name, data, at: Date.now() }); },
+      readData: async (name) => disk[name] ?? null,
+      // `clone` mimics IPC: structured clone throws on functions.
+      writeData: async (name, data) => { writes.push({ name, data: clone ? structuredClone(data) : data, at: now }); },
     },
     addEventListener(type, fn) { (windowStub[type] = windowStub[type] || []).push(fn); },
     removeEventListener() {},
   };
   const module = { exports: {} };
   vm.runInNewContext(outputFiles[0].text, {
-    module, exports: module.exports, console, setTimeout, clearTimeout,
+    module, exports: module.exports, console,
+    Date: { now: () => now },
+    setTimeout: (fn, ms) => { const id = ++seq; timers.set(id, { at: now + ms, fn }); return id; },
+    clearTimeout: (id) => timers.delete(id),
     window: windowStub,
     localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
     require: (name) => require(name),
   });
-  const { coalescedStorage, storage } = module.exports;
   return {
-    coalescedStorage, plainStorage: storage, writes,
+    coalesced: module.exports.coalescedStorage, writes, advance,
     firePagehide: () => { for (const fn of windowStub.pagehide ?? []) fn(); },
-    cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
   };
 }
 
-test("coalesced storage: a 4Hz burst writes to disk at most once per 2s window, last value wins", async () => {
+const v = (state) => ({ state, version: 0 });
+
+test("coalesced storage: a 4Hz burst of real changes writes at most once per 2s, newest value wins", async () => {
   const h = await loadCoalescedStorage();
-  try {
-    // Simulate 8 seconds of 4Hz library updates (download progress storm).
-    for (let i = 0; i < 32; i++) {
-      await h.coalescedStorage.setItem("library", JSON.stringify({ rev: i }));
-      await new Promise((r) => setTimeout(r, 250));
-    }
-    // The uncoalesced adapter would have written 32 times; coalesced must be
-    // far fewer (≤ once per 2s window + drain timing slack).
-    assert.ok(h.writes.length <= 6, `expected ≤6 writes for a 32-event storm, got ${h.writes.length}`);
-    // The last value must land once the window closes.
-    await new Promise((r) => setTimeout(r, 2100));
-    const last = h.writes.at(-1);
-    assert.equal(last.data.rev, 31, "the newest value must be the one persisted");
-  } finally { h.cleanup(); }
+  for (let i = 0; i < 32; i++) {
+    h.coalesced.setItem("library", v({ rev: i }));
+    h.advance(250);
+  }
+  assert.ok(h.writes.length <= 5, `expected ≤5 writes for 8 s of changes, got ${h.writes.length}`);
+  h.advance(2000);
+  assert.equal(h.writes.at(-1).data.state.rev, 31, "the newest value is the one persisted");
 });
 
-test("coalesced storage: pending writes flush on pagehide and removals are immediate", async () => {
+test("coalesced storage: position-only changes write every 10s; a real change still lands within 2s", async () => {
   const h = await loadCoalescedStorage();
-  try {
-    await h.coalescedStorage.setItem("player", JSON.stringify({ position: 42 }));
-    assert.equal(h.writes.length, 1, "first write lands immediately (idle before it)");
-    await h.coalescedStorage.setItem("player", JSON.stringify({ position: 99 }));
-    await h.coalescedStorage.setItem("library", JSON.stringify({ downloads: 1 }));
-    assert.equal(h.writes.length, 1, "burst inside the window must NOT hit disk yet");
-    h.firePagehide();
-    assert.equal(h.writes.length, 3, "pagehide must flush every pending store");
-    assert.equal(
-      JSON.stringify(h.writes.slice(1).map((w) => w.data)),
-      JSON.stringify([{ position: 99 }, { downloads: 1 }]),
-      "pagehide must flush the newest pending values"
-    );
-    await h.coalescedStorage.removeItem("library");
-    assert.ok(h.writes.at(-1).data == null, "removal must write null immediately, not be coalesced");
-  } finally { h.cleanup(); }
+  const queue = [{ id: "a" }];
+  h.coalesced.setItem("player", v({ queue, position: 1 }));
+  assert.equal(h.writes.length, 1, "the first write lands at once");
+  for (let s = 1; s <= 36; s++) {
+    h.advance(250);
+    h.coalesced.setItem("player", v({ queue, position: 1 + s / 4 }));
+  }
+  assert.equal(h.writes.length, 1, "9 s of position ticks wait for the 10 s window");
+  h.advance(1000);
+  assert.equal(h.writes.length, 2);
+  assert.equal(h.writes[1].data.state.position, 10);
+  h.advance(250);
+  h.coalesced.setItem("player", v({ queue, position: 10.25 }));
+  h.advance(250);
+  h.coalesced.setItem("player", v({ queue: [...queue, { id: "b" }], position: 10.5 }));
+  h.advance(2000);
+  assert.equal(h.writes.length, 3, "a queue change pulls the pending write forward to the 2 s window");
+  assert.equal(h.writes[2].data.state.queue.length, 2);
+});
+
+test("coalesced storage: pagehide flushes the newest values, stores don't wait on each other, removals are immediate", async () => {
+  const h = await loadCoalescedStorage();
+  const queue = [];
+  h.coalesced.setItem("player", v({ queue, position: 42 }));
+  h.coalesced.setItem("player", v({ queue, position: 99 }));
+  h.coalesced.setItem("library", v({ downloads: 1 }));
+  assert.deepEqual(h.writes.map((w) => w.name), ["player", "library"], "the library doesn't wait behind the player");
+  h.firePagehide();
+  assert.equal(h.writes.length, 3, "pagehide flushes the pending position");
+  assert.equal(h.writes[2].data.state.position, 99);
+  await h.coalesced.removeItem("library");
+  assert.equal(h.writes.at(-1).data, null, "a removal writes null at once");
+});
+
+test("coalesced storage: the saved object comes back as-is, and boot's own position: 0 doesn't overwrite it", async () => {
+  const saved = { state: { queue: [{ id: "a" }], position: 30 }, version: 0 };
+  const h = await loadCoalescedStorage({ disk: { player: saved } });
+  const got = await h.coalesced.getItem("player");
+  assert.equal(got, saved, "no JSON round trip");
+  h.coalesced.setItem("player", v({ ...got.state, position: 0 }));
+  assert.equal(h.writes.length, 0, "the resume point on disk stays");
+  h.coalesced.setItem("player", v({ ...got.state, position: 30.25 }));
+  h.advance(10_000);
+  assert.equal(h.writes.length, 1);
+  assert.equal(h.writes[0].data.state.position, 30.25);
+});
+
+test("coalesced storage: a store's actions never reach the bridge (they can't cross IPC)", async () => {
+  const h = await loadCoalescedStorage({ clone: true });
+  h.coalesced.setItem("library", v({ liked: [1], toggleLike() {} }));
+  assert.equal(h.writes.length, 1, "the write went through the bridge, not the localStorage fallback");
+  assert.equal(h.writes[0].data.state.toggleLike, undefined);
+  assert.equal(h.writes[0].data.state.liked.length, 1);
 });

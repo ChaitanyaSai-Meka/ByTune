@@ -13,7 +13,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { useSettings } from "../stores/settings";
-import { detectMusicOnsetForTrack } from "./analysis";
+import { analyseTrack } from "./analysis";
 import { storage } from "./persist";
 
 interface LyricsAlignState {
@@ -107,7 +107,7 @@ export function requestLyricsAlignment(trackId: string, videoDuration: number, l
   pending.add(trackId);
   void (async () => {
     try {
-      const onset = await detectMusicOnsetForTrack(trackId);
+      const onset = (await analyseTrack({ id: trackId, duration: videoDuration }))?.onset;
       if (onset == null) return;
       // Skip-silence may already seek the element past leading silence; the
       // offset lives in element time, so that trim is subtracted out.

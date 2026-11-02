@@ -392,10 +392,12 @@ function registerIpc(): void {
     if (typeof id !== "string" || !/^MPSP[A-Za-z0-9_-]{8,80}$/.test(id)) throw new Error("Not a podcast");
     return music.getPodcast(id);
   });
-  // Read-only: what the playing file is (cached rendition or local header).
-  ipc.handle("audio:details", (_e, id: unknown) => (typeof id === "string" && id.length <= 200 ? music.audioDetails(id) : null));
+  // Read-only: a local file's ReplayGain from its tags (volume leveling).
+  ipc.handle("local:gainDb", (_e, id: unknown) =>
+    typeof id === "string" && id.startsWith("local:") && id.length <= 200 ? music.localGainDb(id) : null
+  );
   ipc.handle("music:enrich", (_e, ids: string[]) => music.enrichDurations(Array.isArray(ids) ? ids : []));
-  ipc.handle("music:stream", async (_e, id: string, forceRotate?: boolean, quality?: string) => {
+  ipc.handle("music:stream", async (_e, id: unknown, retry?: boolean, quality?: string) => {
     // Hand the renderer a localhost proxy URL — the main process does the
     // actual upstream traffic (see stream-proxy.ts). YouTube Music is the
     // only catalogue: every id here is a bare YouTube video id.
@@ -404,9 +406,12 @@ function registerIpc(): void {
     // only LOW carries a real bitrate ceiling (64 kbps); medium/high/lossless
     // differ on mobile by which *sources* may answer, which is meaningless
     // with a single source — they all resolve the best available rendition.
+    if (typeof id !== "string" || !/^[A-Za-z0-9_-]{11}$/.test(id)) throw new Error("Invalid track id");
     await startStreamProxy();
     const maxKbps = quality === "low" ? 64 : undefined;
-    return proxyUrlFor(String(id ?? ""), forceRotate === true, maxKbps);
+    // A retry after a playback error: a fresh resolution, from the next client.
+    if (retry === true) music.retryStream(id);
+    return proxyUrlFor(id, retry === true, maxKbps);
   });
 
   ipc.handle("library:get", () => locallib.readLocalLibrary());

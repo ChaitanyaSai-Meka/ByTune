@@ -14,7 +14,7 @@ import http from "http";
 import path from "path";
 import type { AddressInfo } from "net";
 import { localStreamPath } from "./local-library";
-import { resolveStream } from "./music-service";
+import { resolveStream, evictOldest } from "./music-service";
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -69,10 +69,14 @@ export function getStreamProxyPort(): number {
   return proxyPort;
 }
 
-export function proxyUrlFor(trackId: string, forceRotate = false, maxKbps?: number): string {
+/** `retry` gives the URL a fresh query, so Chromium never reuses the failed URL's cached bytes. */
+export function proxyUrlFor(trackId: string, retry = false, maxKbps?: number): string {
   const kbps = typeof maxKbps === "number" && maxKbps > 0 ? `&kbps=${Math.floor(maxKbps)}` : "";
-  return `http://127.0.0.1:${proxyPort}/?id=${encodeURIComponent(trackId)}${forceRotate ? "&rotate=1" : ""}${kbps}`;
+  return `http://127.0.0.1:${proxyPort}/?id=${encodeURIComponent(trackId)}${retry ? `&retry=${Date.now().toString(36)}` : ""}${kbps}`;
 }
+
+/** Which file each proxy URL has served, so a later range of it is never answered from another file. */
+const served = new Map<string, string>();
 
 /* Local library files travel through the proxy too: the renderer runs on an
  * http origin (dev server / packaged build), and Chromium refuses to load
@@ -192,7 +196,6 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       serveLocalFile(localId, range, res, req);
       return;
     }
-    const forceRotate = url.searchParams.get("rotate") === "1";
     const kbpsRaw = Number(url.searchParams.get("kbps") ?? 0);
     const maxKbps = Number.isFinite(kbpsRaw) && kbpsRaw > 0 ? Math.floor(kbpsRaw) : undefined;
 
@@ -217,13 +220,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       return;
     }
 
-    let stream = await resolveStream(trackId as string, forceRotate, maxKbps);
+    let stream = await resolveStream(trackId as string, false, maxKbps);
     let ctl = new AbortController();
     let upstream = await fetchUpstream(stream.url, range, ctl);
 
     // Self-heal: a URL that just went bad gets one more resolution.
     if (upstream.status === 403 && trackId) {
-      console.warn(`[bytune] proxy upstream 403 for ${trackId}, rotating client`);
+      console.warn(`[bytune] proxy upstream 403 for ${trackId}, re-resolving`);
       stream = await resolveStream(trackId, true, maxKbps);
       ctl = new AbortController();
       upstream = await fetchUpstream(stream.url, range, ctl);
@@ -235,6 +238,23 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       res.end();
       return;
     }
+
+    // A range past the start must come from the file this URL served before:
+    // its byte offsets mean nothing in another file. Refusing makes the deck
+    // error, and the player reloads at its position on a fresh URL. (A later
+    // bytes=0- request on the old URL is served and re-recorded.)
+    const identity = `${stream.itag ?? "?"}:${stream.clen ?? "?"}`;
+    const key = req.url ?? "";
+    const before = served.get(key);
+    if (range && !/^bytes=0-/.test(range) && before && before !== identity) {
+      void upstream.body.cancel().catch(() => undefined);
+      console.warn(`[bytune] proxy: rendition changed mid-song for ${trackId}, refusing the range`);
+      res.writeHead(409, { "Access-Control-Allow-Origin": "*" });
+      res.end();
+      return;
+    }
+    served.set(key, identity);
+    evictOldest(served, 500);
 
     const outHeaders: Record<string, string> = {
       "Access-Control-Allow-Origin": "*",

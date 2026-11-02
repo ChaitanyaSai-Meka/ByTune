@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseTtml } from "../.test-build/lyrics.mjs";
+import { parseTtml, pickLrcRedRow } from "../.test-build/lyrics.mjs";
 
 // Apple Music shape: syllable spans, a background-vocal wrapper with no timing
 // of its own, an inline translation, and a line that is only background vocals.
@@ -92,4 +92,55 @@ test("line-synced TTML with untimed spans keeps the line's own start", () => {
     ],
   );
   assert.equal(lines[0].end, 12);
+});
+
+// lrc.red ranks on runtime alone; these rows are real answers it gave.
+const row = (isrc, track_name, artist_name, duration, timing_type) => ({
+  isrc,
+  track_name,
+  artist_name,
+  duration: String(duration),
+  timing_type,
+  lyricsUrl: `https://lrc.red/s/${isrc}.ttml`,
+});
+const BABY_ROWS = [
+  row("USUM71027043", "Baby (Acoustic)", "Justin Bieber", 215, "line"),
+  row("USUM71001767", "Baby", "Justin Bieber", 217, "line"),
+  row("USUM70919263", "Baby (feat. Ludacris)", "Justin Bieber", 217, "word"),
+  row("US23A9124065", "Baby (feat. Ludacris) [Mixed]", "Justin Bieber", 137, "none"),
+  row("USUM71007621", "Baby (Chipmunk Remix) [feat. Chipmunk]", "Justin Bieber", 222, "line"),
+];
+const DESPACITO_ROWS = [
+  row("USUM71713833", "Despacito (Mandarin Version) [feat. JJ Lin]", "Luis Fonsi", 229, "line"),
+  row("USUM71705955", "Despacito (Versión Portugués)", "Luis Fonsi, Israel Novaes", 228, "line"),
+  row("USUM71607007", "Despacito", "Luis Fonsi, Daddy Yankee", 230, "word"),
+  row("USUM71703825", "Despacito (feat. Justin Bieber) [Remix]", "Luis Fonsi, Daddy Yankee", 231, "word"),
+];
+
+test("lrc.red: the playing recording wins over a closer-running rendition", () => {
+  const pick = (rows, title, artist, duration) => pickLrcRedRow(rows, { title, artist, duration })?.isrc ?? null;
+  assert.equal(pick(BABY_ROWS, "Baby (feat. Ludacris)", "Justin Bieber, Ludacris", 215), "USUM70919263");
+  assert.equal(pick(BABY_ROWS, "Baby", "Justin Bieber", 215), "USUM70919263");
+  assert.equal(pick(BABY_ROWS, "Justin Bieber - Baby ft. Ludacris", "Justin Bieber", 218), "USUM70919263");
+  assert.equal(pick(BABY_ROWS, "Baby (Acoustic)", "Justin Bieber", 215), "USUM71027043");
+  assert.equal(pick(DESPACITO_ROWS, "Despacito (feat. Daddy Yankee)", "Luis Fonsi", 229), "USUM71607007");
+  assert.equal(pick(DESPACITO_ROWS, "Despacito", "Daddy Yankee", 229), "USUM71607007");
+  // Words from the playing song only: another artist, another length or no timed words is no answer.
+  assert.equal(pick(BABY_ROWS, "Baby", "Glee Cast", 215), null);
+  assert.equal(pick(BABY_ROWS, "Baby", "Justin Bieber", 137), null);
+  assert.equal(pick([row("INS172203702", "Kesariya (From \"Brahmastra\")", "Pritam, Arijit Singh", 268, "word")], "Kesariya", "Arijit Singh", 268), "INS172203702");
+  assert.equal(pick([row("INS172412993", "Kesariya (Slowed and Reverb)", "Pritam, Arijit Singh", 284, "none")], "Kesariya (Slowed and Reverb)", "Arijit Singh", 284), null);
+});
+
+test("TTML times in seconds, milliseconds and clock forms all read", () => {
+  const doc = [
+    '<tt xmlns="http://www.w3.org/ns/ttml"><body><div>',
+    '<p begin="12.5s" end="13.5s">one</p>',
+    '<p begin="800ms" end="1200ms">two</p>',
+    '<p begin="02:39" end="02:41">three</p>',
+    '<p begin="1:3.188" end="1:4">four</p>',
+    "</div></body></tt>",
+  ].join("");
+  const times = Object.fromEntries(parseTtml(doc).map((l) => [l.text, l.time]));
+  assert.deepEqual(times, { one: 12.5, two: 0.8, three: 159, four: 63.188 });
 });

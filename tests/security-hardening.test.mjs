@@ -65,7 +65,7 @@ test("artwork scheme gate: web/data/blob/localart only, hostile schemes collapse
 });
 
 test("stream proxy: origins outside the app are refused; media/null/dev still allowed", async () => {
-  const outfile = await bundle("../electron/stream-proxy.ts", { "local-library": "export const localStreamPath = () => null;", "music-service": "export const resolveStream = async () => ({ url: 'https://x', mime: '', lufs: null });" }, []);
+  const outfile = await bundle("../electron/stream-proxy.ts", { "local-library": "export const localStreamPath = () => null;", "music-service": "export const resolveStream = async () => ({ url: 'https://x', mime: '', lufs: null }); export const evictOldest = () => {};" }, []);
   const { originAllowed } = require(outfile);
   assert.equal(originAllowed(undefined, "127.0.0.1:5000"), true, "media element sends no Origin");
   assert.equal(originAllowed("null", "127.0.0.1:5000"), true, "packaged renderer fetch (file:// origin)");

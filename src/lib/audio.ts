@@ -12,10 +12,12 @@
  *     track is resolved and started on the standby element a beat before the
  *     current one ends, and the two are blended with an equal-power curve
  *     (out·cosθ + in·sinθ) — no dip in the middle, the standard crossfade law.
- *   - "smart" (automix-lite): when enabled, the next track's opening seconds
- *     are decoded and analysed for tempo (onset-energy BPM) in a worker; the
- *     fade is armed so it *starts* on a beat multiple inside the configured
- *     window. Analysis failing ⇒ honest fallback to the standard fade.
+ *   - Automix (and Skip silence) plan the blend on each song's analysis — one
+ *     reduced-rate decode per song (lib/analysis): it ends where the outgoing
+ *     song's sound ends and the incoming one enters at its first sound, and
+ *     Automix slides the start by under a beat so the beats land together
+ *     when the tempos match (planBlend). No analysis ⇒ the standard fade.
+ *     Half way through, the screen moves to the incoming song (blendInto).
  *   - manual next/prev/seek aborts any fade in flight.
  *
  * Transition states, and the invariant they exist to protect:
@@ -38,14 +40,14 @@
  * idempotent completion, and the deck that is already playing wins either way.
  */
 import { useLibrary } from "../stores/library";
-import { usePlayer } from "../stores/player";
+import { upNextIndex, usePlayer } from "../stores/player";
 import { useSettings } from "../stores/settings";
 import { useUI } from "../stores/ui";
 import { isEarlyExit, useListening } from "../stores/listening";
 import type { Track } from "../types";
 import { requireBridge } from "./bridge";
 import { emitPlayEvent } from "./playEvents";
-import { analyseTrackHead, detectEdgeSilence } from "./analysis";
+import { analyseTrack, peekAnalysis, type TrackAnalysis } from "./analysis";
 import { upgradeArtwork } from "./artwork";
 import { createMediaKeyTap } from "./media-key-tap";
 import { useSleepTimer } from "./sleepTimer";
@@ -64,6 +66,8 @@ let loadedId: string | null = null;
 let pendingSeek = 0;
 /** retries (with client rotation) for the current track */
 let retryCount = 0;
+/** Where the song was when it was last retried: one that plays on for 30 s may retry again. */
+let retriedAt = -Infinity;
 /** consecutive tracks that failed to play — stops auto-skipping eventually */
 let consecutiveFailures = 0;
 /** the unlinked-local-folder explainer fires once per failing streak, not per skip */
@@ -78,12 +82,12 @@ interface FadeState {
   /** ids, to detect the fade's own completion vs an interrupting change */
   fromId: string;
   toId: string;
+  /** the incoming song, shown from the crossover on */
+  to: Track;
+  /** the screen has switched to the incoming song (half way, where it becomes the louder one) */
+  crossed?: boolean;
   startTs: number;
   durMs: number;
-  /** main element's currentTime when the fade began */
-  anchorSec: number;
-  smart: boolean;
-  reason: string;
   /** performance.now() when playback paused mid-fade; null while playing.
       The blend freezes with playback — see the pause branch and driveFade. */
   pausedAt: number | null;
@@ -110,19 +114,13 @@ let settling = false;
 function transitioning(): boolean {
   return fade !== null || armed !== null;
 }
-/** silence trims per track id — seconds to skip at the start / before the end */
-const silenceTrims = new Map<string, { head: number; tail: number }>();
-const MAX_TRIMS = 400;
-function setTrim(trackId: string, trims: { head: number; tail: number }): void {
-  silenceTrims.delete(trackId);
-  silenceTrims.set(trackId, trims);
-  while (silenceTrims.size > MAX_TRIMS) {
-    const first = silenceTrims.keys().next().value;
-    if (first === undefined) break;
-    silenceTrims.delete(first);
-  }
+/** A song's silent edges, when Skip silence wants them trimmed. */
+function silenceEdges(trackId: string | undefined): TrackAnalysis | null {
+  return trackId && useSettings.getState().skipSilence ? peekAnalysis(trackId) : null;
 }
-let silenceAnalysing = new Set<string>();
+/** Songs whose loudness leveling waits on a measurement: Piped streams (YouTube
+    reported none) and local files without ReplayGain. */
+const needsMeasuring = new Set<string>();
 
 function el(): HTMLAudioElement {
   return elements![mainIdx];
@@ -159,8 +157,9 @@ function isAbortError(err: unknown): boolean {
  * at `?meta=1` — so we compute the exact per-track gain that lands the
  * stream on the same -14 LUFS target. The gain is attenuation-only (see
  * gainForLufs): loud masters scale down, quiet ones play untouched, and no
- * sample is ever pushed past full scale. Local library files are exempt —
- * they play at their original level.
+ * sample is ever pushed past full scale. Piped streams carry no loudness and
+ * are measured instead; local files level by their ReplayGain tag, or by the
+ * same measurement when they have none.
  */
 /** Volume leveling targets (integrated loudness); "off" plays streams as mastered. */
 const LOUDNESS_TARGETS: Record<string, number> = { quiet: -19, normal: -14, loud: -11 };
@@ -202,38 +201,24 @@ function gainForTrack(trackId: string | null): number {
   return gainForLufs(known ?? FALLBACK_LUFS, target) * MASTER_TRIM;
 }
 
-let deviceRate: number | null = null;
-
-/** Live engine facts for the Audio details card. */
-export function audioEngineInfo(trackId: string): { levelingDb: number; limitingDb: number; outputRate: number | null } {
-  if (deviceRate === null && typeof AudioContext !== "undefined") {
-    try {
-      // The rate Chromium mixes at for this output; a throwaway context reads it.
-      const probe = new AudioContext();
-      deviceRate = probe.sampleRate;
-      void probe.close();
-    } catch {
-      deviceRate = 0;
-    }
-  }
-  return {
-    levelingDb: 20 * Math.log10(gainForTrack(trackId)),
-    limitingDb: getEqLimitingDb(),
-    outputRate: eqCtx?.sampleRate ?? (deviceRate || null),
-  };
-}
-
 /**
  * Fetch a stream's loudness metadata from the proxy and cache its gain.
  * Best-effort: on failure the track keeps the fallback gain.
  */
-async function fetchLoudness(proxyUrl: string, trackId: string): Promise<void> {
+async function fetchLoudness(proxyUrl: string, track: Track): Promise<void> {
+  const trackId = track.id;
   try {
     const res = await fetch(`${proxyUrl}&meta=1`, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) return;
     const data = (await res.json()) as { lufs?: unknown };
     const lufs = typeof data?.lufs === "number" && Number.isFinite(data.lufs) ? data.lufs : null;
-    if (lufs === null) return;
+    if (lufs === null) {
+      // A Piped stream: YouTube reported nothing, so measure it.
+      needsMeasuring.add(trackId);
+      analyse(track);
+      return;
+    }
+    needsMeasuring.delete(trackId);
     rememberLufs(trackId, lufs);
     // The track already playing (or being faded into) picks the gain up now.
     const state = usePlayer.getState();
@@ -251,13 +236,68 @@ async function fetchLoudness(proxyUrl: string, trackId: string): Promise<void> {
  * transition itself never waits on a getBasicInfo roundtrip.
  */
 function prefetchLoudness(track: Track | null): void {
-  if (!track || track.localPath || track.id.startsWith("local:")) return;
+  if (!track) return;
+  analyse(track); // edges and beats ahead of a blend
+  if (track.localPath || track.id.startsWith("local:")) {
+    levelLocal(track);
+    return;
+  }
   // No loudnessGains shortcut: a replayed track knows its gain but its
   // resolution has likely expired, and a warm `?meta=1` hit costs nothing.
   void (async () => {
     const url = await requireBridge().getStreamUrl(track.id, false, useSettings.getState().streamingQuality);
-    if (url) await fetchLoudness(url, track.id);
+    if (url) await fetchLoudness(url, track);
   })().catch(() => undefined);
+}
+
+/** A local file levels by its ReplayGain tag (reference ≈ -18 LUFS), else by a measurement. */
+function levelLocal(track: Track): void {
+  if (loudnessLufs.has(track.id)) return;
+  void (async () => {
+    const gainDb = await requireBridge().localGainDb(track.id);
+    if (typeof gainDb === "number") {
+      rememberLufs(track.id, -18 - gainDb);
+      if (usePlayer.getState().queue[usePlayer.getState().index]?.id === track.id) refreshVolumes();
+      return;
+    }
+    needsMeasuring.add(track.id);
+    analyse(track);
+  })().catch(() => undefined);
+}
+
+/**
+ * Analyse a song once (lib/analysis) when something uses it: Skip silence and
+ * Automix its edges and beats, leveling its loudness. Applies what it finds
+ * to the song if it is the one playing.
+ */
+function analyse(track: Track): void {
+  const s = useSettings.getState();
+  if (!s.smartFade && !s.skipSilence && !needsMeasuring.has(track.id)) return;
+  void analyseTrack(track)
+    .then((a) => {
+      if (needsMeasuring.has(track.id)) {
+        needsMeasuring.delete(track.id);
+        // A local file that can't be measured plays at its own level; a stream keeps the fallback.
+        if (a?.lufs != null) rememberLufs(track.id, a.lufs);
+        else if (track.localPath || track.id.startsWith("local:")) rememberLufs(track.id, null);
+        const st = usePlayer.getState();
+        if (st.queue[st.index]?.id === track.id || fade?.toId === track.id || fade?.fromId === track.id) refreshVolumes();
+      }
+      const edges = silenceEdges(track.id);
+      const st = usePlayer.getState();
+      if (!edges || st.queue[st.index]?.id !== track.id || loadedId !== track.id) return;
+      const a0 = el();
+      // Trim the head only while the song has barely started.
+      if (edges.head > 0.05 && a0.currentTime < Math.max(0.6, edges.head)) {
+        try {
+          a0.currentTime = edges.head;
+        } catch {
+          /* ignore */
+        }
+      }
+      if (edges.tail > 0.05 && st.playing) armSilenceTail(edges.tail);
+    })
+    .catch(() => undefined);
 }
 
 /**
@@ -491,11 +531,6 @@ function applyHeadroom(level: number): void {
   eqPreGain.gain.setTargetAtTime(Math.pow(10, -db / 20), eqCtx.currentTime, 0.05);
 }
 
-/** Limiter gain reduction right now (dB, 0 when idle) — for an Audio details readout. */
-export function getEqLimitingDb(): number {
-  return eqLimiter ? Math.min(0, eqLimiter.reduction) : 0;
-}
-
 /**
  * Both decks → 10 biquads → headroom pre-gain → limiter → makeup cancel →
  * speakers. The limiter is always last, so crossfades and boosts can't clip;
@@ -617,42 +652,45 @@ function fadeMsForNext(): number {
 }
 
 /**
- * Transition planner, desktop scale: when smart mode is on and the
- * next track's tempo is known, slide the fade start so it lands on a beat
- * (or a bar) inside the arming window — a transition that begins on the grid
- * instead of an arbitrary sample. Everything else is a standard fade.
+ * Where a blend starts on the outgoing song (`outAt`) and where the incoming
+ * one joins (`inAt`), in each song's own media seconds. With `edges` the blend
+ * ends where the outgoing song's sound ends and the incoming song enters at
+ * its first sound. With `beats` (Automix) the start slides earlier by under
+ * one beat so the incoming song's beat lands on an outgoing beat: the beat
+ * nearest the blend's middle when the tempos are within 4%, else its first
+ * sound.
  */
-function planFadeStart(nextId: string, fadeMs: number): { delayMs: number; smart: boolean; reason: string } {
-  const smartOn = useSettings.getState().smartFade;
-  const a = el();
-  const duration = Number.isFinite(a.duration) ? a.duration : 0;
-  const remainingMs = Math.max(0, (duration - a.currentTime) * 1000);
-  if (!smartOn || remainingMs <= fadeMs) return { delayMs: Math.max(0, remainingMs - fadeMs), smart: false, reason: "standard" };
-
-  const grid = analyseTrackHead.getCached(nextId);
-  if (!grid || !grid.bpm || grid.bpm < 50 || grid.bpm > 220) {
-    return { delayMs: Math.max(0, remainingMs - fadeMs), smart: false, reason: "no tempo — standard fade" };
-  }
-  const beatMs = 60000 / grid.bpm;
-  const beatDist = (ms: number): number => {
-    const m = Math.abs(ms % beatMs);
-    return Math.min(m, beatMs - m);
-  };
-  // Slide the fade start so both its start and its end sit close to beats —
-  // the blend then opens and lands on the grid instead of between them.
-  const idealStart = Math.max(0, remainingMs - fadeMs);
-  const earliest = Math.max(0, idealStart - beatMs * 2);
-  let best = idealStart;
-  let bestErr = Infinity;
-  for (let t = earliest; t <= remainingMs; t += beatMs) {
-    const err = beatDist(t) + beatDist(t + fadeMs);
-    if (err < bestErr) {
-      bestErr = err;
-      best = t;
+export function planBlend(
+  out: TrackAnalysis | null,
+  outDuration: number,
+  inc: TrackAnalysis | null,
+  blendSec: number,
+  edges: boolean,
+  beats: boolean
+): { outAt: number; inAt: number } {
+  const inAt = edges ? (inc?.head ?? 0) : 0;
+  let outAt = outDuration - (edges ? (out?.tail ?? 0) : 0) - blendSec;
+  const outro = beats ? out?.outro : null;
+  const intro = beats ? inc?.intro : null;
+  if (outro && outro.bpm > 0) {
+    const beat = 60 / outro.bpm;
+    let lands = inAt;
+    if (intro && intro.bpm > 0 && Math.abs(intro.bpm - outro.bpm) / outro.bpm <= 0.04) {
+      const ib = 60 / intro.bpm;
+      lands = intro.at + Math.max(0, Math.round((inAt + blendSec / 2 - intro.at) / ib)) * ib;
     }
+    // Where the outgoing song is when the incoming one reaches `lands`, off its beat grid by `slip`.
+    const slip = (((outAt + lands - inAt - outro.at) % beat) + beat) % beat;
+    outAt -= slip;
   }
-  return { delayMs: Math.max(0, best), smart: true, reason: `beat-aligned @ ${grid.bpm} BPM` };
+  return { outAt: Math.max(0, outAt), inAt };
 }
+
+/** Blends use the songs' real edges with Automix or Skip silence on. */
+const blendEdges = (): boolean => {
+  const s = useSettings.getState();
+  return s.smartFade || s.skipSilence;
+};
 
 function maybeArmTransition(): void {
   if (fade || armed) return;
@@ -660,17 +698,19 @@ function maybeArmTransition(): void {
   const fadeMs = fadeMsForNext();
   if (fadeMs < 500) return;
   const state = usePlayer.getState();
-  if (state.shuffle) return; // random next can't be pre-picked
-  if (state.repeat === "one") return;
-  if (!state.queue.length || state.index >= state.queue.length - 1) return;
+  const ni = upNextIndex(state);
+  if (ni < 0) return;
   const a = el();
   const duration = Number.isFinite(a.duration) ? a.duration : 0;
   if (!duration || !state.playing) return;
-  const remainingMs = (duration - a.currentTime) * 1000;
+  // Up to the end of the song's sound when the blend uses its edges.
+  const tail = blendEdges() ? (peekAnalysis(state.queue[state.index].id)?.tail ?? 0) : 0;
+  const remainingMs = (duration - tail - a.currentTime) * 1000;
   if (remainingMs > fadeMs + ARM_LEAD_MS || remainingMs <= 250) return;
 
-  const nextTrack = state.queue[state.index + 1];
+  const nextTrack = state.queue[ni];
   if (!nextTrack) return;
+  if (nextTrack.id === state.queue[state.index].id) return; // a second copy restarts from the top, never blends into itself
   if (failedBlend?.fromId !== loadedId) failedBlend = null;
   if (failedBlend?.toId === nextTrack.id) return;
   armed = { toId: nextTrack.id };
@@ -691,18 +731,19 @@ async function beginFade(nextTrack: Track, fadeMs: number): Promise<void> {
     if (!url) throw new Error("next track has no source");
     // The fade's standby element carries the incoming track's own loudness
     // gain; the load-time prefetch usually already did this — cheap retry.
-    if (!local) void fetchLoudness(url, nextTrack.id);
+    if (!local) void fetchLoudness(url, nextTrack);
     // The world may have moved on while we resolved.
     const cur = usePlayer.getState().queue[usePlayer.getState().index];
     if (stale() || !armed || armed.toId !== nextTrack.id || fade || cur?.id === nextTrack.id) {
       armed = null;
       return;
     }
-    // Smart mode needs the next track's tempo; if it isn't analysed yet this
-    // is the moment it gets fetched and decoded (bounded by the arm window).
-    if (useSettings.getState().smartFade) {
+    // The plan needs the incoming song's edges and beats; if they aren't
+    // analysed yet this is the moment (bounded by the arm window).
+    const edges = blendEdges();
+    if (edges) {
       await Promise.race([
-        analyseTrackHead.ensure(nextTrack.id),
+        analyseTrack(nextTrack).catch(() => null),
         new Promise<void>((r) => window.setTimeout(r, 2200)),
       ]);
     }
@@ -710,21 +751,31 @@ async function beginFade(nextTrack: Track, fadeMs: number): Promise<void> {
       armed = null;
       return;
     }
-    const plan = planFadeStart(nextTrack.id, fadeMs);
-    const startAt = performance.now() + plan.delayMs;
+    const outgoing = el();
+    const plan = planBlend(
+      peekAnalysis(usePlayer.getState().queue[usePlayer.getState().index]?.id ?? ""),
+      Number.isFinite(outgoing.duration) ? outgoing.duration : 0,
+      peekAnalysis(nextTrack.id),
+      fadeMs / 1000,
+      edges,
+      useSettings.getState().smartFade
+    );
     stand.src = url;
-    stand.currentTime = 0;
+    stand.currentTime = plan.inAt;
     applySpeed();
-    const state = usePlayer.getState();
-    armed = null;
-    const waitMs = startAt - performance.now();
+    // The plan is in media time; the deck covers it faster or slower at other speeds.
+    const waitMs = ((plan.outAt - outgoing.currentTime) * 1000) / (outgoing.playbackRate || 1);
     if (waitMs > 30) await new Promise<void>((r) => window.setTimeout(r, waitMs));
     if (stale() || fade) return;
     // If the user interacted meanwhile, re-check.
     const s2 = usePlayer.getState();
-    if (s2.index >= s2.queue.length - 1 || s2.queue[s2.index + 1]?.id !== nextTrack.id) return;
+    if (s2.queue[upNextIndex(s2)]?.id !== nextTrack.id) {
+      abortFade(false);
+      return;
+    }
     const main = el();
     if (!s2.playing) {
+      armed = null;
       try {
         stand.pause();
       } catch {
@@ -732,20 +783,24 @@ async function beginFade(nextTrack: Track, fadeMs: number): Promise<void> {
       }
       return;
     }
-    const anchorSec = main.currentTime;
+    // Woke late: start the incoming song as far in, so the beats stay in phase.
+    const late = main.currentTime - plan.outAt;
+    if (late > 0.03) {
+      try {
+        stand.currentTime = plan.inAt + late;
+      } catch {
+        /* ignore */
+      }
+    }
+    armed = null;
     fade = {
       fromId: s2.queue[s2.index].id,
       toId: nextTrack.id,
+      to: nextTrack,
       startTs: performance.now(),
       durMs: fadeMs,
-      anchorSec,
-      smart: plan.smart,
-      reason: plan.reason,
       pausedAt: null,
     };
-    if (plan.smart) {
-      useUI.getState().toast(`Automix: ${plan.reason}`, "info");
-    }
     // A refused or failed start drops the blend (see the standby error listener).
     stand.play().catch((err: unknown) => {
       if (isAbortError(err) || fade?.toId !== nextTrack.id) return;
@@ -790,6 +845,12 @@ function driveFade(): void {
     const p = Math.min(1, Math.max(0, (clock - fade.startTs) / fade.durMs));
     const theta = p * (Math.PI / 2);
     applyElementVolumes(Math.cos(theta), Math.sin(theta));
+    // The equal-power crossover: the incoming song is the louder one from here,
+    // so the cover and title move to it now rather than when the blend ends.
+    if (p >= 0.5 && !fade.crossed) {
+      fade.crossed = true;
+      usePlayer.setState({ blendInto: fade.to });
+    }
     if (p >= 1) {
       if (!state.playing) return;
       completeTransition("blend-complete");
@@ -830,11 +891,12 @@ function completeTransition(
     // The incoming track sits right after the outgoing one. An earlier copy of
     // the same id (a song replayed further back) must not win, or the index
     // jumps back and everything after it plays again.
+    const succ = (state.index + 1) % state.queue.length; // a repeat-all wrap blends into the first song
     const ni =
       knownIndex !== undefined && state.queue[knownIndex]?.id === f.toId
         ? knownIndex
-        : state.queue[state.index + 1]?.id === f.toId
-          ? state.index + 1
+        : state.queue[succ]?.id === f.toId
+          ? succ
           : state.queue.findIndex((t) => t.id === f.toId);
     if (ni < 0) {
       // The incoming track left the queue mid-blend (it was removed, or the
@@ -850,6 +912,7 @@ function completeTransition(
         /* ignore */
       }
       applyElementVolumes(1, 0);
+      if (usePlayer.getState().blendInto) usePlayer.setState({ blendInto: null });
       // The outgoing deck already ended: nothing else would move the queue on.
       if (reason === "outgoing-ended") usePlayer.getState().next(false);
       return;
@@ -880,16 +943,20 @@ function completeTransition(
     emitPlayEvent("start", state.queue[ni], pos, 0, 0);
     useLibrary.getState().pushHistory(state.queue[ni]);
     advancingToId = f.toId;
-    usePlayer.setState({ index: ni, position: pos, playing: true, error: null });
+    usePlayer.setState({ index: ni, position: pos, playing: true, error: null, blendInto: null });
     advancingToId = null;
     // Volumes after the index update: the loudness gain is keyed by the current
     // track, and the engine-driven advance short-circuits the store subscription,
     // so this is the one place the new main's gain gets applied. The last fade
     // tick already left the elements at these levels — no jump.
     applyElementVolumes(1, 0);
-    silenceAnalysing.delete(f.toId);
-    const t = silenceTrims.get(f.toId);
-    if (t && t.tail > 0) armSilenceTail(t.tail);
+    // The engine-driven advance skips the store subscriber: tell the OS what's
+    // playing now, and warm the song after it.
+    updateMediaSession(state.queue[ni]);
+    const after = usePlayer.getState();
+    prefetchLoudness(after.queue[upNextIndex(after)] ?? null);
+    const edges = silenceEdges(f.toId);
+    if (edges && edges.tail > 0.05) armSilenceTail(edges.tail);
   } finally {
     settling = false;
     transitionToken += 1;
@@ -902,13 +969,15 @@ function completeTransition(
 
 function abortFade(keepRoles: boolean): void {
   const f = fade;
+  const wasArmed = armed;
   fade = null;
   armed = null;
   stopFadeTimer();
   // Invalidate any arming still awaiting its start — its continuation must
   // not wake up and start a deck for a track the user already moved past.
   transitionToken += 1;
-  if (!f || !elements) return;
+  if (usePlayer.getState().blendInto) usePlayer.setState({ blendInto: null });
+  if ((!f && !wasArmed) || !elements) return;
   const oldStandby = standbyEl();
   try {
     oldStandby.pause();
@@ -1004,52 +1073,7 @@ function disarmSilenceTail(): void {
 
 /** Head silence trim applied for this track, if any (lyric offset math). */
 export function getHeadTrim(trackId: string): number {
-  return silenceTrims.get(trackId)?.head ?? 0;
-}
-
-/** Request edge-silence analysis for the track that just started loading. */
-function requestSilenceAnalysis(track: Track): void {
-  const s = useSettings.getState();
-  if (!s.skipSilence) return;
-  if (silenceTrims.has(track.id) || silenceAnalysing.has(track.id)) return;
-  // The whole stream is downloaded and decoded in memory: hour-long mixes
-  // (whose lengths now parse) would cost hundreds of MB.
-  if (!track.duration || track.duration < 10 || track.duration > 20 * 60) return;
-  const isLocal = !!track.localPath || track.id.startsWith("local:");
-  silenceAnalysing.add(track.id);
-  void (async () => {
-    try {
-      const bridge = requireBridge();
-      // Local files decode through the same proxy route the element plays.
-      const url = isLocal
-        ? await bridge.localTrackUrl(track.id)
-        : await bridge.getStreamUrl(track.id, false, useSettings.getState().streamingQuality);
-      if (!url) return;
-      const res = await fetch(url);
-      if (!res.ok || !res.body) return;
-      const buf = await res.arrayBuffer();
-      const trims = await detectEdgeSilence(buf);
-      if (trims && (trims.head > 0.05 || trims.tail > 0.05)) {
-        setTrim(track.id, trims);
-        const state = usePlayer.getState();
-        const cur = state.queue[state.index];
-        const a = el();
-        // Apply the head trim if this track is still the one playing and just started.
-        if (cur?.id === track.id && loadedId === track.id && a.currentTime < Math.max(0.6, trims.head)) {
-          try {
-            a.currentTime = trims.head;
-          } catch {
-            /* ignore */
-          }
-        }
-        if (cur?.id === track.id && state.playing && trims.tail > 0) armSilenceTail(trims.tail);
-      }
-    } catch {
-      /* analysis is best-effort */
-    } finally {
-      silenceAnalysing.delete(track.id);
-    }
-  })();
+  return silenceEdges(trackId)?.head ?? 0;
 }
 
 /* ============================ engine boot ============================ */
@@ -1134,7 +1158,8 @@ export function initAudioEngine(): void {
     const cur = state.queue[state.index] ?? null;
     const prevCur = prev.queue[prev.index] ?? null;
 
-    if (cur?.id !== prevCur?.id) {
+    // Moving between two copies of one song is a new track too (same queue, new index).
+    if (cur?.id !== prevCur?.id || (state.queue === prev.queue && state.index !== prev.index)) {
       if (advancingToId && cur && advancingToId === cur.id) {
         // Engine-driven advance: roles already swapped; nothing to load.
         return;
@@ -1159,15 +1184,13 @@ export function initAudioEngine(): void {
       return;
     }
 
-    if (fade) {
-      // Manual interference during a fade: anything other than pure play-state
-      // changes on the same track aborts the blend. So does a queue edit that
-      // changes what comes next (a song added in front of the one fading in,
-      // or that song removed): the blend would land on the wrong track.
-      if (
-        state.seekNonce !== prev.seekNonce ||
-        (state.queue !== prev.queue && state.queue[state.index + 1]?.id !== fade.toId)
-      ) {
+    const blendTo = fade?.toId ?? armed?.toId;
+    if (blendTo) {
+      // Manual interference with a blend, armed or running: a seek aborts it,
+      // and so does anything that changes what comes next (a song added in
+      // front of the one fading in, that song removed, repeat turned off at
+      // the wrap): the blend would land on the wrong track.
+      if (state.seekNonce !== prev.seekNonce || state.queue[upNextIndex(state)]?.id !== blendTo) {
         abortFade(false);
       }
     }
@@ -1183,8 +1206,8 @@ export function initAudioEngine(): void {
     // A new song became next under the playing one (an AutoPlay refill, Play
     // next): warm it the way loadTrack does, so a skip or blend never waits.
     if (state.queue !== prev.queue && cur && loadedId === cur.id) {
-      const upNext = state.queue[state.index + 1] ?? null;
-      if (upNext && upNext.id !== prev.queue[prev.index + 1]?.id) prefetchLoudness(upNext);
+      const upNext = state.queue[upNextIndex(state)] ?? null;
+      if (upNext && upNext.id !== prev.queue[upNextIndex(prev)]?.id) prefetchLoudness(upNext);
     }
 
     if (state.playing !== prev.playing) {
@@ -1245,8 +1268,8 @@ export function initAudioEngine(): void {
       } catch {
         /* ignore */
       }
-      const t = cur ? silenceTrims.get(cur.id) : null;
-      if (t && t.tail > 0 && state.playing) armSilenceTail(t.tail);
+      const edges = silenceEdges(cur?.id);
+      if (edges && edges.tail > 0.05 && state.playing) armSilenceTail(edges.tail);
     }
   });
 
@@ -1328,6 +1351,7 @@ async function loadTrack(track: Track | null, autoplay: boolean): Promise<void> 
   // A fresh load is a new playback session: any arming still waiting on a
   // start belongs to the previous track and must not fire.
   transitionToken += 1;
+  armed = null;
   if (!track) {
     loadedId = null;
     historyForId = null;
@@ -1341,6 +1365,7 @@ async function loadTrack(track: Track | null, autoplay: boolean): Promise<void> 
   loadedId = null;
   historyForId = null;
   retryCount = 0;
+  retriedAt = -Infinity;
   pendingSeek = usePlayer.getState().position;
   usePlayer.setState({
     buffering: true,
@@ -1348,14 +1373,14 @@ async function loadTrack(track: Track | null, autoplay: boolean): Promise<void> 
     error: null,
     duration: track.duration || 0,
   });
-  requestSilenceAnalysis(track);
+  analyse(track);
   await loadUrl(track, autoplay, false);
   // Pre-warm the next track: its proxy-side stream resolution (so a skip
   // never waits on a getBasicInfo + probe roundtrip) and its loudness (a
   // crossfade needs the gain the moment it starts). After loadUrl, so the
   // current track's resolution goes first.
   const st = usePlayer.getState();
-  if (st.queue[st.index]?.id === track.id) prefetchLoudness(st.queue[st.index + 1] ?? null);
+  if (st.queue[st.index]?.id === track.id) prefetchLoudness(st.queue[upNextIndex(st)] ?? null);
 }
 
 async function loadUrl(track: Track, autoplay: boolean, forceRotate: boolean): Promise<void> {
@@ -1369,15 +1394,9 @@ async function loadUrl(track: Track, autoplay: boolean, forceRotate: boolean): P
       // and the IPC lookup is a local roundtrip.
       const src = await requireBridge().localTrackUrl(track.id);
       if (!src) throw new Error("Local file is missing on disk");
-      // Local files play at their own level unless they carry ReplayGain,
-      // which levels them like streams (reference ≈ -18 LUFS).
-      rememberLufs(track.id, null);
-      void (async () => {
-        const d = await requireBridge().audioDetails(track.id);
-        if (typeof d?.gainDb !== "number") return;
-        rememberLufs(track.id, -18 - d.gainDb);
-        if (usePlayer.getState().queue[usePlayer.getState().index]?.id === track.id) refreshVolumes();
-      })().catch(() => undefined);
+      // Levels like a stream: by its ReplayGain tag, else a measurement; the
+      // fallback gain covers the moment before.
+      levelLocal(track);
       // Apply immediately: without this the element keeps the PREVIOUS
       // track's gain (streams land their own via fetchLoudness, locals
       // would otherwise never get a volume write).
@@ -1407,14 +1426,14 @@ async function loadUrl(track: Track, autoplay: boolean, forceRotate: boolean): P
     // Loudness metadata races the element's own first request: both share the
     // proxy's single in-flight resolution, so the measured gain lands with the
     // first audio chunk while the fallback gain covers the moment before.
-    void fetchLoudness(url, track.id);
+    void fetchLoudness(url, track);
     const a = el();
     a.src = url;
     // Start at this track's own gain (cached or fallback) instead of the
     // previous track's — fetchLoudness refines it once metadata lands.
     refreshVolumes();
     loadedId = track.id;
-    const trim = silenceTrims.get(track.id);
+    const trim = silenceEdges(track.id);
     if (pendingSeek > 0) {
       try {
         a.currentTime = pendingSeek;
@@ -1436,8 +1455,7 @@ async function loadUrl(track: Track, autoplay: boolean, forceRotate: boolean): P
     } else {
       usePlayer.setState({ buffering: false });
     }
-    const t = silenceTrims.get(track.id);
-    if (t && t.tail > 0 && usePlayer.getState().playing) armSilenceTail(t.tail);
+    if (trim && trim.tail > 0.05 && usePlayer.getState().playing) armSilenceTail(trim.tail);
   } catch (err) {
     const cur = usePlayer.getState().queue[usePlayer.getState().index];
     if (cur?.id !== track.id) return;
@@ -1454,11 +1472,15 @@ function handleFailure(track: Track, err?: unknown): void {
   // spot for play() promises aborted by an immediate pause). The next play
   // re-attempts the load from the top.
   if (!state.playing) return;
-  if (retryCount < 1) {
+  const deckAt = el().currentTime;
+  const at = deckAt > 1 ? deckAt : usePlayer.getState().position;
+  // Once per song, and again for a long song or podcast that played on for
+  // 30 s since; a failure straight after a retry skips instead of looping.
+  if (retryCount < 1 || at - retriedAt > 30) {
     retryCount += 1;
+    retriedAt = at;
     // Resume where the song was, not from 0:00 (a stream dying mid-song).
-    const at = el().currentTime;
-    pendingSeek = at > 1 ? at : usePlayer.getState().position;
+    pendingSeek = at;
     void loadUrl(track, true, true);
     return;
   }

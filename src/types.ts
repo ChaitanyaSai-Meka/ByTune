@@ -203,22 +203,6 @@ export interface SyncedLyricLine {
   roman?: string;
 }
 
-/** What the playing file actually is — the Audio details card. */
-export interface AudioDetails {
-  /** a YouTube client name, "Piped", or "file" for your own music */
-  source: string;
-  /** "opus", "aac", "flac" … */
-  codec?: string;
-  kbps?: number;
-  sampleRate?: number;
-  bitDepth?: number;
-  channels?: number;
-  /** loudness YouTube reports, LUFS */
-  lufs?: number | null;
-  /** ReplayGain track gain from a file's tags, dB */
-  gainDb?: number;
-}
-
 /** A podcast episode: plays like a song, but stays out of Replay, recommendations and AutoPlay. */
 export interface PodcastEpisode extends Track {
   episode: true;
