@@ -12,6 +12,13 @@
  * the song out of it. Over the list's column the copy shows a slot and a
  * release lands there; off it the copy shrinks to a card that whatever is
  * under the pointer takes.
+ *
+ * A finger picks a row up by holding still on it for a moment (TOUCH_HOLD_MS),
+ * anywhere on it, its buttons and links included (a tap still presses them):
+ * the row lifts at once, then follows the finger. Moving sooner scrolls the
+ * list; letting go without moving puts the row back and leaves its long-press
+ * menu to open. A finger moves a native row with the same in-list drag, since
+ * a touch can't carry a native drag.
  */
 import {
   useEffect,
@@ -44,6 +51,11 @@ interface Drag {
 export interface SortableDragProps {
   onDragStart: (e: DragEvent<HTMLElement>) => void;
   onDragEnd: (e: DragEvent<HTMLElement>) => void;
+  /** a finger's hold-to-drag; a mouse drags natively */
+  onPointerDown: (e: PointerEvent<HTMLElement>) => void;
+  onPointerMove: (e: PointerEvent<HTMLElement>) => void;
+  onPointerUp: () => void;
+  onPointerCancel: () => void;
 }
 
 export interface SortableRowProps {
@@ -58,6 +70,10 @@ export interface SortableRowProps {
 const SETTLE_MS = 180;
 const EASE = "cubic-bezier(0.2, 0.8, 0.2, 1)";
 const START_PX = 5;
+/** How long a finger holds still on a row before moving it drags instead of scrolling the list. */
+const TOUCH_HOLD_MS = 400;
+/** A finger that strays this far before the hold is scrolling. */
+const TOUCH_SLOP_PX = 10;
 const EDGE_PX = 48;
 /** How wide the floating copy gets once it leaves the list, on its way to another drop target. */
 const COMPACT_PX = 320;
@@ -89,13 +105,18 @@ export function useSortable(opts: {
 } {
   const [drag, setDrag] = useState<Drag | null>(null);
   const live = useRef<Drag | null>(null);
-  const press = useRef<{ x: number; y: number; el: HTMLElement } | null>(null);
+  /** A press on a row; a finger's (`touch`) only drags once its hold has `armed` it. */
+  const press = useRef<{ x: number; y: number; el: HTMLElement; touch: boolean; armed: boolean; undrag: boolean; timer: number } | null>(
+    null,
+  );
   const pointer = useRef({ startX: 0, startY: 0, startScroll: 0, x: 0, y: 0 });
   const row = useRef<HTMLElement | null>(null);
   /** the floating copy of a natively dragged row */
   const ghost = useRef<{ el: HTMLElement; rect: DOMRect; grabX: number; inside: boolean } | null>(null);
   const raf = useRef(0);
   const suppressClick = useRef(false);
+  /** The lifted row has moved: a finger dragging it isn't asking for its long-press menu. */
+  const shifted = useRef(false);
   const o = useRef(opts);
   o.current = opts;
 
@@ -103,24 +124,77 @@ export function useSortable(opts: {
     live.current = d;
     setDrag(d);
   };
+  /** The press is over: its hold stops, and a native row gets its own drag back. */
+  const release = (): void => {
+    const p = press.current;
+    press.current = null;
+    if (!p) return;
+    window.clearTimeout(p.timer);
+    if (p.undrag) p.el.draggable = true;
+  };
   const end = (): void => {
     window.cancelAnimationFrame(raf.current);
     if (row.current) row.current.style.transform = "";
     row.current = null;
     ghost.current?.el.remove();
     ghost.current = null;
-    press.current = null; // the gesture is over: moving before the release must not start it again
+    shifted.current = false;
+    release(); // the gesture is over: moving before the release must not start it again
     put(null);
   };
 
   // The list changed under the pointer (a suggestion arrived, the song moved on):
   // a press or drag on the old list never carries over to the new one.
   useEffect(() => {
-    press.current = null;
+    release();
     if (live.current && live.current.settleTo === null) end();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opts.signature]);
-  useEffect(() => () => window.cancelAnimationFrame(raf.current), []);
+  useEffect(
+    () => () => {
+      window.cancelAnimationFrame(raf.current);
+      release(); // a hold still waiting must not lift a row that's gone
+    },
+    [],
+  );
+
+  // A finger's drag must not scroll the list under it: once its hold has armed it, its touchmoves
+  // are cancelled. The listener sits on the list, never the window, so other touches keep scrolling
+  // smoothly; and it is there before a touch starts, which it has to be to cancel one.
+  const touchGuard = useRef<{ list: HTMLElement | null; move: (e: TouchEvent) => void; menu: (e: Event) => void } | null>(null);
+  useEffect(() => {
+    touchGuard.current ??= {
+      list: null,
+      move: (e) => {
+        if (press.current?.touch && press.current.armed && e.cancelable) e.preventDefault();
+      },
+      // A finger that has moved the row isn't asking for its long-press menu; one still holding may be.
+      menu: (e) => {
+        if (live.current && press.current?.touch && shifted.current) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      },
+    };
+    const g = touchGuard.current;
+    const list = opts.listRef.current;
+    if (list === g.list) return;
+    g.list?.removeEventListener("touchmove", g.move);
+    g.list?.removeEventListener("contextmenu", g.menu, true);
+    list?.addEventListener("touchmove", g.move, { passive: false });
+    list?.addEventListener("contextmenu", g.menu, true);
+    g.list = list;
+  });
+  useEffect(
+    () => () => {
+      const g = touchGuard.current;
+      if (!g) return;
+      g.list?.removeEventListener("touchmove", g.move);
+      g.list?.removeEventListener("contextmenu", g.menu, true);
+      g.list = null; // a remount (StrictMode runs one in development) attaches them again
+    },
+    [],
+  );
 
   /** Glide the row into list slot `target` (its own slot cancels), then commit. */
   const settle = (target: number): void => {
@@ -194,7 +268,7 @@ export function useSortable(opts: {
       };
     }
     const cancel = (): void => {
-      press.current = null;
+      release();
       if (live.current) settle(live.current.from);
     };
     const onKey = (e: globalThis.KeyboardEvent): void => {
@@ -207,7 +281,7 @@ export function useSortable(opts: {
     // The window hears the drag too: the browser can drop the row's pointer
     // capture mid-drag, and the release may land anywhere.
     const onUp = (): void => {
-      press.current = null;
+      release();
       if (live.current) settle(live.current.target);
     };
     const onMove = (e: globalThis.PointerEvent): void => {
@@ -237,6 +311,7 @@ export function useSortable(opts: {
     if (!d || d.settleTo !== null) return;
     const scroll = o.current.scrollRef.current;
     const offset = pointer.current.y - pointer.current.startY + (scroll?.scrollTop ?? 0) - pointer.current.startScroll;
+    if (Math.abs(offset) >= START_PX) shifted.current = true;
     // On screen the row stops at the edges of where it may land; the slot still follows the pointer.
     const lo = slotTop(d, o.current.clamp(d.from, 0)) - d.tops[d.from];
     const hi = slotTop(d, o.current.clamp(d.from, d.tops.length - 1)) - d.tops[d.from];
@@ -318,14 +393,16 @@ export function useSortable(opts: {
     const list = o.current.listRef.current;
     if (!list) return;
     suppressClick.current = true; // the release is not a click on the row
-    const from = [...list.children].indexOf(p.el);
-    if (from < 0 || !o.current.canDrag(from)) {
-      press.current = null;
+    // The list's own entry: a native row's handlers sit on the row inside it.
+    const el = [...list.children].find((c) => c === p.el || c.contains(p.el)) as HTMLElement | undefined;
+    const from = el ? [...list.children].indexOf(el) : -1;
+    if (!el || from < 0 || !o.current.canDrag(from)) {
+      release();
       return;
     }
     const base = list.getBoundingClientRect().top;
     const rects = [...list.children].map((c) => c.getBoundingClientRect());
-    row.current = p.el;
+    row.current = el;
     pointer.current = { startX: 0, startY: p.y, startScroll: o.current.scrollRef.current?.scrollTop ?? 0, x: 0, y: p.y };
     put({
       from,
@@ -387,6 +464,61 @@ export function useSortable(opts: {
     });
   };
 
+  /** A press on row `i`. `native`: the row drags natively under a mouse, so only a finger is ours. */
+  const pressRow = (e: PointerEvent<HTMLElement>, i: number, native: boolean): void => {
+    suppressClick.current = false;
+    const touch = e.pointerType === "touch" || e.pointerType === "pen";
+    if ((native && !touch) || e.button !== 0 || live.current || !o.current.canDrag(i)) return;
+    // A mouse on the row's own buttons and links presses them. A finger holding one picks the row up
+    // (most of a row is links on a touchscreen); its tap still presses it.
+    if (!touch && (e.target as HTMLElement).closest("button, a, input")) return;
+    release();
+    const el = e.currentTarget;
+    if (!touch) {
+      el.setPointerCapture(e.pointerId);
+      press.current = { x: e.clientX, y: e.clientY, el, touch, armed: true, undrag: false, timer: 0 };
+      return;
+    }
+    // A finger first holds still, then the row lifts where it lies, so the finger knows it has it. The
+    // row's own native drag (carrying the song to a playlist) is off meanwhile: a long press can't start it.
+    const undrag = el.draggable;
+    if (undrag) el.draggable = false;
+    const p = { x: e.clientX, y: e.clientY, el, touch, armed: false, undrag, timer: 0 };
+    p.timer = window.setTimeout(() => {
+      p.armed = true;
+      if (press.current !== p || live.current) return;
+      begin(p);
+      update();
+    }, TOUCH_HOLD_MS);
+    press.current = p;
+  };
+  const moveRow = (e: PointerEvent<HTMLElement>): void => {
+    const p = press.current;
+    if (!p) return;
+    if (!live.current) {
+      const moved = Math.hypot(e.clientX - p.x, e.clientY - p.y);
+      if (!p.armed) {
+        if (moved > TOUCH_SLOP_PX) release(); // moved before the hold: the finger is scrolling the list
+        return;
+      }
+      if (moved < START_PX) return;
+      begin(p);
+    }
+    pointer.current.y = e.clientY;
+    update();
+  };
+  // Only a drag this hook moves itself: a native drag's start cancels the pointer, and its own events end it.
+  const upRow = (): void => {
+    const d = live.current;
+    release();
+    if (d && !d.native) settle(d.target);
+  };
+  const cancelRow = (): void => {
+    const d = live.current;
+    release();
+    if (d && !d.native) settle(d.from);
+  };
+
   const dragProps = (i: number): SortableDragProps => ({
     onDragStart: (e) => {
       if (!e.defaultPrevented) beginNative(i, e); // a press on the row's own buttons isn't a drag
@@ -397,6 +529,10 @@ export function useSortable(opts: {
       if (e.dataTransfer.dropEffect !== "none") end(); // taken by another target (copied into a playlist)
       else settle(d.from); // Escape, or let go somewhere else: glide home
     },
+    onPointerDown: (e) => pressRow(e, i, true),
+    onPointerMove: moveRow,
+    onPointerUp: upRow,
+    onPointerCancel: cancelRow,
   });
 
   const still = drag ? reduced() : false;
@@ -430,31 +566,10 @@ export function useSortable(opts: {
   };
 
   const rowProps = (i: number): SortableRowProps => ({
-    onPointerDown: (e) => {
-      suppressClick.current = false;
-      if (e.button !== 0 || live.current || !o.current.canDrag(i)) return;
-      if ((e.target as HTMLElement).closest("button, a, input")) return; // the row's own buttons stay buttons
-      e.currentTarget.setPointerCapture(e.pointerId);
-      press.current = { x: e.clientX, y: e.clientY, el: e.currentTarget };
-    },
-    onPointerMove: (e) => {
-      const p = press.current;
-      if (!p) return;
-      if (!live.current) {
-        if (Math.hypot(e.clientX - p.x, e.clientY - p.y) < START_PX) return;
-        begin(p);
-      }
-      pointer.current.y = e.clientY;
-      update();
-    },
-    onPointerUp: () => {
-      press.current = null;
-      if (live.current) settle(live.current.target);
-    },
-    onPointerCancel: () => {
-      press.current = null;
-      if (live.current) settle(live.current.from);
-    },
+    onPointerDown: (e) => pressRow(e, i, false),
+    onPointerMove: moveRow,
+    onPointerUp: upRow,
+    onPointerCancel: cancelRow,
     onClickCapture: (e) => {
       if (!suppressClick.current) return;
       suppressClick.current = false;

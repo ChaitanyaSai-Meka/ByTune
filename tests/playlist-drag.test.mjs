@@ -22,12 +22,13 @@ const RECTS = {
   padding: { left: 0, right: 100, top: 300, bottom: 620 },
 };
 
-let bundled = null;
-async function harnessCode() {
-  bundled ??= build({
+const bundled = {};
+/** `dev`: React's development build, whose StrictMode mounts every component twice (as `npm run dev` does). */
+async function harnessCode(dev = false) {
+  bundled[dev] ??= build({
     stdin: {
       contents: `
-        import { useRef } from "react";
+        import { StrictMode, useRef } from "react";
         import { createRoot } from "react-dom/client";
         import { flushSync } from "react-dom";
         import { useSortable } from "./src/lib/useSortable";
@@ -56,12 +57,36 @@ async function harnessCode() {
                 {Array.from({ length: n }, (_, i) => (
                   <div key={i} data-row={i} draggable style={s.styleFor(i)} {...s.dragProps(i)}>
                     <span data-ghost-hide>{i + 1}</span> song {i}
+                    <button data-btn={i} onClick={() => window.__clicks.push(i)}>artist</button>
                   </div>
                 ))}
               </div>
             );
           }
-          flushSync(() => createRoot(container).render(<List />));
+          flushSync(() => createRoot(container).render(window.__strict ? <StrictMode><List /></StrictMode> : <List />));
+        };
+        // The queue's kind of list: plain rows the hook moves itself (rowProps).
+        window.__mountRows = (container, n, commits) => {
+          function Rows() {
+            const listRef = useRef(null);
+            const scrollRef = useRef(document.getElementById("scroller"));
+            const s = useSortable({
+              signature: "same", listRef, scrollRef,
+              clamp: (_from, target) => target, canDrag: () => true,
+              onCommit: (from, to) => commits.push(from + ">" + to),
+            });
+            return (
+              <div id="list" ref={listRef}>
+                {Array.from({ length: n }, (_, i) => (
+                  // Draggable like the queue's rows, which also carry their song out to playlists.
+                  <div key={i} data-row={i} draggable style={s.styleFor(i)} {...s.rowProps(i)}>
+                    song {i} <button data-btn={i} onClick={() => window.__clicks.push(i)}>like</button>
+                  </div>
+                ))}
+              </div>
+            );
+          }
+          flushSync(() => createRoot(container).render(window.__strict ? <StrictMode><Rows /></StrictMode> : <Rows />));
         };`,
       resolveDir: root,
       sourcefile: "playlist-drag-harness.tsx",
@@ -71,12 +96,12 @@ async function harnessCode() {
     format: "iife",
     write: false,
     jsx: "automatic",
-    define: { "process.env.NODE_ENV": '"production"' },
+    define: { "process.env.NODE_ENV": dev ? '"development"' : '"production"' },
   }).then((r) => r.outputFiles[0].text);
-  return bundled;
+  return bundled[dev];
 }
 
-async function page() {
+async function page(mode = "native", { strict = false } = {}) {
   const dom = new JSDOM(
     `<!doctype html><html class="reduce-motion"><body><main id="panel"><div id="scroller"><div id="header">Playlist</div><div id="padding"></div><div id="mount"></div></div></main><div id="sources"></div></body></html>`,
     { pretendToBeVisual: true, runScripts: "outside-only" },
@@ -89,9 +114,12 @@ async function page() {
       : RECTS[this.id] ?? { left: 0, right: 0, top: 0, bottom: 0 };
     return { ...r, x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top };
   };
-  window.eval(await harnessCode());
+  window.HTMLElement.prototype.setPointerCapture = function () {};
+  window.__strict = strict;
+  window.eval(await harnessCode(strict));
   const commits = [];
-  window.__mount(window.document.getElementById("mount"), N, commits);
+  window.__clicks = [];
+  (mode === "rows" ? window.__mountRows : window.__mount)(window.document.getElementById("mount"), N, commits);
   // What the page's own "drop to add" target (App's panel) would hear.
   const panel = { over: 0, drops: 0 };
   const main = window.document.getElementById("panel");
@@ -230,4 +258,165 @@ test("a playlist's own song is marked as such for the length of its drag only", 
   await p.fire("dragstart", p.el("#own"), 10, 10);
   await p.fire("dragstart", p.el("#other"), 10, 10); // even without its dragend, the next drag starts clean
   assert.equal(from("pl_1"), false);
+});
+
+/* ---------------- a finger: hold still, then drag (TOUCH_HOLD_MS) ---------------- */
+
+const HOLD = 450; // past useSortable's TOUCH_HOLD_MS
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const finger = { pointerType: "touch", pointerId: 7, button: 0, buttons: 1 };
+const mouse = { pointerType: "mouse", pointerId: 1, button: 0, buttons: 1 };
+const mid = (i) => 300 + i * ROW + 32;
+
+test("a finger that holds still drags a playlist row to the slot it shows, and doesn't scroll the list", async () => {
+  const p = await page();
+  const from = p.row(3);
+  await p.fire("pointerdown", from, 300, mid(3), finger);
+  assert.equal(from.draggable, false, "no native drag under a finger");
+  await wait(HOLD);
+  const tm = await p.fire("touchmove", from, 300, mid(3));
+  assert.equal(tm.defaultPrevented, true, "once held, the finger's moves don't scroll the list");
+  for (const y of [mid(3) - 12, mid(2), 300 + ROW + 10]) await p.fire("pointermove", from, 300, y, finger);
+  assert.equal(p.ghost(), null, "the row itself lifts, no floating copy");
+  await p.fire("pointerup", from, 300, 300 + ROW + 10, finger);
+  await p.settle();
+  assert.deepEqual(p.commits, ["3>1"]);
+  assert.equal(from.draggable, true, "its native drag is back");
+});
+
+test("a finger that moves before the hold scrolls: nothing lifts", async () => {
+  const p = await page();
+  const from = p.row(3);
+  await p.fire("pointerdown", from, 300, mid(3), finger);
+  await p.fire("pointermove", from, 300, mid(3) - 30, finger);
+  const tm = await p.fire("touchmove", from, 300, mid(3) - 30);
+  assert.equal(tm.defaultPrevented, false, "the list scrolls");
+  await wait(HOLD);
+  await p.fire("pointermove", from, 300, mid(1), finger);
+  await p.fire("pointerup", from, 300, mid(1), finger);
+  await p.settle();
+  assert.deepEqual(p.commits, []);
+  assert.equal(from.draggable, true);
+});
+
+test("a finger that holds and lets go without moving keeps the row's long-press menu", async () => {
+  const p = await page();
+  const from = p.row(2);
+  await p.fire("pointerdown", from, 300, mid(2), finger);
+  await wait(HOLD);
+  await p.fire("pointerup", from, 300, mid(2), finger);
+  const menu = await p.fire("contextmenu", from, 300, mid(2));
+  assert.equal(menu.defaultPrevented, false);
+  assert.deepEqual(p.commits, []);
+});
+
+test("the pointercancel a native mouse drag starts with doesn't end that drag", async () => {
+  const p = await page();
+  await p.fire("pointerdown", p.row(4), 300, mid(4), mouse);
+  await p.fire("dragstart", p.row(4), 300, mid(4));
+  await p.fire("pointercancel", p.row(4), 300, mid(4), mouse);
+  await p.fire("dragenter", p.row(1), 300, 300 + ROW + 10, { relatedTarget: p.row(4) });
+  await p.fire("dragover", p.row(1), 300, 300 + ROW + 10);
+  const drop = await p.fire("drop", p.row(1), 300, 300 + ROW + 10);
+  assert.equal(drop.defaultPrevented, true);
+  await p.fire("dragend", p.row(4), 300, 300 + ROW + 10);
+  assert.deepEqual(p.commits, ["4>1"]);
+});
+
+test("queue rows: a finger drags after its hold, and a quick swipe scrolls", async () => {
+  const p = await page("rows");
+  const from = p.row(4);
+  await p.fire("pointerdown", from, 300, mid(4), finger);
+  await p.fire("pointermove", from, 300, mid(4) - 40, finger);
+  await p.fire("pointerup", from, 300, mid(4) - 40, finger);
+  await p.settle();
+  assert.deepEqual(p.commits, [], "a swipe moves nothing");
+  await p.fire("pointerdown", from, 300, mid(4), finger);
+  await wait(HOLD);
+  assert.equal((await p.fire("touchmove", from, 300, mid(4))).defaultPrevented, true);
+  for (const y of [mid(4) - 12, mid(2), 330]) await p.fire("pointermove", from, 300, y, finger);
+  await p.fire("pointerup", from, 300, 330, finger);
+  await p.settle();
+  assert.deepEqual(p.commits, ["4>0"]);
+});
+
+test("queue rows: a mouse still drags at once, with no hold", async () => {
+  const p = await page("rows");
+  const from = p.row(4);
+  await p.fire("pointerdown", from, 300, mid(4), mouse);
+  for (const y of [mid(4) - 12, mid(2), 330]) await p.fire("pointermove", from, 300, y, mouse);
+  await p.fire("pointerup", from, 300, 330, mouse);
+  await p.settle();
+  assert.deepEqual(p.commits, ["4>0"]);
+});
+
+test("a finger's hold lifts the row at once, before it moves, and letting go puts it back", async () => {
+  for (const mode of ["native", "rows"]) {
+    const p = await page(mode);
+    const from = p.row(2);
+    await p.fire("pointerdown", from, 300, mid(2), finger);
+    assert.equal(from.style.zIndex, "", `${mode}: not lifted before the hold`);
+    await wait(HOLD);
+    assert.equal(from.style.zIndex, "20", `${mode}: lifted as soon as the hold completes`);
+    assert.match(from.style.transform, /scale\(1\.02\)/, `${mode}: drawn lifted`);
+    const menu = await p.fire("contextmenu", from, 300, mid(2));
+    assert.equal(menu.defaultPrevented, false, `${mode}: a still hold may still open the long-press menu`);
+    await p.fire("pointerup", from, 300, mid(2), finger);
+    await p.settle();
+    assert.deepEqual(p.commits, [], `${mode}: let go in place, nothing moves`);
+    assert.equal(from.style.zIndex, "", `${mode}: back down`);
+  }
+});
+
+test("a finger holding a row's button or link picks the row up; a tap still presses it", async () => {
+  for (const mode of ["native", "rows"]) {
+    const p = await page(mode);
+    const btn = p.el('#list [data-row="3"] [data-btn]');
+    await p.fire("pointerdown", btn, 300, mid(3), finger);
+    await p.fire("pointerup", btn, 300, mid(3), finger);
+    await p.fire("click", btn, 300, mid(3));
+    assert.deepEqual(p.window.__clicks, [3], `${mode}: the tap pressed it`);
+    await p.fire("pointerdown", btn, 300, mid(3), finger);
+    await wait(HOLD);
+    for (const y of [mid(3) - 12, mid(2), 300 + ROW + 10]) await p.fire("pointermove", btn, 300, y, finger);
+    const menu = await p.fire("contextmenu", btn, 300, 300 + ROW + 10);
+    assert.equal(menu.defaultPrevented, true, `${mode}: a row being dragged doesn't open its menu`);
+    await p.fire("pointerup", btn, 300, 300 + ROW + 10, finger);
+    await p.settle();
+    assert.deepEqual(p.commits, ["3>1"], `${mode}: the hold moved the row`);
+  }
+});
+
+test("a mouse on a row's button presses it and never drags the row", async () => {
+  const p = await page("rows");
+  const btn = p.el('#list [data-row="3"] [data-btn]');
+  await p.fire("pointerdown", btn, 300, mid(3), mouse);
+  for (const y of [mid(3) - 12, mid(2), 300 + ROW + 10]) await p.fire("pointermove", btn, 300, y, mouse);
+  await p.fire("pointerup", btn, 300, 300 + ROW + 10, mouse);
+  await p.settle();
+  assert.deepEqual(p.commits, []);
+});
+
+test("a queue row's own native drag is off while a finger is down, and back after", async () => {
+  const p = await page("rows");
+  const row = p.row(2);
+  await p.fire("pointerdown", row, 300, mid(2), finger);
+  assert.equal(row.draggable, false, "a long press can't start the native drag");
+  await p.fire("pointerup", row, 300, mid(2), finger);
+  assert.equal(row.draggable, true);
+});
+
+test("under React's StrictMode (the dev build) a held drag still keeps the list from scrolling, and moves the row", async () => {
+  for (const mode of ["native", "rows"]) {
+    const p = await page(mode, { strict: true });
+    const from = p.row(3);
+    await p.fire("pointerdown", from, 300, mid(3), finger);
+    await wait(HOLD);
+    const tm = await p.fire("touchmove", from, 300, mid(3) - 12);
+    assert.equal(tm.defaultPrevented, true, `${mode}: a held drag's finger moves must not scroll the list`);
+    for (const y of [mid(3) - 12, mid(2), 300 + ROW + 10]) await p.fire("pointermove", from, 300, y, finger);
+    await p.fire("pointerup", from, 300, 300 + ROW + 10, finger);
+    await p.settle();
+    assert.deepEqual(p.commits, ["3>1"], `${mode}: the row moved`);
+  }
 });

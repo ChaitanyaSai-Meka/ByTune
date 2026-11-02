@@ -277,6 +277,10 @@ function PlaylistTrackRow({
         drag.props.onDragEnd(e);
         sortDrag.onDragEnd(e);
       }}
+      onPointerDown={sortDrag.onPointerDown}
+      onPointerMove={sortDrag.onPointerMove}
+      onPointerUp={sortDrag.onPointerUp}
+      onPointerCancel={sortDrag.onPointerCancel}
       onClick={() => playQueue(queue, index)}
       onContextMenu={(e) => {
         e.preventDefault();
