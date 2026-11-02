@@ -32,4 +32,4 @@ The whole feature (code, setting, Settings row, tests) is in `music-videos.patch
 git apply --3way future/music-videos/music-videos.patch
 ```
 
-The patch is made against the commit that added this folder (`git log --diff-filter=A -- future/music-videos`), so `--3way` can merge it into code that has changed since. Checked on a copy of that commit: it applied, and the typecheck and all 442 tests passed. If a file still conflicts, re-add that piece by hand using the table above. Then delete this folder.
+The patch is made against commit a860a76: every file it changes is as in that commit, so `--3way` can merge it into code that has changed since. Checked on a copy of a860a76: it applied cleanly, and the typecheck and all 503 tests passed. If a file still conflicts, re-add that piece by hand using the table above. Then delete this folder.

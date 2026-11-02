@@ -65,7 +65,7 @@ index 6d50da1..f55b0fe 100644
    "blurUnfocusedLyrics",
    "romanizeLyrics",
 diff --git a/electron/main.ts b/electron/main.ts
-index 0e3621f..bc244e1 100644
+index 80cd764..080e121 100644
 --- a/electron/main.ts
 +++ b/electron/main.ts
 @@ -384,6 +384,14 @@ function registerIpc(): void {
@@ -503,10 +503,10 @@ index 0000000..258f3b6
 +  return { play: true, rate: audio.rate };
 +}
 diff --git a/src/stores/player.ts b/src/stores/player.ts
-index 6752c39..8e28842 100644
+index baf717e..7c25404 100644
 --- a/src/stores/player.ts
 +++ b/src/stores/player.ts
-@@ -120,6 +120,8 @@ interface PlayerState {
+@@ -204,6 +204,8 @@ interface PlayerState {
    playTrack(track: Track): void;
    /** Play an entry already in the queue without rebuilding it. */
    jumpTo(i: number): void;
@@ -515,7 +515,7 @@ index 6752c39..8e28842 100644
    /** Returns how many songs were added (0 when they were all already waiting). */
    addToQueue(tracks: Track | Track[], playNext?: boolean): number;
    /**
-@@ -233,6 +235,16 @@ export const usePlayer = create<PlayerState>()(
+@@ -324,6 +326,16 @@ export const usePlayer = create<PlayerState>()(
          set({ index: i, playing: true, position: 0, error: null, awaitingAutoplay: false });
        },
  
@@ -672,10 +672,10 @@ index 90faad8..d3c10ed 100644
 +  assert.equal(pinned.itag, 136, "the file the player opened wins");
 +});
 diff --git a/tests/playback-reliability.test.mjs b/tests/playback-reliability.test.mjs
-index 18ecd10..e56067b 100644
+index 83a9aa1..20ed6ed 100644
 --- a/tests/playback-reliability.test.mjs
 +++ b/tests/playback-reliability.test.mjs
-@@ -123,3 +123,23 @@ test("a song that fails again straight after its retry is skipped, not retried i
+@@ -202,3 +202,23 @@ test("removing the song playing starts the next one from the top", async () => {
      h.restore();
    }
  });
