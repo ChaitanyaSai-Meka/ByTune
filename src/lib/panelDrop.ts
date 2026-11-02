@@ -16,7 +16,7 @@ import { useUI } from "../stores/ui";
 import type { LocalFolderEntry } from "../../electron/local-library";
 import type { Track } from "../types";
 import { getDownload, startDownload } from "./downloads";
-import { useTrackDrop } from "./dnd";
+import { draggingFromPlaylist, useTrackDrop } from "./dnd";
 
 function addToOpenPlaylist(playlistId: string, track: Track): void {
   const lib = useLibrary.getState();
@@ -89,7 +89,8 @@ export function usePanelDrop(): {
   const accepts = (): boolean => {
     const v = useUI.getState().view;
     return (
-      (v.name === "playlist" && !!v.param) ||
+      // A playlist's own song moves within its list; it is never added to it again.
+      (v.name === "playlist" && !!v.param && !draggingFromPlaylist(v.param)) ||
       (v.name === "library" && v.param === "liked") ||
       v.name === "local"
     );

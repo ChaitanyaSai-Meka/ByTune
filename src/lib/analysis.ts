@@ -6,13 +6,17 @@
  * phase). Skip silence, Automix, leveling and lyrics timing all read it. No
  * vocal mask or mel spectrogram — those need native DSP and are not faked.
  *
- * decodeAudioData runs off the main thread; one song is analysed at a time
- * and only the newest few wait, so skipping through songs never piles up work.
+ * decodeAudioData runs off the main thread, and the analysis runs on it in
+ * slices of a few milliseconds with background-priority yields between them,
+ * so the crossfade's 25 ms tick, input and frames keep their pace. One song is
+ * analysed at a time and only the newest few wait, so skipping through songs
+ * never piles up work.
  */
 
 const MAX_CACHE = 400;
 
 async function fetchAudio(trackId: string, localPath?: string, maxBytes = Infinity): Promise<ArrayBuffer | null> {
+  const ctl = new AbortController();
   try {
     const { requireBridge } = await import("./bridge");
     const { useSettings } = await import("../stores/settings");
@@ -22,16 +26,31 @@ async function fetchAudio(trackId: string, localPath?: string, maxBytes = Infini
       ? await bridge.localTrackUrl(trackId)
       : await bridge.getStreamUrl(trackId, false, useSettings.getState().streamingQuality);
     if (!url) return null;
-    const res = await fetch(url);
+    // A ranged request, like the media element's: googlevideo throttles a plain GET to playback speed.
+    const res = await fetch(url, { headers: { Range: "bytes=0-" }, signal: ctl.signal });
     if (!res.ok || !res.body) return null;
     // Give up before downloading: the whole file is decoded in memory.
-    if (Number(res.headers.get("content-length")) > maxBytes) {
-      void res.body.cancel().catch(() => undefined);
-      return null;
+    if (Number(res.headers.get("content-length")) > maxBytes) return null;
+    // ...and while downloading, when no length (or a wrong one) was announced.
+    const reader = res.body.getReader();
+    const parts: Uint8Array[] = [];
+    let size = 0;
+    for (let r = await reader.read(); !r.done; r = await reader.read()) {
+      size += r.value.byteLength;
+      if (size > maxBytes) return null;
+      parts.push(r.value);
     }
-    return await res.arrayBuffer();
+    const all = new Uint8Array(size);
+    let at = 0;
+    for (const part of parts) {
+      all.set(part, at);
+      at += part.byteLength;
+    }
+    return all.buffer;
   } catch {
     return null;
+  } finally {
+    ctl.abort(); // ends a download given up on; a no-op once it completed
   }
 }
 
@@ -189,46 +208,92 @@ export interface TrackAnalysis {
   outro: { bpm: number; at: number } | null; // beat grid over ~15 s before the end of sound; `at` = last beat before the end of sound
 }
 
+/** Samples of the main pass between yields: well under a millisecond. */
+const BLOCK = 1 << 15;
+/** Main-thread time an analysis slice may take before it yields. */
+const SLICE_MS = 4;
+
+/** One channel's K-weighting filter state, carried from one block to the next. */
+interface Weighing {
+  x1: number;
+  x2: number;
+  y1: number;
+  y2: number;
+  z1: number;
+  z2: number;
+  acc: number;
+  k: number;
+  j: number;
+  dn: number;
+}
+
 /**
- * Everything analyseTrack reports, from decoded channels (L/R used). One pass
- * per channel finds the silent edges and runs both K-weighting stages into
- * 100 ms sub-block energies; the onset and beat grids then read only the
- * first 75 s and two ~15 s windows.
+ * Samples [from, to) of one channel through both K-weighting stages into the
+ * 100 ms sub-block energies, widening `edges` to the first and last sample
+ * above the edge scan's threshold. `st` carries the filter between blocks.
  */
-export function analyseBuffer(channels: Float32Array[], sampleRate: number): TrackAnalysis {
+function weigh(
+  d: Float32Array,
+  from: number,
+  to: number,
+  f: number[],
+  sub: number,
+  energy: Float64Array,
+  st: Weighing,
+  edges: { first: number; last: number }
+): void {
+  const [b0, b1, b2, a1, a2, c0, c1, c2, d1, d2] = f;
+  let { x1, x2, y1, y2, z1, z2, acc, k, j, dn } = st;
+  let { first, last } = edges;
+  for (let i = from; i < to; i++) {
+    const s = d[i];
+    if (s > 0.008 || s < -0.008) { // ≈ -42 dBFS, the edge scan's threshold
+      if (i < first) first = i;
+      if (i > last) last = i;
+    }
+    dn = -dn;
+    const x0 = s + dn;
+    const y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+    const z0 = c0 * y0 + c1 * y1 + c2 * y2 - d1 * z1 - d2 * z2;
+    x2 = x1; x1 = x0; y2 = y1; y1 = y0; z2 = z1; z1 = z0;
+    acc += z0 * z0;
+    if (++k === sub) {
+      energy[j++] += acc;
+      acc = 0;
+      k = 0;
+    }
+  }
+  Object.assign(st, { x1, x2, y1, y2, z1, z2, acc, k, j, dn });
+  Object.assign(edges, { first, last });
+}
+
+/**
+ * Everything analyseTrack reports, from decoded channels (L/R used), as steps:
+ * one pass per channel finds the silent edges and runs both K-weighting stages
+ * into 100 ms sub-block energies, a block at a time; the onset and beat grids
+ * then read only the first 75 s and two ~15 s windows.
+ */
+function* analysisSteps(channels: Float32Array[], sampleRate: number): Generator<void, TrackAnalysis, void> {
   const chans = channels.slice(0, 2);
   const sr = sampleRate;
   const n = chans[0].length;
-  const [b0, b1, b2, a1, a2] = highShelfCoefs(1681.974450955533, 3.999843853973347, 0.7071752369554196, sr);
-  const [c0, c1, c2, d1, d2] = highPassCoefs(38.13547087602444, 0.5003270373238773, sr);
+  const f = [
+    ...highShelfCoefs(1681.974450955533, 3.999843853973347, 0.7071752369554196, sr),
+    ...highPassCoefs(38.13547087602444, 0.5003270373238773, sr),
+  ];
   const sub = Math.floor(sr / 10);
   const energy = new Float64Array(Math.floor(n / sub)); // summed over channels: G = 1 for L/R
-  let first = n;
-  let last = -1;
+  const edges = { first: n, last: -1 };
   for (const d of chans) {
-    let x1 = 0, x2 = 0, y1 = 0, y2 = 0, z1 = 0, z2 = 0, acc = 0, k = 0, j = 0;
     // ±1e-20 at Nyquist keeps the filter state out of subnormal floats, which
     // run ~10x slower after every burst; it sits ~140 dB under the -70 gate.
-    let dn = 1e-20;
-    for (let i = 0; i < n; i++) {
-      const s = d[i];
-      if (s > 0.008 || s < -0.008) { // ≈ -42 dBFS, the edge scan's threshold
-        if (i < first) first = i;
-        if (i > last) last = i;
-      }
-      dn = -dn;
-      const x0 = s + dn;
-      const y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
-      const z0 = c0 * y0 + c1 * y1 + c2 * y2 - d1 * z1 - d2 * z2;
-      x2 = x1; x1 = x0; y2 = y1; y1 = y0; z2 = z1; z1 = z0;
-      acc += z0 * z0;
-      if (++k === sub) {
-        energy[j++] += acc;
-        acc = 0;
-        k = 0;
-      }
+    const st: Weighing = { x1: 0, x2: 0, y1: 0, y2: 0, z1: 0, z2: 0, acc: 0, k: 0, j: 0, dn: 1e-20 };
+    for (let at = 0; at < n; at += BLOCK) {
+      weigh(d, at, Math.min(n, at + BLOCK), f, sub, energy, st, edges);
+      yield;
     }
   }
+  const { first, last } = edges;
 
   // Edges keep the scan's 40 ms window as margin around the first/last loud sample.
   const margin = Math.max(1, Math.floor(sr * 0.04));
@@ -254,14 +319,46 @@ export function analyseBuffer(channels: Float32Array[], sampleRate: number): Tra
   const lufs = absMean > 0 ? -0.691 + 10 * Math.log10(gatedMean(Math.max(absGate, absMean / 10))) : null;
 
   const span = Math.round(15 * sr);
-  return {
-    head: headAt / sr,
-    tail: (n - endAt) / sr,
-    lufs,
-    onset: musicOnset(chans, sr),
-    intro: beatGrid(chans, sr, headAt, Math.min(endAt, headAt + span), headAt, true),
-    outro: beatGrid(chans, sr, Math.max(headAt, endAt - span), endAt, endAt, false),
-  };
+  const onset = musicOnset(chans, sr);
+  yield;
+  const intro = beatGrid(chans, sr, headAt, Math.min(endAt, headAt + span), headAt, true);
+  yield;
+  const outro = beatGrid(chans, sr, Math.max(headAt, endAt - span), endAt, endAt, false);
+  return { head: headAt / sr, tail: (n - endAt) / sr, lufs, onset, intro, outro };
+}
+
+/** analyseTrack's measurements of decoded channels, in one go. */
+export function analyseBuffer(channels: Float32Array[], sampleRate: number): TrackAnalysis {
+  const steps = analysisSteps(channels, sampleRate);
+  for (;;) {
+    const r = steps.next();
+    if (r.done) return r.value;
+  }
+}
+
+type PostTask = (callback: () => void, options: { priority: "background" }) => Promise<void>;
+
+/** Lets everything else queued run first: due timers (the crossfade tick), input, frames. */
+function breathe(): Promise<void> {
+  // Not scheduler.yield(): its continuation runs ahead of timers and starved the 25 ms tick.
+  const scheduler = (globalThis as { scheduler?: { postTask?: PostTask } }).scheduler;
+  return scheduler?.postTask
+    ? scheduler.postTask(() => undefined, { priority: "background" })
+    : new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** analyseBuffer in slices of about `sliceMs`, yielding to queued tasks between them. Same results. */
+export async function analyseInSlices(channels: Float32Array[], sampleRate: number, sliceMs = SLICE_MS): Promise<TrackAnalysis> {
+  const steps = analysisSteps(channels, sampleRate);
+  for (;;) {
+    const stop = performance.now() + sliceMs;
+    for (;;) {
+      const r = steps.next();
+      if (r.done) return r.value;
+      if (performance.now() >= stop) break;
+    }
+    await breathe();
+  }
 }
 
 /**
@@ -355,8 +452,9 @@ export function peekAnalysis(id: string): TrackAnalysis | null {
 export function analyseTrack(track: SongRef): Promise<TrackAnalysis | null> {
   const hit = peekAnalysis(track.id);
   if (hit) return Promise.resolve(hit);
-  // The decode is held in memory: hour-long mixes would cost hundreds of MB.
-  if (track.duration && (track.duration < 10 || track.duration > 20 * 60)) return Promise.resolve(null);
+  // Only with a known length: the decode is held in memory, and hour-long mixes would cost hundreds of MB.
+  const length = track.duration ?? 0;
+  if (!(length >= 10 && length <= 20 * 60)) return Promise.resolve(null);
   const live = jobs.get(track.id);
   if (live) {
     // Asked again: it counts as new, so it outlives older waiting requests.
@@ -408,5 +506,5 @@ async function runAnalysis(track: SongRef): Promise<TrackAnalysis | null> {
   // Past 10 min half the rate halves the decoded copy; beats and loudness survive it.
   const audio = await decode(buf, (track.duration ?? 0) > 600 ? 11025 : 22050);
   if (!audio || !audio.length) return null;
-  return analyseBuffer(channelsOf(audio), audio.sampleRate);
+  return analyseInSlices(channelsOf(audio), audio.sampleRate);
 }

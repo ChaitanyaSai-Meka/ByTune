@@ -32,7 +32,8 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
   const coverThumb = playlist?.artistThumb ?? playlist?.tracks[0]?.thumb ?? null;
   useArtworkPalette(coverThumb);
 
-  // Dropping songs onto this page is handled panel-wide in App (usePanelDrop).
+  // Dropping songs onto this page is handled panel-wide in App (usePanelDrop);
+  // its own songs move within the list instead (useSortable).
 
   // A song dragged within the list moves the way the queue's do; dragged out,
   // it still drops onto other playlists or the queue.
@@ -197,7 +198,7 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
 
       <div className="px-8 pb-12 pt-2">
         {tracks.length ? (
-          <div ref={listRef} {...sortable.listProps}>
+          <div ref={listRef}>
             {tracks.map((track, i) => (
               <div key={rowKey(track.id)} style={sortable.styleFor(i)}>
                 <PlaylistTrackRow track={track} index={i} queue={tracks} playlist={playlist} sortDrag={sortable.dragProps(i)} />
@@ -258,7 +259,7 @@ function PlaylistTrackRow({
   const playing = usePlayer((s) => s.playing);
   const liked = useLibrary((s) => s.liked.some((t) => t.id === track.id));
   const toggleLike = useLibrary((s) => s.toggleLike);
-  const drag = useDrag({ track });
+  const drag = useDrag({ track, fromPlaylist: playlist.id });
   const isCurrent = currentId === track.id;
 
   const openMenu = (x: number, y: number): void => {

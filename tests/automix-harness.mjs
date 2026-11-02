@@ -100,6 +100,7 @@ class FakeAudio {
     this.preload = "";
     this.buffered = { length: 0, end: () => 0 };
     this.plays = 0; // play() calls actually accepted
+    this.__played = 0; // seconds of this src played (HTMLMediaElement.played, summed)
     registry.push(this);
   }
   get src() {
@@ -109,12 +110,20 @@ class FakeAudio {
     this.__srcValue = v == null ? "" : String(v);
     // Assigning a source resets the element, exactly like the real API.
     this.currentTime = 0;
+    this.__played = 0;
     this.ended = false;
     this.error = null;
     if (this.__srcValue) (globalThis.__loads ||= []).push(this.__srcValue);
     const d = globalThis.__durations?.[this.__srcValue];
     this.duration = d == null ? NaN : d;
     this.__endAt = globalThis.__streamEnds?.[this.__srcValue] ?? d;
+    // Metadata lands after the src is set, as in a browser.
+    const loaded = this.__srcValue;
+    if (Number.isFinite(this.duration)) queueMicrotask(() => this.__srcValue === loaded && this.emit("durationchange"));
+  }
+  get played() {
+    const s = this.__played;
+    return { length: s > 0 ? 1 : 0, start: () => 0, end: () => s };
   }
   removeAttribute(name) {
     if (name === "src") this.src = "";
@@ -139,6 +148,7 @@ class FakeAudio {
   }
   load() {
     this.currentTime = 0;
+    this.__played = 0;
     this.ended = false;
     this.error = null;
   }
@@ -160,6 +170,7 @@ class FakeAudio {
     const step = (this.__tickMs / 1000) * (this.playbackRate || 1);
     const before = this.currentTime;
     this.currentTime = Math.min(this.duration, this.currentTime + step);
+    this.__played += this.currentTime - before;
     this.emit("timeupdate");
     if (this.currentTime >= endAt && !this.ended) {
       this.ended = true;
@@ -184,6 +195,8 @@ async function bundleEngine() {
         return {
           getStreamUrl: async (id) => {
             if (globalThis.__failIds?.has(id)) throw new Error("stream gone");
+            const ms = globalThis.__resolveDelay?.[id];
+            if (ms) await new Promise((r) => globalThis.window.setTimeout(r, ms));
             return "fake:" + id;
           },
           localTrackUrl: async (id) => "fake:" + id,
@@ -198,8 +211,16 @@ async function bundleEngine() {
         (globalThis.__events ||= []).push({ type, id: track && track.id, position });
       }`,
     analysis: `
-      export async function analyseTrack(t) { return globalThis.__analysis?.[t.id] ?? null; }
-      export function peekAnalysis(id) { return globalThis.__analysis?.[id] ?? null; }`,
+      export async function analyseTrack(t) {
+        (globalThis.__analysisCalls ||= []).push({ id: t.id, duration: t.duration });
+        const ms = globalThis.__analysisDelay?.[t.id];
+        if (ms) await new Promise((r) => globalThis.window.setTimeout(r, ms));
+        (globalThis.__analysed ||= new Set()).add(t.id);
+        return globalThis.__analysis?.[t.id] ?? null;
+      }
+      export function peekAnalysis(id) {
+        return globalThis.__analysisDelay?.[id] && !globalThis.__analysed?.has(id) ? null : globalThis.__analysis?.[id] ?? null;
+      }`,
     artwork: `export function upgradeArtwork(t) { return t || ""; }`,
     persist: `
       export const storage = globalThis.__storage;
@@ -212,7 +233,7 @@ async function bundleEngine() {
       contents: `
         export * from "./src/lib/audio";
         export { initAutoplay, dontPlay } from "./src/lib/autoplay";
-        export { usePlayer, autoplayTail, nextPass, upNextIndex, shownTrack } from "./src/stores/player";
+        export { usePlayer, autoplayTail, nextPass, upNext, shownTrack } from "./src/stores/player";
         export { useSettings } from "./src/stores/settings";
         export { useLibrary } from "./src/stores/library";
         export { useUI } from "./src/stores/ui";
@@ -279,6 +300,10 @@ export async function createEngine({ tickMs = 20 } = {}) {
   globalThis.__events = events;
   globalThis.__clock = clock;
   globalThis.__analysis = {};
+  delete globalThis.__analysisDelay;
+  delete globalThis.__resolveDelay;
+  delete globalThis.__analysed;
+  globalThis.__analysisCalls = [];
   delete globalThis.__gainDb;
   delete globalThis.__lufs;
   delete globalThis.__radio;

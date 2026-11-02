@@ -40,7 +40,7 @@
  * idempotent completion, and the deck that is already playing wins either way.
  */
 import { useLibrary } from "../stores/library";
-import { upNextIndex, usePlayer } from "../stores/player";
+import { upNext, usePlayer } from "../stores/player";
 import { useSettings } from "../stores/settings";
 import { useUI } from "../stores/ui";
 import { isEarlyExit, useListening } from "../stores/listening";
@@ -164,16 +164,15 @@ function isAbortError(err: unknown): boolean {
 /** Volume leveling targets (integrated loudness); "off" plays streams as mastered. */
 const LOUDNESS_TARGETS: Record<string, number> = { quiet: -19, normal: -14, loud: -11 };
 /**
- * Gain assumed for a track whose loudness hasn't landed yet. Typical YouTube
- * masters sit around -9 LUFS, whose normalisation gain is ≈0.56; the
- * measurement usually arrives with the first audio chunk, so this only
- * shapes the very start of a stream.
+ * Loudness assumed for a track whose loudness hasn't landed yet, or whose
+ * measurement failed. Typical YouTube masters sit around -9 LUFS, whose
+ * normalisation gain is ≈0.56; YouTube's report usually arrives with the first
+ * audio chunk, so for most streams this only shapes the very start.
  */
 const FALLBACK_LUFS = -9;
 
-/** track id → measured loudness (LUFS), or null for "play at its own level"
- * (a local file without ReplayGain). Insertion-ordered as an LRU. */
-const loudnessLufs = new Map<string, number | null>();
+/** track id → loudness (LUFS): YouTube's report, ReplayGain or a measurement. Insertion-ordered as an LRU. */
+const loudnessLufs = new Map<string, number>();
 const GAINS_MAX = 600;
 
 /** Normalisation gain that moves a track measured at `lufs` to the target.
@@ -183,7 +182,7 @@ function gainForLufs(lufs: number, target: number): number {
   return Math.min(1, Math.max(0.05, Math.pow(10, (target - lufs) / 20)));
 }
 
-function rememberLufs(trackId: string, lufs: number | null): void {
+function rememberLufs(trackId: string, lufs: number): void {
   loudnessLufs.delete(trackId);
   loudnessLufs.set(trackId, lufs);
   while (loudnessLufs.size > GAINS_MAX) {
@@ -195,10 +194,63 @@ function rememberLufs(trackId: string, lufs: number | null): void {
 
 function gainForTrack(trackId: string | null): number {
   const known = trackId ? loudnessLufs.get(trackId) : undefined;
-  if (known === null) return 1;
   const target = LOUDNESS_TARGETS[useSettings.getState().loudnessLevel];
   if (target === undefined) return MASTER_TRIM; // leveling off
   return gainForLufs(known ?? FALLBACK_LUFS, target) * MASTER_TRIM;
+}
+
+/** A level that lands on a song being heard glides this long instead of stepping. */
+const LEVEL_GLIDE_MS = 2000;
+/** Songs whose level is gliding: from the level heard when the new one landed, since `at`. */
+const glides = new Map<string, { from: number; at: number }>();
+let glideTimer: number | null = null;
+
+/** Seconds of its source a deck has played; a new src starts at none. */
+function playedSeconds(a: HTMLAudioElement): number {
+  let s = 0;
+  for (let i = 0; i < a.played.length; i++) s += a.played.end(i) - a.played.start(i);
+  return s;
+}
+
+/** The level a song plays at now: its leveling gain, or part way along a glide to it. */
+function levelOf(trackId: string | null): number {
+  const target = gainForTrack(trackId);
+  const g = trackId ? glides.get(trackId) : undefined;
+  if (!g) return target;
+  const p = Math.min(1, (performance.now() - g.at) / LEVEL_GLIDE_MS);
+  return g.from + ((target - g.from) * (1 - Math.cos(Math.PI * p))) / 2;
+}
+
+function tickGlides(): void {
+  const now = performance.now();
+  for (const [id, g] of glides) if (now - g.at >= LEVEL_GLIDE_MS) glides.delete(id);
+  refreshVolumes();
+  if (!glides.size && glideTimer != null) {
+    window.clearInterval(glideTimer);
+    glideTimer = null;
+  }
+}
+
+/** A song's loudness landed (YouTube's report, ReplayGain or a measurement): a song being heard glides to it. */
+function setLoudness(trackId: string, lufs: number): void {
+  if (loudnessLufs.get(trackId) === lufs) {
+    rememberLufs(trackId, lufs); // unchanged: it only moves up the LRU
+    return;
+  }
+  const st = usePlayer.getState();
+  const current = st.queue[st.index]?.id === trackId;
+  const blending = fade?.toId === trackId || fade?.fromId === trackId;
+  const from = levelOf(trackId);
+  rememberLufs(trackId, lufs);
+  // Heard already: a blend's decks, or the playing deck once it has played some of this song.
+  const heard = blending || (current && st.playing && loadedId === trackId && playedSeconds(el()) > 0);
+  if (heard && Math.abs(gainForTrack(trackId) - from) > 1e-4) {
+    glides.set(trackId, { from, at: performance.now() });
+    if (glideTimer == null) glideTimer = window.setInterval(tickGlides, 25);
+  } else {
+    glides.delete(trackId); // not heard: it takes the new level at once
+  }
+  if (current || blending) refreshVolumes();
 }
 
 /**
@@ -219,12 +271,8 @@ async function fetchLoudness(proxyUrl: string, track: Track): Promise<void> {
       return;
     }
     needsMeasuring.delete(trackId);
-    rememberLufs(trackId, lufs);
     // The track already playing (or being faded into) picks the gain up now.
-    const state = usePlayer.getState();
-    if (state.queue[state.index]?.id === trackId || fade?.toId === trackId || fade?.fromId === trackId) {
-      refreshVolumes();
-    }
+    setLoudness(trackId, lufs);
   } catch {
     /* metadata is best-effort */
   }
@@ -256,8 +304,7 @@ function levelLocal(track: Track): void {
   void (async () => {
     const gainDb = await requireBridge().localGainDb(track.id);
     if (typeof gainDb === "number") {
-      rememberLufs(track.id, -18 - gainDb);
-      if (usePlayer.getState().queue[usePlayer.getState().index]?.id === track.id) refreshVolumes();
+      setLoudness(track.id, -18 - gainDb);
       return;
     }
     needsMeasuring.add(track.id);
@@ -273,15 +320,15 @@ function levelLocal(track: Track): void {
 function analyse(track: Track): void {
   const s = useSettings.getState();
   if (!s.smartFade && !s.skipSilence && !needsMeasuring.has(track.id)) return;
-  void analyseTrack(track)
+  // A song listed without its length (Home cards, podcast episodes) waits for its deck to know it.
+  const duration = track.duration || (loadedId === track.id && Number.isFinite(el().duration) ? el().duration : 0);
+  if (!duration) return;
+  void analyseTrack({ ...track, duration })
     .then((a) => {
       if (needsMeasuring.has(track.id)) {
         needsMeasuring.delete(track.id);
-        // A local file that can't be measured plays at its own level; a stream keeps the fallback.
-        if (a?.lufs != null) rememberLufs(track.id, a.lufs);
-        else if (track.localPath || track.id.startsWith("local:")) rememberLufs(track.id, null);
-        const st = usePlayer.getState();
-        if (st.queue[st.index]?.id === track.id || fade?.toId === track.id || fade?.fromId === track.id) refreshVolumes();
+        // A failed or dropped measurement isn't remembered: the fallback gain stays and the next play measures again.
+        if (a?.lufs != null) setLoudness(track.id, a.lufs);
       }
       const edges = silenceEdges(track.id);
       const st = usePlayer.getState();
@@ -301,13 +348,11 @@ function analyse(track: Track): void {
 }
 
 /**
- * Master trim — folded into every STREAM track's gain. 1.0 = neutral: streams
- * play at the standard -14 LUFS loudness, same as Spotify/YouTube Music.
- * Lower it (e.g. 0.7) if you want streams quieter than the standard, or
- * nudge it up if you want them hotter — above 1.0 a loud master can clip,
- * so treat anything >1.0 with care.
- * Local library files deliberately skip it — they play at their original
- * level (gain 1.0), untrimmed and unnormalised.
+ * Master trim — folded into every track's gain, local files included. 1.0 =
+ * neutral: songs play at the standard -14 LUFS loudness, same as
+ * Spotify/YouTube Music. Lower it (e.g. 0.7) if you want them quieter than
+ * the standard, or nudge it up if you want them hotter — above 1.0 a loud
+ * master can clip, so treat anything >1.0 with care.
  */
 const MASTER_TRIM = 1.0;
 
@@ -401,11 +446,12 @@ function applyElementVolumes(mainGain: number, standbyGain: number): void {
   const mainId = state.queue[state.index]?.id ?? null;
   const standbyId = fade?.toId ?? null;
   const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
-  elements[mainIdx].volume = clamp01(v * mainGain * gainForTrack(mainId));
-  // The steady level, not the volume slider or the sleep fade: headroom tied
+  const mainLevel = levelOf(mainId);
+  elements[mainIdx].volume = clamp01(v * mainGain * mainLevel);
+  // The leveling level, not the volume slider or the sleep fade: headroom tied
   // to those cancelled them out whenever a boost needed room.
-  applyHeadroom(clamp01(gainForTrack(mainId)));
-  elements[mainIdx === 0 ? 1 : 0].volume = clamp01(v * standbyGain * gainForTrack(standbyId));
+  applyHeadroom(clamp01(mainLevel));
+  elements[mainIdx === 0 ? 1 : 0].volume = clamp01(v * standbyGain * levelOf(standbyId));
 }
 
 function applySpeed(): void {
@@ -698,8 +744,8 @@ function maybeArmTransition(): void {
   const fadeMs = fadeMsForNext();
   if (fadeMs < 500) return;
   const state = usePlayer.getState();
-  const ni = upNextIndex(state);
-  if (ni < 0) return;
+  const nextTrack = upNext(state);
+  if (!nextTrack) return;
   const a = el();
   const duration = Number.isFinite(a.duration) ? a.duration : 0;
   if (!duration || !state.playing) return;
@@ -708,8 +754,6 @@ function maybeArmTransition(): void {
   const remainingMs = (duration - tail - a.currentTime) * 1000;
   if (remainingMs > fadeMs + ARM_LEAD_MS || remainingMs <= 250) return;
 
-  const nextTrack = state.queue[ni];
-  if (!nextTrack) return;
   if (nextTrack.id === state.queue[state.index].id) return; // a second copy restarts from the top, never blends into itself
   if (failedBlend?.fromId !== loadedId) failedBlend = null;
   if (failedBlend?.toId === nextTrack.id) return;
@@ -731,7 +775,8 @@ async function beginFade(nextTrack: Track, fadeMs: number): Promise<void> {
     if (!url) throw new Error("next track has no source");
     // The fade's standby element carries the incoming track's own loudness
     // gain; the load-time prefetch usually already did this — cheap retry.
-    if (!local) void fetchLoudness(url, nextTrack);
+    if (local) levelLocal(nextTrack);
+    else void fetchLoudness(url, nextTrack);
     // The world may have moved on while we resolved.
     const cur = usePlayer.getState().queue[usePlayer.getState().index];
     if (stale() || !armed || armed.toId !== nextTrack.id || fade || cur?.id === nextTrack.id) {
@@ -769,7 +814,7 @@ async function beginFade(nextTrack: Track, fadeMs: number): Promise<void> {
     if (stale() || fade) return;
     // If the user interacted meanwhile, re-check.
     const s2 = usePlayer.getState();
-    if (s2.queue[upNextIndex(s2)]?.id !== nextTrack.id) {
+    if (upNext(s2)?.id !== nextTrack.id) {
       abortFade(false);
       return;
     }
@@ -891,13 +936,11 @@ function completeTransition(
     // The incoming track sits right after the outgoing one. An earlier copy of
     // the same id (a song replayed further back) must not win, or the index
     // jumps back and everything after it plays again.
-    const succ = (state.index + 1) % state.queue.length; // a repeat-all wrap blends into the first song
-    const ni =
-      knownIndex !== undefined && state.queue[knownIndex]?.id === f.toId
-        ? knownIndex
-        : state.queue[succ]?.id === f.toId
-          ? succ
-          : state.queue.findIndex((t) => t.id === f.toId);
+    // Where the store already put it (Next pressed mid-blend), what follows the outgoing song (at a
+    // shuffled repeat-all wrap the next pass's first), else wherever it is now.
+    const known = knownIndex !== undefined && state.queue[knownIndex]?.id === f.toId;
+    const follows = !known && upNext(state)?.id === f.toId;
+    const ni = known ? knownIndex : state.queue.findIndex((t) => t.id === f.toId);
     if (ni < 0) {
       // The incoming track left the queue mid-blend (it was removed, or the
       // queue was truncated). Nothing owns that deck any more, so stop it —
@@ -940,10 +983,11 @@ function completeTransition(
     const pos = Number.isFinite(raw) ? Math.min(Math.max(raw, 0), Number.isFinite(dur) ? dur : Math.max(raw, 0)) : 0;
     flushAccum("stop");
     accum = { id: f.toId, playedMs: 0, pendingMs: 0, lastPos: pos };
-    emitPlayEvent("start", state.queue[ni], pos, 0, 0);
-    useLibrary.getState().pushHistory(state.queue[ni]);
+    emitPlayEvent("start", f.to, pos, 0, 0);
+    useLibrary.getState().pushHistory(f.to);
     advancingToId = f.toId;
-    usePlayer.setState({ index: ni, position: pos, playing: true, error: null, blendInto: null });
+    if (follows) usePlayer.getState().finishBlend(f.toId, pos);
+    else usePlayer.setState({ index: ni, position: pos, playing: true, error: null, blendInto: null });
     advancingToId = null;
     // Volumes after the index update: the loudness gain is keyed by the current
     // track, and the engine-driven advance short-circuits the store subscription,
@@ -952,9 +996,10 @@ function completeTransition(
     applyElementVolumes(1, 0);
     // The engine-driven advance skips the store subscriber: tell the OS what's
     // playing now, and warm the song after it.
-    updateMediaSession(state.queue[ni]);
-    const after = usePlayer.getState();
-    prefetchLoudness(after.queue[upNextIndex(after)] ?? null);
+    updateMediaSession(f.to);
+    prefetchLoudness(upNext(usePlayer.getState()));
+    // Listed without its length: its deck's durationchange came while it was the standby (see analyse).
+    if (!f.to.duration) analyse(f.to);
     const edges = silenceEdges(f.toId);
     if (edges && edges.tail > 0.05) armSilenceTail(edges.tail);
   } finally {
@@ -1056,9 +1101,8 @@ function armSilenceTail(tailSec: number): void {
     if (transitioning()) return;
     const cur = el();
     if (!Number.isFinite(cur.duration)) return;
-    if (cur.currentTime >= cur.duration - tailSec - 0.05 && !sleepStopsHere()) {
-      usePlayer.getState().next(false);
-    }
+    // The sound is over: repeat, stop for the sleep timer or move on, exactly as at the song's end.
+    if (cur.currentTime >= cur.duration - tailSec - 0.05) onTrackEnded();
   };
   silenceTailTimer = window.setInterval(check, 500);
   void check();
@@ -1149,6 +1193,11 @@ export function initAudioEngine(): void {
       if (i !== mainIdx) return;
       onTrackEnded();
     });
+    // A song listed without its length is analysed once its deck knows it (see analyse).
+    e.addEventListener("durationchange", () => {
+      const cur = usePlayer.getState().queue[usePlayer.getState().index];
+      if (i === mainIdx && cur && !cur.duration && loadedId === cur.id) analyse(cur);
+    });
   }
 
 
@@ -1190,7 +1239,7 @@ export function initAudioEngine(): void {
       // and so does anything that changes what comes next (a song added in
       // front of the one fading in, that song removed, repeat turned off at
       // the wrap): the blend would land on the wrong track.
-      if (state.seekNonce !== prev.seekNonce || state.queue[upNextIndex(state)]?.id !== blendTo) {
+      if (state.seekNonce !== prev.seekNonce || upNext(state)?.id !== blendTo) {
         abortFade(false);
       }
     }
@@ -1206,8 +1255,8 @@ export function initAudioEngine(): void {
     // A new song became next under the playing one (an AutoPlay refill, Play
     // next): warm it the way loadTrack does, so a skip or blend never waits.
     if (state.queue !== prev.queue && cur && loadedId === cur.id) {
-      const upNext = state.queue[upNextIndex(state)] ?? null;
-      if (upNext && upNext.id !== prev.queue[upNextIndex(prev)]?.id) prefetchLoudness(upNext);
+      const following = upNext(state);
+      if (following && following.id !== upNext(prev)?.id) prefetchLoudness(following);
     }
 
     if (state.playing !== prev.playing) {
@@ -1281,9 +1330,12 @@ export function initAudioEngine(): void {
   useSettings.subscribe((st, prev) => {
     if (st.eqEnabled !== prev.eqEnabled || st.eqGains !== prev.eqGains || st.eqAutoHeadroom !== prev.eqAutoHeadroom) applyEq();
   });
-  // Volume leveling level changes apply at once.
+  // Volume leveling level changes apply at once, a glide in progress included (the user's own change).
   useSettings.subscribe((st, prev) => {
-    if (st.loudnessLevel !== prev.loudnessLevel) refreshVolumes();
+    if (st.loudnessLevel !== prev.loudnessLevel) {
+      glides.clear();
+      refreshVolumes();
+    }
   });
   // The sleep timer's closing fade.
   useSleepTimer.subscribe((s, prev) => {
@@ -1364,12 +1416,14 @@ async function loadTrack(track: Track | null, autoplay: boolean): Promise<void> 
   }
   loadedId = null;
   historyForId = null;
+  glides.clear();
   retryCount = 0;
   retriedAt = -Infinity;
+  // The store keeps the position until the deck plays from it: zeroing it here lost a saved resume
+  // point whose song could not load yet (offline at launch), on screen, on disk and for the next play.
   pendingSeek = usePlayer.getState().position;
   usePlayer.setState({
     buffering: true,
-    position: 0,
     error: null,
     duration: track.duration || 0,
   });
@@ -1380,11 +1434,16 @@ async function loadTrack(track: Track | null, autoplay: boolean): Promise<void> 
   // crossfade needs the gain the moment it starts). After loadUrl, so the
   // current track's resolution goes first.
   const st = usePlayer.getState();
-  if (st.queue[st.index]?.id === track.id) prefetchLoudness(st.queue[upNextIndex(st)] ?? null);
+  if (st.queue[st.index]?.id === track.id) prefetchLoudness(upNext(st));
 }
+
+/** Bumped by every load. A load whose source resolves after a newer one began leaves the deck to it:
+ *  both setting the src lost the resume point (play pressed while the launch load resolved). */
+let loadSeq = 0;
 
 async function loadUrl(track: Track, autoplay: boolean, forceRotate: boolean): Promise<void> {
   if (!elements) return;
+  const seq = ++loadSeq;
   try {
     if (track.localPath || track.id.startsWith("local:")) {
       const a = el();
@@ -1393,6 +1452,7 @@ async function loadUrl(track: Track, autoplay: boolean, forceRotate: boolean): P
       // proxy port changes between launches, so cached URLs would go stale,
       // and the IPC lookup is a local roundtrip.
       const src = await requireBridge().localTrackUrl(track.id);
+      if (seq !== loadSeq) return;
       if (!src) throw new Error("Local file is missing on disk");
       // Levels like a stream: by its ReplayGain tag, else a measurement; the
       // fallback gain covers the moment before.
@@ -1422,7 +1482,7 @@ async function loadUrl(track: Track, autoplay: boolean, forceRotate: boolean): P
     }
     const url = await requireBridge().getStreamUrl(track.id, forceRotate, useSettings.getState().streamingQuality);
     const cur = usePlayer.getState().queue[usePlayer.getState().index];
-    if (cur?.id !== track.id) return; // user moved on while we were resolving
+    if (cur?.id !== track.id || seq !== loadSeq) return; // user moved on while we were resolving
     // Loudness metadata races the element's own first request: both share the
     // proxy's single in-flight resolution, so the measured gain lands with the
     // first audio chunk while the fallback gain covers the moment before.
@@ -1458,7 +1518,7 @@ async function loadUrl(track: Track, autoplay: boolean, forceRotate: boolean): P
     if (trim && trim.tail > 0.05 && usePlayer.getState().playing) armSilenceTail(trim.tail);
   } catch (err) {
     const cur = usePlayer.getState().queue[usePlayer.getState().index];
-    if (cur?.id !== track.id) return;
+    if (cur?.id !== track.id || seq !== loadSeq) return;
     handleFailure(track, err);
   }
 }

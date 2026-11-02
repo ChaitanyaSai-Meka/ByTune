@@ -7,9 +7,11 @@
  * of `listRef`; a press on a button inside a row never starts a drag.
  *
  * Rows that are also native drag sources (a playlist's songs, dropped onto
- * other playlists or the queue) use `dragProps`/`listProps` instead: the same
- * picture over the browser's own drag, so one gesture can either reorder the
- * list or carry the song out of it.
+ * other playlists or the queue) use `dragProps` instead: the same picture over
+ * the browser's own drag, so one gesture can either reorder the list or carry
+ * the song out of it. Over the list's column the copy shows a slot and a
+ * release lands there; off it the copy shrinks to a card that whatever is
+ * under the pointer takes.
  */
 import {
   useEffect,
@@ -42,11 +44,6 @@ interface Drag {
 export interface SortableDragProps {
   onDragStart: (e: DragEvent<HTMLElement>) => void;
   onDragEnd: (e: DragEvent<HTMLElement>) => void;
-}
-
-export interface SortableListProps {
-  onDragOver: (e: DragEvent<HTMLElement>) => void;
-  onDrop: (e: DragEvent<HTMLElement>) => void;
 }
 
 export interface SortableRowProps {
@@ -89,7 +86,6 @@ export function useSortable(opts: {
   styleFor: (index: number) => CSSProperties | undefined;
   rowProps: (index: number) => SortableRowProps;
   dragProps: (index: number) => SortableDragProps;
-  listProps: SortableListProps;
 } {
   const [drag, setDrag] = useState<Drag | null>(null);
   const live = useRef<Drag | null>(null);
@@ -157,14 +153,45 @@ export function useSortable(opts: {
   useEffect(() => {
     if (!active) return;
     if (live.current?.native) {
-      // The browser owns a native drag's input; the document still reports where it is.
+      // The browser owns a native drag's input; the document hears each step first. While the
+      // copy shows a slot the drag is the list's alone (the header and the page's own "drop to
+      // add" never see it), so a release lands the song in the slot it shows.
+      let awayTimer = 0;
       const onOver = (e: globalThis.DragEvent): void => {
+        window.clearTimeout(awayTimer); // still in the window
         pointer.current.x = e.clientX;
         pointer.current.y = e.clientY;
-        updateNative();
+        if (!updateNative()) return; // the compact card: whatever is under the pointer decides
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
       };
+      const onDrop = (e: globalThis.DragEvent): void => {
+        const d = live.current;
+        if (!d || !ghost.current?.inside) return; // the last frame drawn decides
+        e.preventDefault();
+        e.stopPropagation();
+        settle(d.target);
+      };
+      // Out of the window nothing here takes the release, and the copy says so. A cancelled drag
+      // (Escape) sends the same dragleave just before its dragend, so the card waits a moment:
+      // a cancel glides home from the slot the copy shows.
+      const onLeave = (e: globalThis.DragEvent): void => {
+        if (e.relatedTarget !== null) return;
+        window.clearTimeout(awayTimer);
+        awayTimer = window.setTimeout(() => updateNative(true), 100);
+      };
+      document.addEventListener("dragenter", onOver, true);
       document.addEventListener("dragover", onOver, true);
-      return () => document.removeEventListener("dragover", onOver, true);
+      document.addEventListener("drop", onDrop, true);
+      document.addEventListener("dragleave", onLeave, true);
+      return () => {
+        window.clearTimeout(awayTimer);
+        document.removeEventListener("dragenter", onOver, true);
+        document.removeEventListener("dragover", onOver, true);
+        document.removeEventListener("drop", onDrop, true);
+        document.removeEventListener("dragleave", onLeave, true);
+      };
     }
     const cancel = (): void => {
       press.current = null;
@@ -221,15 +248,21 @@ export function useSortable(opts: {
     if (target !== d.target) put({ ...d, target });
   };
 
-  /** A native drag moved: the copy follows (locked to the list while over it), the slots follow inside it. */
-  const updateNative = (): void => {
+  /**
+   * A native drag moved: the copy follows, locked to the list while over its column, and the
+   * slots follow it there. Returns whether the copy shows a slot (`away`: the pointer left the window).
+   */
+  const updateNative = (away = false): boolean => {
     const d = live.current;
     const g = ghost.current;
     const list = o.current.listRef.current;
-    if (!d || !g || !list || d.settleTo !== null) return;
+    if (!d || !g || !list || d.settleTo !== null) return false;
     const lr = list.getBoundingClientRect();
+    // The list's column where the page shows: over the header or under the last row the copy
+    // parks at the first or last slot, and a release there lands in it.
+    const page = o.current.scrollRef.current?.getBoundingClientRect() ?? lr;
     const { x, y, startX, startY } = pointer.current;
-    const inside = x >= lr.left && x <= lr.right;
+    const inside = !away && x >= lr.left && x <= lr.right && y >= page.top && y <= page.bottom;
     if (inside !== g.inside) {
       g.inside = inside;
       g.el.style.width = `${inside ? g.rect.width : Math.min(g.rect.width, COMPACT_PX)}px`;
@@ -256,6 +289,7 @@ export function useSortable(opts: {
       target = o.current.clamp(d.from, target);
     }
     if (target !== d.target) put({ ...d, target });
+    return inside;
   };
 
   const autoScroll = (): void => {
@@ -365,22 +399,6 @@ export function useSortable(opts: {
     },
   });
 
-  const listProps: SortableListProps = {
-    onDragOver: (e) => {
-      if (!live.current?.native) return;
-      e.preventDefault();
-      e.stopPropagation(); // the page's own "drop to add" target isn't for its own rows
-      e.dataTransfer.dropEffect = "move";
-    },
-    onDrop: (e) => {
-      const d = live.current;
-      if (!d?.native) return;
-      e.preventDefault();
-      e.stopPropagation();
-      settle(d.target);
-    },
-  };
-
   const still = drag ? reduced() : false;
   const styleFor = (i: number): CSSProperties | undefined => {
     const d = drag;
@@ -456,5 +474,5 @@ export function useSortable(opts: {
     },
   });
 
-  return { styleFor, rowProps, dragProps, listProps };
+  return { styleFor, rowProps, dragProps };
 }

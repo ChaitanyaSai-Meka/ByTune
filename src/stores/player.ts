@@ -34,15 +34,25 @@ export function shownTrack(s: { blendInto: Track | null; queue: Track[]; index: 
   return s.blendInto ?? s.queue[s.index] ?? null;
 }
 
+type PlayOrder = { queue: Track[]; index: number; repeat: RepeatMode; shuffle: boolean };
+
+/** Where the queue moves on to: the next entry, or the top of another pass (reordered when shuffled). */
+function advance(s: PlayOrder): { queue: Track[]; index: number } {
+  if (s.index + 1 < s.queue.length) return { queue: s.queue, index: s.index + 1 };
+  return { queue: s.shuffle ? nextPass(s.queue) : s.queue, index: 0 };
+}
+
 /**
- * The queue entry a blend may lead into, mirroring next(): the next song, or
- * the first when repeat-all wraps — not while shuffled, whose next pass is
- * reordered at the wrap. -1 when nothing follows (or repeat-one).
+ * The song a blend may lead into: the one next(false) lands on — the next
+ * entry, or at a repeat-all wrap the next pass's first song (nextPass's when
+ * shuffled). Null under repeat-one, at the end without repeat-all, and on a
+ * one-song queue.
  */
-export function upNextIndex(s: { queue: Track[]; index: number; repeat: RepeatMode; shuffle: boolean }): number {
-  if (s.repeat === "one") return -1;
-  if (s.index + 1 < s.queue.length) return s.index + 1;
-  return s.repeat === "all" && !s.shuffle && s.queue.length > 1 ? 0 : -1;
+export function upNext(s: PlayOrder): Track | null {
+  if (s.repeat === "one") return null;
+  if (s.index + 1 >= s.queue.length && (s.repeat !== "all" || s.queue.length < 2)) return null;
+  const to = advance(s);
+  return to.queue[to.index];
 }
 
 /** The queue ran out: AutoPlay continues it when it is on, nothing repeats,
@@ -66,24 +76,97 @@ function shuffledUpcoming(s: QueueShape): Track[] {
   return [...s.queue.slice(0, s.index + 1), ...seededShuffle(s.queue.slice(s.index + 1, end), randomSeed()), ...s.queue.slice(end)];
 }
 
-/** Your upcoming songs back in the order you had them; songs added while shuffled stay after. */
-function orderedUpcoming(s: QueueShape, unshuffled: string[]): Track[] {
+/** Your songs' ids from the one at `index` round to the one before it: your order as a cycle read from that song. */
+const orderFrom = (tracks: Track[], index: number): string[] =>
+  [...tracks.slice(index), ...tracks.slice(0, index)].map((t) => t.id);
+
+/**
+ * Where your upcoming songs stand in your order (`unshuffled`, a cycle).
+ * `from` is the place of the song playing (`own`) or, when your order holds
+ * no place for it (a suggestion, a song from "Play now"), of the last song
+ * before it that it does; -1 when none. `at[k]` is the place of upcoming entry
+ * index+1+k: a song's upcoming copies take its places in turn on from
+ * `from`; -1 when none is left (added with Add to queue while shuffled).
+ * `spare` lists the places no upcoming copy takes (songs played or removed).
+ */
+function placesIn(order: string[], s: QueueShape): { from: number; own: boolean; at: number[]; spare: number[] } {
   const end = s.queue.length - autoplayTail(s);
-  const rank = new Map(unshuffled.map((id, i) => [id, i]));
-  const at = (t: Track): number => rank.get(t.id) ?? rank.size;
-  const upcoming = s.queue.slice(s.index + 1, end).sort((a, b) => at(a) - at(b));
+  const first = new Map<string, number>();
+  const left = new Map<string, number>();
+  order.forEach((id, p) => {
+    if (!first.has(id)) first.set(id, p);
+    left.set(id, (left.get(id) ?? 0) + 1);
+  });
+  let j = Math.min(s.index, s.queue.length - 1); // -1 for an empty queue
+  while (j >= 0 && !first.has(s.queue[j].id)) j--;
+  const from = j < 0 ? -1 : first.get(s.queue[j].id)!;
+  const own = j === s.index;
+  if (own) left.set(s.queue[j].id, left.get(s.queue[j].id)! - 1); // the song playing keeps its own place
+  const free = new Map<string, number[]>();
+  for (let k = 1; k <= order.length; k++) {
+    const p = (from + k) % order.length;
+    const n = left.get(order[p])!;
+    if (n <= 0) continue;
+    left.set(order[p], n - 1);
+    const list = free.get(order[p]);
+    if (list) list.push(p);
+    else free.set(order[p], [p]);
+  }
+  const at = s.queue.slice(s.index + 1, end).map((t) => free.get(t.id)?.shift() ?? -1);
+  return { from, own, at, spare: [...free.values()].flat() };
+}
+
+/** Your order as a cycle read from the song playing — given a place right after the last song before it when it had none. */
+function fromPlaying(order: string[], s: QueueShape): string[] {
+  const { from, own } = placesIn(order, s);
+  const k = own ? from : from + 1;
+  const cycle = [...order.slice(k), ...order.slice(0, k)];
+  return own ? cycle : [s.queue[s.index].id, ...cycle];
+}
+
+/** `order` without the places in `drop`, with `ids` right after place `after` (-1: first). */
+function reorder(order: string[], drop: Set<number>, ids: string[], after: number): string[] {
+  const out = after < 0 ? [...ids] : [];
+  order.forEach((id, p) => {
+    if (!drop.has(p)) out.push(id);
+    if (p === after) out.push(...ids);
+  });
+  return out;
+}
+
+/**
+ * Shuffle off: your upcoming songs in your order on from the song playing —
+ * the ones before it in your order go after the last — then songs your order
+ * doesn't hold, as queued; AutoPlay's suggestions stay last.
+ */
+function inYourOrder(s: QueueShape, order: string[]): Track[] {
+  const end = s.queue.length - autoplayTail(s);
+  const { from, at } = placesIn(order, s);
+  const n = order.length;
+  const rank = (p: number): number => (p < 0 ? n : (p - from - 1 + n) % n);
+  const upcoming = s.queue
+    .slice(s.index + 1, end)
+    .map((t, k) => ({ t, r: rank(at[k]) }))
+    .sort((a, b) => a.r - b.r)
+    .map((u) => u.t);
   return [...s.queue.slice(0, s.index + 1), ...upcoming, ...s.queue.slice(end)];
 }
 
 /**
  * The next pass of a shuffled repeat-all queue: a fresh order that never
- * starts with the song that just ended. Deterministic for a given queue, so a
- * blend into the wrap can look its first song up ahead of time.
+ * starts with the song that just ended (a queue of copies of one song stays
+ * as it is). Seeded by the queue's own order, so upNext() can name the
+ * wrap's first song while the last one plays, and next() and finishBlend()
+ * install that same order.
  */
 export function nextPass(queue: Track[]): Track[] {
   if (queue.length < 2) return queue;
   const out = seededShuffle(queue, hash32(queue.map((t) => t.id).join()));
-  if (out[0].id === queue[queue.length - 1].id) [out[0], out[1]] = [out[1], out[0]];
+  const last = queue[queue.length - 1].id;
+  if (out[0].id !== last) return out;
+  const k = out.findIndex((t) => t.id !== last);
+  if (k < 0) return queue;
+  [out[0], out[k]] = [out[k], out[0]];
   return out;
 }
 
@@ -109,7 +192,8 @@ interface PlayerState {
   awaitingAutoplay: boolean;
   /** Bumped when a new listening context starts, so AutoPlay reseeds (not persisted). */
   contextId: number;
-  /** While shuffle is on: your songs' ids in the order you had them, restored when it goes off. */
+  /** While shuffle is on: your songs' ids in your order, a cycle read from the song that was playing
+      when it last changed; shuffle off continues it from the song playing then. */
   unshuffled: string[] | null;
   /** The song a running blend has crossed over to (it is the louder one now):
       what the screen shows until the blend completes (not persisted). */
@@ -137,6 +221,13 @@ interface PlayerState {
   /** AutoPlay found nothing to continue with: stop where the queue ended. */
   stopAwaiting(): void;
   next(manual?: boolean): void;
+  /**
+   * The audio engine's blend into upNext() finished: move on as next(false)
+   * does (at a shuffled repeat-all wrap into the same next pass), already
+   * `position` seconds into the song. False, changing nothing, when upNext()
+   * is no longer the song `id`.
+   */
+  finishBlend(id: string, position: number): boolean;
   prev(): void;
   toggle(): void;
   setPlaying(playing: boolean): void;
@@ -192,7 +283,7 @@ export const usePlayer = create<PlayerState>()(
             ? [tracks[start], ...seededShuffle([...tracks.slice(0, start), ...tracks.slice(start + 1)], randomSeed())]
             : tracks,
           index: shuffle ? 0 : start,
-          unshuffled: shuffle ? tracks.map((t) => t.id) : null,
+          unshuffled: shuffle ? orderFrom(tracks, start) : null,
           playing: true,
           position: 0,
           error: null,
@@ -273,12 +364,17 @@ export const usePlayer = create<PlayerState>()(
         });
         tail -= adopted;
         const at = playNext ? index + 1 : q.length - tail;
-        set({
-          queue: [...q.slice(0, at), ...add, ...q.slice(at)],
-          autoplayCount: tail,
-          // Play next while shuffled stays next once shuffle goes off.
-          ...(playNext && shuffle && unshuffled ? { unshuffled: [...addIds, ...unshuffled.filter((id) => !addIds.has(id))] } : {}),
-        });
+        let order = unshuffled;
+        if (shuffle && unshuffled) {
+          // Shuffled: Play next also goes right after the song playing in your order, so it stays
+          // next when shuffle goes off; Add to queue takes no place there and plays after your songs.
+          const base = fromPlaying(unshuffled, get());
+          const { at: places, spare } = placesIn(base, get());
+          const drop = new Set(spare.filter((p) => addIds.has(base[p])));
+          if (playNext) places.forEach((p, k) => p >= 0 && addIds.has(queue[index + 1 + k].id) && drop.add(p));
+          order = reorder(base, drop, playNext ? add.map((t) => t.id) : [], 0);
+        }
+        set({ queue: [...q.slice(0, at), ...add, ...q.slice(at)], autoplayCount: tail, unshuffled: order });
         // Added while AutoPlay was fetching after the queue ran out: play it now.
         if (awaitingAutoplay) set({ index: at, playing: true, position: 0, error: null, awaitingAutoplay: false });
         return add.length;
@@ -294,7 +390,18 @@ export const usePlayer = create<PlayerState>()(
         if (at === from) return;
         const q = [...s.queue];
         q.splice(at, 0, ...q.splice(from, 1));
-        set({ queue: q, autoplayCount: tail });
+        let order = s.unshuffled;
+        if (s.shuffle && order && from < firstSuggestion) {
+          // Shuffled: the song moves in your order too, right after the song it now follows. After a
+          // song your order doesn't hold, it leaves your order and plays after your songs with it.
+          const base = fromPlaying(order, s);
+          const { at: places, spare } = placesIn(base, s);
+          const id = s.queue[from].id;
+          const drop = new Set([places[from - s.index - 1], ...spare.filter((p) => base[p] === id)]);
+          const after = at === s.index + 1 ? 0 : places[(at < from ? at - 1 : at) - s.index - 1];
+          order = reorder(base, drop, after >= 0 ? [id] : [], after);
+        }
+        set({ queue: q, autoplayCount: tail, unshuffled: order });
       },
 
       removeAt(i) {
@@ -310,6 +417,8 @@ export const usePlayer = create<PlayerState>()(
           queue: q,
           index: ni,
           autoplayCount: i >= queue.length - tail ? tail - 1 : tail,
+          // The song playing is gone: the one taking its place starts from the top.
+          ...(i === index ? { position: 0 } : {}),
           // The ended song AutoPlay was waiting after is gone: stop waiting.
           ...(i === index && s.awaitingAutoplay ? { awaitingAutoplay: false, playing: false } : {}),
         });
@@ -338,7 +447,6 @@ export const usePlayer = create<PlayerState>()(
           set({
             queue,
             index: queue.length - tracks.length, // the first new song
-
             autoplayCount: tail + tracks.length,
             playing: true,
             position: 0,
@@ -369,32 +477,33 @@ export const usePlayer = create<PlayerState>()(
 
       next(manual = false) {
         const s = get();
-        const { queue, index, shuffle, repeat } = s;
-        if (!queue.length) {
+        if (!s.queue.length) {
           set({ playing: false });
           return;
         }
         // The queue is the play order, shuffled or not.
-        let ni = index + 1;
-        let order = queue;
-        if (ni >= queue.length) {
-          if (repeat === "all") {
-            ni = 0;
-            if (shuffle) order = nextPass(queue);
-          } else if (autoplayContinues(queue, repeat)) {
+        if (s.index + 1 >= s.queue.length && s.repeat !== "all") {
+          if (autoplayContinues(s.queue, s.repeat)) {
             // Wait for AutoPlay (lib/autoplay) rather than stopping, or
             // wrapping back to a song from long ago.
             set({ awaitingAutoplay: true });
             return;
-          } else if (manual) {
-            ni = 0;
-            if (shuffle) order = nextPass(queue);
-          } else {
+          }
+          if (!manual) {
             set({ playing: false, position: 0 });
             return;
           }
         }
-        set({ ...(order !== queue ? { queue: order } : {}), index: ni, playing: true, position: 0, error: null, awaitingAutoplay: false });
+        const to = advance(s);
+        set({ ...(to.queue !== s.queue ? { queue: to.queue } : {}), index: to.index, playing: true, position: 0, error: null, awaitingAutoplay: false });
+      },
+
+      finishBlend(id, position) {
+        const s = get();
+        if (upNext(s)?.id !== id) return false;
+        const to = advance(s);
+        set({ ...(to.queue !== s.queue ? { queue: to.queue } : {}), index: to.index, position, playing: true, error: null, awaitingAutoplay: false, blendInto: null });
+        return true;
       },
 
       prev() {
@@ -451,12 +560,12 @@ export const usePlayer = create<PlayerState>()(
         if (!s.shuffle) {
           set({
             shuffle: true,
-            unshuffled: s.queue.slice(0, s.queue.length - tail).map((t) => t.id),
+            unshuffled: orderFrom(s.queue.slice(0, s.queue.length - tail), s.index),
             queue: shuffledUpcoming(s),
             autoplayCount: tail,
           });
         } else {
-          set({ shuffle: false, unshuffled: null, queue: orderedUpcoming(s, s.unshuffled ?? []), autoplayCount: tail });
+          set({ shuffle: false, unshuffled: null, queue: inYourOrder(s, s.unshuffled ?? []), autoplayCount: tail });
         }
       },
 
@@ -503,7 +612,7 @@ export const usePlayer = create<PlayerState>()(
         if (s.shuffle && Array.isArray(s.queue) && !Array.isArray(s.unshuffled)) {
           return {
             ...s,
-            unshuffled: s.queue.slice(0, s.queue.length - autoplayTail(s)).map((t) => t.id),
+            unshuffled: orderFrom(s.queue.slice(0, s.queue.length - autoplayTail(s)), s.index),
             queue: shuffledUpcoming(s),
           };
         }

@@ -29,7 +29,7 @@ import { EqBars } from "./primitives";
 import { upgradeArtwork } from "../lib/artwork";
 import { CreateMenu } from "./CreateMenu";
 import { playlistFolderItems, playlistHeaderItems } from "../lib/trackActions";
-import { dragHasAlbum, dragHasArtist, dragHasPlaylist, dragHasTrack, readAlbum, readArtist, readPlaylist, readTrack, type AlbumPayload, type ArtistPayload, type PlaylistPayload } from "../lib/dnd";
+import { draggingFromPlaylist, dragHasAlbum, dragHasArtist, dragHasPlaylist, dragHasTrack, readAlbum, readArtist, readPlaylist, readTrack, type AlbumPayload, type ArtistPayload, type PlaylistPayload } from "../lib/dnd";
 import { requireBridge } from "../lib/bridge";
 import { downloadAll, startDownload } from "../lib/downloads";
 import type { Track } from "../types";
@@ -368,8 +368,9 @@ function LibraryPill() {
     const isPlaylist = dragHasPlaylist(e);
     // Playlist rows (+ Downloads) take tracks and whole albums. __liked__
     // carries kind "playlist".
+    // A song dragged from its own playlist's page isn't offered back to that playlist.
     const acceptsTracks =
-      (r.kind === "playlist" || r.kind === "downloads") && (isTrack || isAlbum);
+      (r.kind === "playlist" || r.kind === "downloads") && (isTrack || isAlbum) && !draggingFromPlaylist(r.id);
     // Folders take playlists and albums (file/import into the folder). A
     // track hovering a folder previews the folder and opens it so the drag
     // can land on a playlist inside — the same gesture, no second attempt.
@@ -599,7 +600,9 @@ function LibraryPill() {
         e.dataTransfer.dropEffect = "copy";
         refreshGlow();
       }}
-      onDragLeave={refreshGlow}
+      onDragLeave={(e) => {
+        if (dragHasPlaylist(e) || dragHasArtist(e) || dragHasAlbum(e)) refreshGlow();
+      }}
       onDrop={(e) => {
         clearGlow();
         const isPlaylist = dragHasPlaylist(e);

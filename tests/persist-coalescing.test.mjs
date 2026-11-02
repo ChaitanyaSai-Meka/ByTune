@@ -103,17 +103,45 @@ test("coalesced storage: pagehide flushes the newest values, stores don't wait o
   assert.equal(h.writes.at(-1).data, null, "a removal writes null at once");
 });
 
-test("coalesced storage: the saved object comes back as-is, and boot's own position: 0 doesn't overwrite it", async () => {
+test("coalesced storage: the saved object comes back as-is and is never written back unchanged", async () => {
   const saved = { state: { queue: [{ id: "a" }], position: 30 }, version: 0 };
   const h = await loadCoalescedStorage({ disk: { player: saved } });
   const got = await h.coalesced.getItem("player");
   assert.equal(got, saved, "no JSON round trip");
-  h.coalesced.setItem("player", v({ ...got.state, position: 0 }));
-  assert.equal(h.writes.length, 0, "the resume point on disk stays");
+  // Boot sets fields the store doesn't save (buffering, duration): persist hands over the same saved ones.
+  for (let i = 0; i < 40; i++) {
+    h.coalesced.setItem("player", v({ ...got.state }));
+    h.advance(1000);
+  }
+  h.firePagehide();
+  assert.equal(h.writes.length, 0, "nothing new to write");
   h.coalesced.setItem("player", v({ ...got.state, position: 30.25 }));
   h.advance(10_000);
-  assert.equal(h.writes.length, 1);
+  assert.equal(h.writes.length, 1, "the resume seek landing is written");
   assert.equal(h.writes[0].data.state.position, 30.25);
+});
+
+test("coalesced storage: changes only to fields a store doesn't save write nothing, and don't hold back a real change", async () => {
+  const h = await loadCoalescedStorage();
+  const queue = [{ id: "a" }];
+  h.coalesced.setItem("player", v({ queue, position: 5 }));
+  assert.equal(h.writes.length, 1);
+  for (let i = 0; i < 120; i++) {
+    h.coalesced.setItem("player", v({ queue, position: 5 })); // buffering, duration, error, blendInto…
+    h.advance(250);
+  }
+  assert.equal(h.writes.length, 1, "30 s of unsaved-field changes: no writes");
+  h.coalesced.setItem("player", v({ queue: [...queue, { id: "b" }], position: 5 }));
+  assert.equal(h.writes.length, 2, "a real change still lands at once");
+  h.coalesced.setItem("player", v({ queue: [{ id: "c" }], position: 5 }));
+  h.coalesced.setItem("player", v({ queue: h.writes[1].data.state.queue, position: 5 }));
+  h.coalesced.setItem("player", v({ queue: h.writes[1].data.state.queue, position: 5 }));
+  h.advance(2000);
+  assert.equal(h.writes.length, 3, "the newest value lands when due");
+  assert.equal(h.writes[2].data.state.queue, h.writes[1].data.state.queue);
+  h.coalesced.setItem("player", { state: { queue: h.writes[1].data.state.queue, position: 5 }, version: 1 });
+  h.advance(2000);
+  assert.equal(h.writes.length, 4, "a new version is a change");
 });
 
 test("coalesced storage: a store's actions never reach the bridge (they can't cross IPC)", async () => {

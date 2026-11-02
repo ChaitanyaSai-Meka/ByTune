@@ -37,12 +37,25 @@ async function harness({ legacyStores = false } = {}) {
         readForDocument: name => { calls.push(["read", name]); return null; },
         writeForDocument: async name => { calls.push(["write", name]); return true; },
       };
+      if (name === "./music-service") return {
+        localGainDb: (id) => { calls.push(["gain", id]); return -6.5; },
+        retryStream: (id) => { calls.push(["retry", id]); },
+      };
+      if (name === "./stream-proxy") return {
+        startStreamProxy: async () => { calls.push(["proxy"]); return 4321; },
+        proxyUrlFor: (id, retry, kbps) => { calls.push(["url", id, retry, kbps]); return `proxy:${id}`; },
+        proxyUrlForLocalTrack: () => null,
+      };
       if (name.startsWith("./")) return {};
       return require(name);
     },
   });
   module.exports.registerIpc();
-  return { calls, invoke: (channel, name, trusted = true) => Promise.resolve().then(() => handles.get(channel)({ trusted }, name, {}, "scope")) };
+  return {
+    calls,
+    invoke: (channel, name, trusted = true) => Promise.resolve().then(() => handles.get(channel)({ trusted }, name, {}, "scope")),
+    call: (channel, ...args) => Promise.resolve().then(() => handles.get(channel)({ trusted: true }, ...args)),
+  };
 }
 
 test("reserved/noncanonical persistence names are rejected before storage on both channels", async () => {
@@ -77,4 +90,37 @@ test("library:addFolders cannot mint filesystem approvals from renderer input", 
   // An approved path (userData subtree) still flows through to the library.
   await h.invoke("library:addFolders", [path.join(root, "userdata", "music")]);
   assert.deepEqual(h.calls.at(-1), ["addFolders", path.resolve(path.join(root, "userdata", "music"))]);
+});
+
+const VIDEO = "dQw4w9WgXcQ";
+
+test("music:stream takes only a bare 11-character YouTube id", async () => {
+  const h = await harness();
+  const refused = ["local:abc", "dQw4w9WgXc", "dQw4w9WgXcQQ", "dQw4w9WgXc!", "dQw4w9Wg&c=", "../../etc/x", " dQw4w9WgXc", "", null, 42, {}, [VIDEO]];
+  for (const id of refused) await assert.rejects(h.call("music:stream", id), /Invalid track id/, JSON.stringify(id));
+  assert.deepEqual(h.calls, [], "a refused id starts nothing and resolves nothing");
+  assert.equal(await h.call("music:stream", VIDEO), `proxy:${VIDEO}`);
+  assert.deepEqual(h.calls.filter((c) => c[0] !== "proxy"), [["url", VIDEO, false, undefined]]);
+  await assert.rejects(h.invoke("music:stream", VIDEO, false), /Untrusted IPC sender/);
+});
+
+test("music:stream retry drops the song's cache before handing out the fresh URL", async () => {
+  const h = await harness();
+  await h.call("music:stream", VIDEO, true, "low");
+  assert.deepEqual(h.calls.filter((c) => c[0] !== "proxy"), [["retry", VIDEO], ["url", VIDEO, true, 64]]);
+  h.calls.length = 0;
+  await h.call("music:stream", VIDEO, "true", "high"); // only a real `true` is a retry
+  assert.deepEqual(h.calls.filter((c) => c[0] !== "proxy"), [["url", VIDEO, false, undefined]]);
+});
+
+test("local:gainDb answers only for a local file's id", async () => {
+  const h = await harness();
+  const longest = "local:" + "x".repeat(194); // 200 characters
+  assert.equal(await h.call("local:gainDb", "local:abc"), -6.5);
+  assert.equal(await h.call("local:gainDb", longest), -6.5);
+  for (const id of [VIDEO, "LOCAL:abc", " local:abc", longest + "x", null, 42, {}, ["local:abc"]]) {
+    assert.equal(await h.call("local:gainDb", id), null, JSON.stringify(id));
+  }
+  assert.deepEqual(h.calls, [["gain", "local:abc"], ["gain", longest]], "nothing else reached the library");
+  await assert.rejects(h.invoke("local:gainDb", "local:abc", false), /Untrusted IPC sender/);
 });

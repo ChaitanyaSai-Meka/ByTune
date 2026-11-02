@@ -856,6 +856,13 @@ if (!gotLock) {
       return new Response(new Uint8Array(art.data), { headers: { "Content-Type": art.mime } });
     });
     app.on("before-quit", (event) => {
+      // A draining quit ends with app.exit(), which skips this event. Any other
+      // quit meanwhile (window-all-closed sends one when the drain closes the
+      // window) waits for it instead of cutting the drain short.
+      if (drainStarted) {
+        event.preventDefault();
+        return;
+      }
       // Mark the real quit BEFORE the drain: the hide-on-close guard must
       // stand down for any close events that fire during shutdown.
       quitting = true;
@@ -872,22 +879,30 @@ if (!gotLock) {
       // queued ownership work may still be in flight when the window dies.
       // Hold quit for a bounded drain — the final player write lands unless
       // something is genuinely stuck, in which case we quit anyway.
-      if (!drainStarted) {
-        drainStarted = true;
-        event.preventDefault();
-        const timeout = setTimeout(() => {
-          console.warn("[bytune] shutdown drain timed out; quitting");
+      drainStarted = true;
+      event.preventDefault();
+      const timeout = setTimeout(() => {
+        console.warn("[bytune] shutdown drain timed out; quitting");
+        app.exit(0);
+      }, 3000).unref();
+      // Close the window first: its pagehide sends the renderer's pending
+      // writes. app.exit() alone destroys it without unload events, so a quit
+      // through app.quit() (Cmd+Q, Dock → Quit, the Quit menu item) lost them.
+      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+      const closed = win
+        ? new Promise<void>((resolve) => {
+            win.once("closed", () => resolve());
+            win.close();
+          })
+        : Promise.resolve();
+      closed
+        .then(() => transition.drainData())
+        .then(() => persist.drainWrites())
+        .catch((err) => console.warn("[bytune] shutdown drain failed:", err))
+        .finally(() => {
+          clearTimeout(timeout);
           app.exit(0);
-        }, 3000).unref();
-        transition
-          .drainData()
-          .then(() => persist.drainWrites())
-          .catch((err) => console.warn("[bytune] shutdown drain failed:", err))
-          .finally(() => {
-            clearTimeout(timeout);
-            app.exit(0);
-          });
-      }
+        });
     });
     oauthReady = true;
     if (pendingOAuthUrl) oauthFromUrl(pendingOAuthUrl);
