@@ -21,6 +21,7 @@ import { usePanelDrop } from "./lib/panelDrop";
 import { useArtworkPalette } from "./lib/palette";
 import { watchSession, useSession } from "./lib/session";
 import { watchSyncRestores } from "./lib/syncRestore";
+import { createSwipeNav, scrollsSideways } from "./lib/swipeNav";
 import { takeOnboardingIntent } from "./lib/onboardingIntent";
 import { startPipSync } from "./pip/pipSync";
 import { usePlayer } from "./stores/player";
@@ -37,6 +38,8 @@ import { LibraryView } from "./views/LibraryView";import { LocalMusicView } from
 import { PlaylistView } from "./views/PlaylistView";
 import { ReplayView } from "./views/ReplayView";
 import { PodcastView } from "./views/PodcastView";
+import { PodcastsView } from "./views/PodcastsView";
+import { MoodView } from "./views/MoodView";
 import { SearchView } from "./views/SearchView";
 import { SettingsView } from "./views/SettingsView";
 
@@ -198,11 +201,24 @@ function useKeyboardShortcuts(): void {
       if (e.button === 3) useUI.getState().goBack();
       else useUI.getState().goForward();
     };
+    // So do two-finger trackpad swipes, as in Chrome.
+    const swipe = createSwipeNav();
+    const onWheel = (e: WheelEvent): void => {
+      if (e.defaultPrevented) return;
+      const step = swipe(e, (dx) => scrollsSideways(e.target, dx));
+      if (!step) return;
+      const ui = useUI.getState();
+      if (ui.dialog || ui.contextMenu || ui.playlistPicker) return;
+      if (step === "back") ui.goBack();
+      else ui.goForward();
+    };
     window.addEventListener("keydown", onKey);
     window.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("wheel", onWheel, { passive: true });
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("wheel", onWheel);
     };
   }, []);
 }
@@ -269,6 +285,10 @@ function CurrentView(): ReactNode {
       return <ReplayView />;
     case "podcast":
       return view.param ? <PodcastView id={view.param} /> : null;
+    case "podcasts":
+      return <PodcastsView />;
+    case "mood":
+      return view.param ? <MoodView params={view.param} /> : null;
     case "settings":
       return <SettingsView />;
     default:

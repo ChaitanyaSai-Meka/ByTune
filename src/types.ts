@@ -121,13 +121,21 @@ export interface TopResult {
   artist?: Artist;
 }
 
-/** A type-ahead search suggestion from YouTube Music. */
+/** A type-ahead search suggestion from YouTube Music: a text completion, or a rich row. */
 export interface SearchSuggestion {
+  /** the completion, or a rich row's title */
   text: string;
   thumb?: string;
+  /** YouTube's own line — "Song • Charlie Puth • 3B plays", "Artist • 103M monthly audience" */
   subtitle?: string;
-  /** videoId when the suggestion carries a playable hit. */
+  /** a rich row's id: the videoId of a playable hit, the browseId of a page */
   id?: string;
+  /** rich rows only — text completions carry none */
+  kind?: "song" | "video" | "episode" | Exclude<BrowseType, "other">;
+  /** what a song, video or episode row plays */
+  track?: Track;
+  /** what an album, artist, playlist or podcast row opens */
+  browse?: BrowseItem;
 }
 
 export type HomeItemKind = "track" | "album" | "artist" | "playlist";
@@ -143,6 +151,12 @@ export interface HomeItem {
 export interface HomeShelf {
   title: string;
   items: HomeItem[];
+}
+
+/** A moods & genres category page (Explore → a card): its title and every shelf, in the page's order. */
+export interface MoodPage {
+  title: string;
+  shelves: HomeShelf[];
 }
 
 /** Extended artist page — the BitChord mobile artist screen's data. */
@@ -218,6 +232,22 @@ export interface PodcastPage {
   author: string;
   thumb: string;
   description: string | null;
+  episodes: PodcastEpisode[];
+}
+
+/** A show card off YouTube Music's podcasts page; its id opens the show page. */
+export interface PodcastShow {
+  /** MPSP… browse id */
+  id: string;
+  title: string;
+  author: string;
+  thumb: string;
+}
+
+/** One shelf of YouTube Music's podcasts page: show cards or episode rows, in its order. */
+export interface PodcastShelf {
+  title: string;
+  shows: PodcastShow[];
   episodes: PodcastEpisode[];
 }
 

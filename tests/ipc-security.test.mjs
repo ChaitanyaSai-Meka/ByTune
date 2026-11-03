@@ -40,6 +40,9 @@ async function harness({ legacyStores = false } = {}) {
       if (name === "./music-service") return {
         localGainDb: (id) => { calls.push(["gain", id]); return -6.5; },
         retryStream: (id) => { calls.push(["retry", id]); },
+        getPodcasts: (...args) => { calls.push(["podcasts", ...args]); return [{ title: "Popular shows", shows: [], episodes: [] }]; },
+        getMoodCovers: (...args) => { calls.push(["moodCovers", ...args]); return ["https://cover"]; },
+        getMoodPage: (...args) => { calls.push(["moodPage", ...args]); return { title: "Telugu", shelves: [] }; },
       };
       if (name === "./stream-proxy") return {
         startStreamProxy: async () => { calls.push(["proxy"]); return 4321; },
@@ -123,4 +126,35 @@ test("local:gainDb answers only for a local file's id", async () => {
   }
   assert.deepEqual(h.calls, [["gain", "local:abc"], ["gain", longest]], "nothing else reached the library");
   await assert.rejects(h.invoke("local:gainDb", "local:abc", false), /Untrusted IPC sender/);
+});
+
+test("music:podcasts browses its one fixed page, whatever the renderer sends", async () => {
+  const h = await harness();
+  assert.deepEqual(await h.call("music:podcasts"), [{ title: "Popular shows", shows: [], episodes: [] }]);
+  await h.call("music:podcasts", "FEmusic_library_landing", { browseId: "VLLM" }, "../x");
+  assert.deepEqual(h.calls, [["podcasts"], ["podcasts"]], "no renderer argument reaches the service");
+  await assert.rejects(h.invoke("music:podcasts", undefined, false), /Untrusted IPC sender/);
+  assert.equal(h.calls.length, 2, "an untrusted sender reaches nothing");
+});
+
+test("music:moodCovers browses only a moods page's own category, with its params as sent", async () => {
+  const h = await harness();
+  const params = "ggMPOg1uX1JOQWZFeDByc2Jm";
+  assert.deepEqual(await h.call("music:moodCovers", "FEmusic_moods_and_genres_category", params), ["https://cover"]);
+  for (const [browseId, p] of [["VLLM", params], ["FEmusic_library_landing", params], ["FEmusic_moods_and_genres_category", "../x"], ["FEmusic_moods_and_genres_category", 7], ["FEmusic_moods_and_genres_category", "a".repeat(301)], ["FEmusic_moods_and_genres_category", ""]]) {
+    await assert.rejects(h.call("music:moodCovers", browseId, p), /Not a mood page/);
+  }
+  assert.deepEqual(h.calls, [["moodCovers", "FEmusic_moods_and_genres_category", params]], "only the valid call reaches the service");
+  await assert.rejects(h.invoke("music:moodCovers", undefined, false), /Untrusted IPC sender/);
+});
+
+test("music:moodPage takes the same checks: only a moods page's own category", async () => {
+  const h = await harness();
+  const params = "ggMPOg1uX1JOQWZFeDByc2Jm";
+  assert.deepEqual(await h.call("music:moodPage", "FEmusic_moods_and_genres_category", params), { title: "Telugu", shelves: [] });
+  for (const [browseId, p] of [["VLLM", params], ["FEmusic_moods_and_genres_category", "../x"], ["FEmusic_moods_and_genres_category", null]]) {
+    await assert.rejects(h.call("music:moodPage", browseId, p), /Not a mood page/);
+  }
+  assert.deepEqual(h.calls, [["moodPage", "FEmusic_moods_and_genres_category", params]]);
+  await assert.rejects(h.invoke("music:moodPage", undefined, false), /Untrusted IPC sender/);
 });

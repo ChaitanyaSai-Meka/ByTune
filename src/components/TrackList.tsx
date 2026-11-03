@@ -173,6 +173,8 @@ function TrackRow({ track, index, isCurrent, isPlaying, onPlay, menuFor, showAlb
 interface TrackListProps {
   tracks: Track[];
   onPlay?: (index: number) => void;
+  /** The sidebar row these songs play from (the player's playingFrom). */
+  from?: string;
   showAlbum?: boolean;
   showHeader?: boolean;
   menuFor?: (track: Track) => MenuItem[];
@@ -183,6 +185,7 @@ interface TrackListProps {
 export function TrackList({
   tracks,
   onPlay,
+  from,
   showAlbum = true,
   showHeader = true,
   menuFor = trackMenuItems,
@@ -192,7 +195,7 @@ export function TrackList({
   const currentId = usePlayer((s) => s.queue[s.index]?.id ?? null);
   const playing = usePlayer((s) => s.playing);
   const playQueue = usePlayer((s) => s.playQueue);
-  const play = onPlay ?? ((i: number) => playQueue(tracks, i));
+  const play = onPlay ?? ((i: number) => playQueue(tracks, i, from));
 
   if (!tracks.length) {
     return <EmptyState icon={Play} title={emptyTitle} body={emptyLabel ?? "Tracks will appear here."} />;

@@ -521,7 +521,7 @@ export function LocalMusicView() {
         />
       )}
 
-      {tab === "songs" && tracks.length > 0 && <TrackList tracks={tracks} showAlbum emptyLabel="No songs." />}
+      {tab === "songs" && tracks.length > 0 && <TrackList tracks={tracks} from="__local__" showAlbum emptyLabel="No songs." />}
 
       {tab === "albums" && (
         <div className="flex flex-wrap gap-5">

@@ -192,6 +192,9 @@ interface PlayerState {
   awaitingAutoplay: boolean;
   /** Bumped when a new listening context starts, so AutoPlay reseeds (not persisted). */
   contextId: number;
+  /** The sidebar row the queue was started from (a playlist, Liked Songs, Downloads, Local files
+      or an artist), for its "now playing" marker; null when it started anywhere else. */
+  playingFrom: string | null;
   /** While shuffle is on: your songs' ids in your order, a cycle read from the song that was playing
       when it last changed; shuffle off continues it from the song playing then. */
   unshuffled: string[] | null;
@@ -200,7 +203,7 @@ interface PlayerState {
   blendInto: Track | null;
 
   current(): Track | null;
-  playQueue(tracks: Track[], startIndex?: number): void;
+  playQueue(tracks: Track[], startIndex?: number, from?: string): void;
   playTrack(track: Track): void;
   /** Play an entry already in the queue without rebuilding it. */
   jumpTo(i: number): void;
@@ -265,6 +268,7 @@ export const usePlayer = create<PlayerState>()(
       autoplayCount: 0,
       awaitingAutoplay: false,
       contextId: 0,
+      playingFrom: null,
       unshuffled: null,
       blendInto: null,
 
@@ -273,7 +277,7 @@ export const usePlayer = create<PlayerState>()(
         return queue[index] ?? null;
       },
 
-      playQueue(tracks, startIndex = 0) {
+      playQueue(tracks, startIndex = 0, from) {
         if (!tracks.length) return;
         const start = clamp(startIndex, 0, tracks.length - 1);
         // Shuffled: the chosen song first, the rest in a random order after it.
@@ -290,6 +294,7 @@ export const usePlayer = create<PlayerState>()(
           autoplayCount: 0,
           awaitingAutoplay: false,
           contextId: get().contextId + 1,
+          playingFrom: from ?? null,
         });
       },
 
@@ -316,6 +321,7 @@ export const usePlayer = create<PlayerState>()(
           autoplayCount: 0,
           awaitingAutoplay: false,
           contextId: get().contextId + 1,
+          playingFrom: null,
         });
       },
 
@@ -605,6 +611,7 @@ export const usePlayer = create<PlayerState>()(
           repeat: s.repeat,
           autoplayCount: s.autoplayCount,
           unshuffled: s.unshuffled,
+          playingFrom: s.playingFrom,
         }) as unknown as PlayerState,
       merge: (persisted, current) => {
         const s = { ...current, ...(persisted as Partial<PlayerState>) };
@@ -621,6 +628,17 @@ export const usePlayer = create<PlayerState>()(
     }
   )
 );
+
+// Once AutoPlay's suggestions take over, the queue no longer plays from where
+// it started, for good (a refill later counts the one playing as history).
+usePlayer.subscribe((s) => {
+  if (s.playingFrom !== null && s.index >= s.queue.length - s.autoplayCount) usePlayer.setState({ playingFrom: null });
+});
+
+/** The sidebar row to mark as playing: where the queue started, while it plays. */
+export function playingFromRow(s: { playing: boolean; playingFrom: string | null }): string | null {
+  return s.playing ? s.playingFrom : null;
+}
 
 /** How a song is doing right now — "playing", "paused" (current but paused) or
  *  null — so every list can mark the song that's on. */

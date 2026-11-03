@@ -13,6 +13,7 @@
  */
 import { Play } from "lucide-react";
 import { AlbumCard, ArtistCard, HomeShelfView, TrackCard } from "../components/Cards";
+import { Crate } from "../components/Crate";
 import { EyebrowHeader, MixCard, RadioCard } from "../components/recCards";
 import { Artwork, Shelf, ShelfScroller, ShelfSkeleton } from "../components/primitives";
 import { useHomeFeed } from "../lib/recs/feed";
@@ -108,6 +109,9 @@ function SectionView({ section }: { section: HomeSection }) {
 
   if (section.layout === "yt-shelf" && section.shelf) {
     return <HomeShelfView shelf={section.shelf} />;
+  }
+  if (section.layout === "crate" && section.playlists) {
+    return <Crate title={section.title} playlists={section.playlists} className="animate-slide-up" />;
   }
 
   const body = (() => {

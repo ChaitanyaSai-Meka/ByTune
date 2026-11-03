@@ -1,6 +1,6 @@
 /** Preload — exposes a minimal, typed API to the renderer via contextBridge. */
 import { contextBridge, ipcRenderer } from "electron";
-import type { DownloadProgress, PodcastPage, RadioPage, Track } from "../src/types";
+import type { DownloadProgress, MoodPage, PodcastPage, PodcastShelf, RadioPage, SearchSuggestion, Track } from "../src/types";
 
 // The PiP window loads this same preload but its scope requests are rejected
 // by design (main-window-only handler) — an eager invoke there would leave an
@@ -32,7 +32,7 @@ const api = {
   search: (query: string, light = false) => ipcRenderer.invoke("music:search", query, light),
   searchPage: (query: string, filter: string) => ipcRenderer.invoke("music:searchPage", query, filter),
   searchMore: (token: string, filter: string) => ipcRenderer.invoke("music:searchMore", token, filter),
-  suggestions: (query: string) => ipcRenderer.invoke("music:suggestions", query),
+  suggestions: (query: string): Promise<{ items: SearchSuggestion[] }> => ipcRenderer.invoke("music:suggestions", query),
   getAlbum: (id: string) => ipcRenderer.invoke("music:album", id),
   getArtist: (id: string) => ipcRenderer.invoke("music:artist", id),
   getPlaylist: (id: string) => ipcRenderer.invoke("music:playlist", id),
@@ -43,6 +43,10 @@ const api = {
   getCharts: () => ipcRenderer.invoke("music:charts"),
   /** Per-market moods & genres from the provider's Explore page. */
   getMoods: () => ipcRenderer.invoke("music:moods"),
+  /** A mood or genre page's first playlist covers, for its Explore card. */
+  getMoodCovers: (browseId: string, params: string): Promise<string[]> => ipcRenderer.invoke("music:moodCovers", browseId, params),
+  /** A mood or genre page's title and shelves, for the category's own page. */
+  getMoodPage: (browseId: string, params: string): Promise<MoodPage> => ipcRenderer.invoke("music:moodPage", browseId, params),
   /** The resolved device market + the signal it came from (diagnostics). */
   marketInfo: () => ipcRenderer.invoke("market:current"),
   getLyrics: (track: { id: string; title: string; artist: string; album?: string; duration?: number }) =>
@@ -149,6 +153,8 @@ const api = {
   /** A local file's ReplayGain track gain (dB), for volume leveling. */
   localGainDb: (id: string): Promise<number | null> => ipcRenderer.invoke("local:gainDb", id),
   getPodcast: (id: string): Promise<PodcastPage> => ipcRenderer.invoke("music:podcast", id),
+  /** YouTube Music's podcasts page for the device market (Explore). */
+  getPodcasts: (): Promise<PodcastShelf[]> => ipcRenderer.invoke("music:podcasts"),
   backupImport: () => ipcRenderer.invoke("backup:import"),
 
   // Accounts (Supabase) + cloud backup

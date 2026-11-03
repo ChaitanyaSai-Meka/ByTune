@@ -13,7 +13,7 @@
  * never per-render. Inclusion is honest — a section only exists when the
  * data behind its title exists (no "More like X" without X).
  */
-import type { Album, Artist, HomeShelf, Track } from "../../types";
+import type { Album, Artist, HomeShelf, PlaylistCard, Track } from "../../types";
 import type { ArtistBundle } from "./candidates";
 import type { ArtistSignal, TasteProfile } from "./profile";
 import type { PlaySource } from "./playback";
@@ -21,7 +21,7 @@ import { hash32, seededShuffle } from "./seeded";
 
 /* ------------------------------------------------------------------ types */
 
-export type SectionLayout = "tiles" | "row" | "circles" | "mixes" | "radios" | "yt-shelf" | "moods";
+export type SectionLayout = "tiles" | "row" | "circles" | "mixes" | "radios" | "yt-shelf" | "moods" | "crate";
 
 export type SectionItem =
   | { style: "track"; track: Track }
@@ -46,6 +46,8 @@ export interface HomeSection {
   shelf?: HomeShelf;
   /** layout "moods" chip labels */
   moods?: string[];
+  /** layout "crate" records */
+  playlists?: PlaylistCard[];
 }
 
 interface BuildCtx {
@@ -118,6 +120,19 @@ function relatedSongPool(ctx: BuildCtx, bundle: ArtistBundle): Track[] {
   return pool;
 }
 
+/** A crate needs a few records to flip through. */
+const CRATE_MIN = 6;
+
+/** The market's playlists for Home's crate, each once: YouTube Music's own (RDCLAK5uy_ ids) ahead of community uploads. */
+function cratePlaylists(market: HomeShelf[] | null | undefined): PlaylistCard[] {
+  const seen = new Set<string>();
+  const all = (market ?? []).flatMap((s) =>
+    s.items.flatMap((i) => (i.playlist && !seen.has(i.playlist.id) && !!seen.add(i.playlist.id) ? [i.playlist] : []))
+  );
+  const own = (p: PlaylistCard): boolean => p.id.includes("RDCLAK5uy_");
+  return [...all.filter(own), ...all.filter((p) => !own(p))];
+}
+
 /* -------------------------------------------------------------- descriptors */
 
 interface Descriptor {
@@ -129,7 +144,13 @@ interface Descriptor {
   build: (ctx: BuildCtx) => HomeSection | null;
 }
 
-function describeFeed(profile: TasteProfile, ytShelves: HomeShelf[] | null, now: number, moods?: string[]): Descriptor[] {
+function describeFeed(
+  profile: TasteProfile,
+  ytShelves: HomeShelf[] | null,
+  now: number,
+  moods?: string[],
+  market?: HomeShelf[] | null
+): Descriptor[] {
   const list: Descriptor[] = [];
   const top = artistsWithIds(profile).slice(0, 6);
   const maxScore = top[0]?.score ?? 1;
@@ -147,6 +168,26 @@ function describeFeed(profile: TasteProfile, ytShelves: HomeShelf[] | null, now:
         layout: "tiles",
         priority: 0,
         items: ctx.profile.recentlyPlayed.slice(0, 6).map((track) => ({ style: "track", track })),
+      }),
+    });
+  }
+
+  /* ---- playlists for you — the market's playlists as a crate, right under
+          the tiles, whatever the maturity ---- */
+  const crate = cratePlaylists(market);
+  const crated = crate.length >= CRATE_MIN;
+  if (crated) {
+    list.push({
+      id: "playlists-for-you",
+      priority: 94,
+      minItems: 0, // content rides the `playlists` field, not `items`
+      build: () => ({
+        id: "playlists-for-you",
+        title: "Playlists for you",
+        layout: "crate",
+        priority: 0,
+        items: [],
+        playlists: crate,
       }),
     });
   }
@@ -441,7 +482,9 @@ function describeFeed(profile: TasteProfile, ytShelves: HomeShelf[] | null, now:
           market popularity is the honest content they have. ---- */
   if (ytShelves) {
     const slots = profile.maturity === "cold" || profile.maturity === "light" ? 3 : 2;
-    ytShelves.slice(0, slots).forEach((shelf, i) => {
+    // With the crate on Home, a shelf of playlists would only repeat it.
+    const rows = crated ? ytShelves.filter((s) => !s.items.every((i) => i.kind === "playlist")) : ytShelves;
+    rows.slice(0, slots).forEach((shelf, i) => {
       list.push({
         id: `yt-${i}-${shelf.title}`,
         priority: profile.maturity === "cold" ? 60 - i : 24 - i,
@@ -471,12 +514,14 @@ export function buildHomeSections(args: {
   ytShelves: HomeShelf[] | null;
   /** provider's per-market mood titles for the cold-start Browse chips */
   moods?: string[];
+  /** every market shelf whatever the maturity: the crate's playlists (ytShelves is only the filler rows) */
+  market?: HomeShelf[] | null;
   now?: number;
 }): HomeSection[] {
-  const { profile, bundles, ytShelves, moods, now = Date.now() } = args;
+  const { profile, bundles, ytShelves, moods, market, now = Date.now() } = args;
   const ctx: BuildCtx = { profile, bundles, usedTracks: new Set(), usedAlbums: new Set() };
 
-  const descriptors = describeFeed(profile, ytShelves, now, moods).sort((a, b) => b.priority - a.priority);
+  const descriptors = describeFeed(profile, ytShelves, now, moods, market).sort((a, b) => b.priority - a.priority);
 
   const sections: HomeSection[] = [];
   for (const d of descriptors) {

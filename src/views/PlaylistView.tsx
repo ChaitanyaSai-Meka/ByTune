@@ -88,9 +88,9 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
     if (!tracks.length) return;
     if (shuffle) {
       usePlayer.setState({ shuffle: true });
-      playQueue(tracks, Math.floor(Math.random() * tracks.length));
+      playQueue(tracks, Math.floor(Math.random() * tracks.length), playlistId);
     } else {
-      playQueue(tracks, 0);
+      playQueue(tracks, 0, playlistId);
     }
   };
 
@@ -281,7 +281,7 @@ function PlaylistTrackRow({
       onPointerMove={sortDrag.onPointerMove}
       onPointerUp={sortDrag.onPointerUp}
       onPointerCancel={sortDrag.onPointerCancel}
-      onClick={() => playQueue(queue, index)}
+      onClick={() => playQueue(queue, index, playlist.id)}
       onContextMenu={(e) => {
         e.preventDefault();
         openMenu(e.clientX, e.clientY);
@@ -301,7 +301,7 @@ function PlaylistTrackRow({
               onClick={(e) => {
                 e.stopPropagation();
                 if (isCurrent) usePlayer.getState().toggle();
-                else playQueue(queue, index);
+                else playQueue(queue, index, playlist.id);
               }}
               className="hidden group-hover:block text-ink-hi hover:text-ink-hi transition-colors"
               title="Play"

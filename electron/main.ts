@@ -343,6 +343,7 @@ const RENDERER_STORES = new Set([
   "home-market-cache",
   "lyrics-nudges",
   "recent-items",
+  "explore-covers",
 ]);
 function assertRendererStore(name: unknown): asserts name is string {
   if (typeof name !== "string" || !RENDERER_STORES.has(name)) throw new Error("Store not allowed");
@@ -371,7 +372,10 @@ function registerIpc(): void {
   ipc.handle("music:searchMore", (_e, token: string, filter: music.SearchFilter) =>
     music.searchMore(String(token ?? ""), filter as music.SearchFilter)
   );
-  ipc.handle("music:suggestions", (_e, query: string) => music.getSuggestions(query));
+  // The search field holds at most 200 characters; anything longer didn't come from it.
+  ipc.handle("music:suggestions", (_e, query: unknown) =>
+    typeof query === "string" && query.length <= 200 ? music.getSuggestions(query) : { items: [] }
+  );
   ipc.handle("music:artist", (_e, id: string) => music.getArtistPage(id));
   ipc.handle("music:album", (_e, id: string) => music.getAlbum(id));
   ipc.handle("music:playlist", (_e, id: string) => music.getPlaylist(id));
@@ -386,12 +390,22 @@ function registerIpc(): void {
   });
   ipc.handle("music:charts", () => music.getCharts());
   ipc.handle("music:moods", () => music.getMoods());
+  // Explore's categories (a card's covers, its page): only a moods page's own category browse.
+  const moodArgs = (browseId: unknown, params: unknown): [string, string] => {
+    if (browseId !== "FEmusic_moods_and_genres_category" || typeof params !== "string" || !/^[A-Za-z0-9_%=-]{1,300}$/.test(params)) {
+      throw new Error("Not a mood page");
+    }
+    return [browseId, params];
+  };
+  ipc.handle("music:moodCovers", (_e, browseId: unknown, params: unknown) => music.getMoodCovers(...moodArgs(browseId, params)));
+  ipc.handle("music:moodPage", (_e, browseId: unknown, params: unknown) => music.getMoodPage(...moodArgs(browseId, params)));
   ipc.handle("market:current", () => music.currentMarket());
   ipc.handle("music:lyrics", (_e, meta: music.LyricsMeta) => music.getLyrics(meta));
   ipc.handle("music:podcast", (_e, id: unknown) => {
     if (typeof id !== "string" || !/^MPSP[A-Za-z0-9_-]{8,80}$/.test(id)) throw new Error("Not a podcast");
     return music.getPodcast(id);
   });
+  ipc.handle("music:podcasts", () => music.getPodcasts());
   // Read-only: a local file's ReplayGain from its tags (volume leveling).
   ipc.handle("local:gainDb", (_e, id: unknown) =>
     typeof id === "string" && id.startsWith("local:") && id.length <= 200 ? music.localGainDb(id) : null

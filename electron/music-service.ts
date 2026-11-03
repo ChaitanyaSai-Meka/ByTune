@@ -20,12 +20,14 @@ import { embeddedLrc, fetchLyrics } from "./lyrics";
 import { largestThumbUrl, upgradeThumb } from "./artwork";
 import { getPoToken, invalidatePoToken } from "./po-token";
 import { resolveMarket, type ResolvedMarket } from "./market";
-import { SEARCH_FILTER_PARAMS, callBrowse, callBrowseContinuation, callSearch, callSearchContinuation, parseArtistPage, parseChartsShelves, pageCredit, parseMoods, parsePodcastEpisodes, parsePodcastPage, parsePlaylistContinuation, parsePlaylistShelf, parseQueueCredits, parseRadioPage, parseRemotePlaylistPage, parseReleasePage, parseSearchPage } from "./ytm";
+import { SEARCH_FILTER_PARAMS, callBrowse, callBrowseContinuation, callSearch, callSearchContinuation, callSearchSuggestions, parseArtistPage, parseChartsShelves, pageCredit, parseMoodCovers, parseMoodPage, parseMoods, parsePodcastEpisodes, parsePodcastPage, parsePodcastShelves, parsePlaylistContinuation, parsePlaylistShelf, parseQueueCredits, parseRadioPage, parseRemotePlaylistPage, parseReleasePage, parseSearchPage, parseSearchSuggestions } from "./ytm";
 import type { Credits, ParsedSong } from "./ytm";
 import type { MoodEntry } from "./moods";
 import type {
   Album,
   PodcastPage,
+  PodcastShelf,
+  MoodPage,
   Artist,
   ArtistPageData,
   HomeItem,
@@ -315,11 +317,14 @@ function parsePlaylistItem(item: any): PlaylistCard | null {
     if (itemKind(item) !== "playlist") return null;
     const id = item?.id;
     if (!id) return null;
+    // "Arijit Singh, Pritam, …" on YouTube's own playlists; "Name • 15M views" on community ones.
+    const subtitle = text(item?.subtitle).trim();
     return {
       id,
-      title: text(item?.title) || "Playlist",
+      title: text(item?.title).trim() || "Playlist",
       thumb: pickThumb(item?.thumbnail ?? item?.thumbnails),
       count: undefined,
+      ...(subtitle ? { subtitle } : {}),
     };
   } catch {
     return null;
@@ -499,36 +504,18 @@ export interface SuggestionsResult {
 }
 
 /**
- * Type-ahead suggestions — YouTube Music's own autocomplete, the same list
- * Spotify's search dropdown shows while you type. Rich hits (with artwork and
- * the artist name) are preferred over plain text when YouTube supplies them.
+ * Type-ahead suggestions — YouTube Music's own typeahead: a few text
+ * completions, then its rich rows (songs, videos, albums, artists, playlists,
+ * podcasts, episodes) read by the search page's row parsers. The dropdown
+ * tops the rich rows up from the search page itself (ytm.withSearchRows).
  */
 export async function getSuggestions(query: string): Promise<SuggestionsResult> {
   const q = query.trim();
   if (!q) return { items: [] };
   const yt = await getYT();
   try {
-    const sections: any[] = await withRetry(() => (yt.music as any).getSearchSuggestions(q));
-    const nodes: any[] = [];
-    for (const section of Array.isArray(sections) ? sections : []) {
-      if (Array.isArray(section?.contents)) nodes.push(...section.contents);
-    }
-    const items: SearchSuggestion[] = [];
-    const seen = new Set<string>();
-    for (const node of nodes) {
-      // Plain text completions only — BitChord mobile's typeahead model. Rich
-      // hits (thumbnails, playable rows) belong on the results page the user
-      // lands on after Enter, not in the dropdown while they're still typing.
-      if (String(node?.type ?? "") === "SearchSuggestion") {
-        const t = text(node?.suggestion);
-        if (t && !seen.has(t.toLowerCase())) {
-          seen.add(t.toLowerCase());
-          items.push({ text: t });
-        }
-      }
-      if (items.length >= 10) break;
-    }
-    return { items };
+    const response = await withRetry(() => callSearchSuggestions(yt, q));
+    return { items: parseSearchSuggestions(response, q) };
   } catch {
     return { items: [] };
   }
@@ -587,6 +574,16 @@ export async function getPodcast(browseId: string): Promise<PodcastPage> {
   // Long-running shows have hundreds of episodes; the newest 100 keep the page light.
   page.episodes = page.episodes.slice(0, PODCAST_EPISODES_MAX);
   return page;
+}
+
+/**
+ * YouTube Music's podcasts page (music.youtube.com/podcasts) for the device
+ * market: popular shows, popular episodes and topic shelves. Anonymous, like
+ * every other browse; any failure throws and Explore hides the section.
+ */
+export async function getPodcasts(): Promise<PodcastShelf[]> {
+  const yt = await getYT();
+  return parsePodcastShelves(await withRetry(() => callBrowse(yt, "FEmusic_non_music_audio")));
 }
 
 /** A long playlist/album is paged; this many pages (~100 songs each) at most. */
@@ -681,10 +678,18 @@ export async function getPlaylist(
   return { title, tracks };
 }
 
+/** The feed's first page is Quick picks and community playlists; YouTube's own playlist shelves follow on the next ones. */
+const HOME_PAGES = 4;
+
 export async function getHome(): Promise<HomeShelf[]> {
   const yt = await getYT();
-  const feed: any = await withRetry(() => (yt.music as any).getHomeFeed());
-  const sections: any[] = Array.isArray(feed?.sections) ? feed.sections : [];
+  let feed: any = await withRetry(() => (yt.music as any).getHomeFeed());
+  const sections: any[] = [];
+  for (let page = 0; feed; page++) {
+    if (Array.isArray(feed.sections)) sections.push(...feed.sections);
+    // A later page that fails just ends the feed: the shelves already read still show.
+    feed = page + 1 < HOME_PAGES && feed.has_continuation ? await feed.getContinuation().catch(() => null) : null;
+  }
   const shelves: HomeShelf[] = [];
   for (const section of sections) {
     const title = text(section?.header?.title) || text(section?.title) || "For you";
@@ -726,8 +731,28 @@ export async function getCharts(): Promise<HomeShelf[]> {
  */
 export async function getMoods(): Promise<MoodEntry[]> {
   const yt = await getYT();
+  // The moods page heads its grids ("Moods & moments", "Genres"); Explore's
+  // carousel, the same buttons without headings, is the fallback.
+  try {
+    const grouped = parseMoods(await withRetry(() => callBrowse(yt, "FEmusic_moods_and_genres")));
+    if (grouped.length >= 6) return grouped;
+  } catch {
+    /* the carousel below */
+  }
   const res = await withRetry(() => callBrowse(yt, "FEmusic_explore"));
   return parseMoods(res);
+}
+
+/** A mood or genre page: its title and every shelf, for the category's own page. */
+export async function getMoodPage(browseId: string, params: string): Promise<MoodPage> {
+  const yt = await getYT();
+  return parseMoodPage(await withRetry(() => callBrowse(yt, browseId, params)));
+}
+
+/** A mood or genre page's first playlist covers: the art on its Explore card. */
+export async function getMoodCovers(browseId: string, params: string): Promise<string[]> {
+  const yt = await getYT();
+  return parseMoodCovers(await withRetry(() => callBrowse(yt, browseId, params)));
 }
 
 /* ------------------------------------------------------------------ */

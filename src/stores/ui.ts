@@ -17,6 +17,8 @@ export type ViewName =
   | "local"
   | "replay"
   | "podcast"
+  | "podcasts"
+  | "mood"
   | "settings";
 
 export interface View {
@@ -208,6 +210,8 @@ export const useUI = create<UIState>((set, get) => ({
       navFuture: [],
       lyricsCenter: false,
       tintThumb: null,
+      // A new page opens at its top; only back/forward return to a left scroll.
+      pendingScroll: 0,
     });
   },
 

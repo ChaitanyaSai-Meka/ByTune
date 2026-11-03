@@ -141,7 +141,7 @@ function LibraryPlaylistCard({ playlist }: { playlist: Playlist }) {
                 navigate({ name: "playlist", param: playlist.id });
                 return;
               }
-              usePlayer.getState().playQueue(playlist.tracks, 0);
+              usePlayer.getState().playQueue(playlist.tracks, 0, playlist.id);
             }}
           />
         </div>
@@ -410,10 +410,10 @@ export function LibraryView() {
   const unfiled = playlists.filter((p) => !p.folderId);
   const pinnedFirst = [...unfiled.filter((p) => p.pinned), ...unfiled.filter((p) => !p.pinned)];
 
-  const shufflePlay = (tracks: Track[]): void => {
+  const shufflePlay = (tracks: Track[], from: string): void => {
     if (!tracks.length) return;
     usePlayer.setState({ shuffle: true });
-    playQueue(tracks, Math.floor(Math.random() * tracks.length));
+    playQueue(tracks, Math.floor(Math.random() * tracks.length), from);
   };
 
   return (
@@ -556,15 +556,15 @@ export function LibraryView() {
           {liked.length ? (
             <>
               <div className="flex items-center gap-2">
-                <Btn variant="white" size="md" icon={Play} onClick={() => playQueue(liked, 0)}>
+                <Btn variant="white" size="md" icon={Play} onClick={() => playQueue(liked, 0, "__liked__")}>
                   Play all
                 </Btn>
-                <Btn variant="glass" size="md" icon={Shuffle} onClick={() => shufflePlay(liked)}>
+                <Btn variant="glass" size="md" icon={Shuffle} onClick={() => shufflePlay(liked, "__liked__")}>
                   Shuffle
                 </Btn>
               </div>
               <div className="mt-5">
-                <TrackList tracks={liked} showAlbum emptyTitle="No liked songs yet" />
+                <TrackList tracks={liked} from="__liked__" showAlbum emptyTitle="No liked songs yet" />
               </div>
             </>
           ) : (
@@ -587,15 +587,15 @@ export function LibraryView() {
           {downloadedTracks.length ? (
             <>
               <div className="flex items-center gap-2">
-                <Btn variant="white" size="md" icon={Play} onClick={() => playQueue(downloadedTracks, 0)}>
+                <Btn variant="white" size="md" icon={Play} onClick={() => playQueue(downloadedTracks, 0, "__downloads__")}>
                   Play all
                 </Btn>
-                <Btn variant="glass" size="md" icon={Shuffle} onClick={() => shufflePlay(downloadedTracks)}>
+                <Btn variant="glass" size="md" icon={Shuffle} onClick={() => shufflePlay(downloadedTracks, "__downloads__")}>
                   Shuffle
                 </Btn>
               </div>
               <div className="mt-5">
-                <TrackList tracks={downloadedTracks} showAlbum emptyTitle="Nothing downloaded yet" />
+                <TrackList tracks={downloadedTracks} from="__downloads__" showAlbum emptyTitle="Nothing downloaded yet" />
               </div>
             </>
           ) : (

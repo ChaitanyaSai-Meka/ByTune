@@ -9,7 +9,7 @@
  * YouTube's continuation token, exactly like the phone.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Disc3, LayoutGrid, ListMusic, ListPlus, ListStart, Mic, MoreVertical, Music2, Play, SearchX, User, X, type LucideIcon } from "lucide-react";
+import { Disc3, LayoutGrid, ListMusic, ListPlus, ListStart, Mic, MoreVertical, Music2, Play, Search as SearchIcon, SearchX, User, X, type LucideIcon } from "lucide-react";
 import { Artwork, EqBars, ErrorState, ExplicitBadge, IconBtn, ListSkeleton, Pills } from "../components/primitives";
 import { browseMenuItems, trackMenuItems } from "../lib/trackActions";
 import { playAlbum } from "../lib/album";
@@ -20,7 +20,8 @@ import { isMac } from "../lib/platform";
 import { usePlayer, useTrackPlayback } from "../stores/player";
 import { useRecents } from "../stores/recents";
 import { useRecentItems, type RecentItem } from "../stores/recentItems";
-import { tintHoverHandlers, useUI } from "../stores/ui";
+import { searchPageOnce } from "../lib/searchOnce";
+import { tintHoverHandlers, useUI, type MenuItem } from "../stores/ui";
 import type { BrowseItem, SearchFilter, SearchPageResult, SearchRow, Track } from "../types";
 
 const FILTERS: { key: SearchFilter; label: string; icon: LucideIcon }[] = [
@@ -350,6 +351,13 @@ function RecentlyOpened() {
     else if (item.kind === "album") ui.navigate({ name: "album", param: item.id });
     else ui.navigate({ name: "ytplaylist", param: item.id });
   };
+  // The menu the same song, artist, album or playlist gets everywhere else.
+  const menu = (item: RecentItem): MenuItem[] => [
+    ...(item.kind === "song"
+      ? trackMenuItems(item.track)
+      : browseMenuItems({ browseId: item.id, title: item.title, subtitle: item.subtitle, thumb: item.thumb, type: item.kind })),
+    { label: "Remove from recently opened", icon: X, separatorBefore: true, action: () => remove(item.kind, item.id) },
+  ];
   return (
     <section className="animate-slide-up">
       <div className="flex items-center justify-between mb-3">
@@ -365,6 +373,10 @@ function RecentlyOpened() {
             role="button"
             tabIndex={0}
             onClick={() => open(item)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              useUI.getState().openContextMenu(e.clientX, e.clientY, menu(item));
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
@@ -424,7 +436,17 @@ function RecentSearches() {
       </div>
       <div className="flex flex-wrap gap-2">
         {recents.map((q) => (
-          <span key={q} className="group flex items-center gap-1 pl-3.5 pr-1.5 py-1.5 rounded-full glass text-[13px] text-ink">
+          <span
+            key={q}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              useUI.getState().openContextMenu(e.clientX, e.clientY, [
+                { label: `Search "${q}"`, icon: SearchIcon, action: () => { setQuery(q); pushSearch(q); } },
+                { label: "Remove from recent searches", icon: X, separatorBefore: true, action: () => removeSearch(q) },
+              ]);
+            }}
+            className="group flex items-center gap-1 pl-3.5 pr-1.5 py-1.5 rounded-full glass text-[13px] text-ink"
+          >
             <button className="hover:text-ink-hi transition-colors" onClick={() => {
                 setQuery(q);
                 pushSearch(q);
@@ -510,8 +532,7 @@ export function SearchView() {
     setError(null);
     setRows([]);
     setContinuation(null);
-    window.bytune
-      ?.searchPage(trimmed, filter)
+    searchPageOnce(trimmed, filter)
       .then((page) => {
         if (cancelled) return;
         cache.current.set(sessionKey, page);

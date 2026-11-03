@@ -12,11 +12,11 @@
  */
 import { useEffect, useRef, useState } from "react";
 import {
+  ArrowUpLeft,
   ChevronLeft,
   ChevronRight,
   Compass,
   Copy,
-  CornerDownLeft,
   History,
   Home,
   Minus,
@@ -25,13 +25,18 @@ import {
   Square,
   X,
 } from "lucide-react";
+import { withSearchRows } from "../../electron/ytm";
 import { reloadHomeFeed } from "../lib/recs/feed";
+import { searchPageOnce } from "../lib/searchOnce";
+import { browseMenuItems, trackMenuItems } from "../lib/trackActions";
 import { useSession } from "../lib/session";
 import { isMac } from "../lib/platform";
 import { useUI } from "../stores/ui";
 import { usePlayer } from "../stores/player";
 import { useRecents } from "../stores/recents";
+import { useRecentItems } from "../stores/recentItems";
 import type { SearchSuggestion } from "../types";
+import { Artwork } from "./primitives";
 import brandLogo from "../assets/brand/bytune-logo.svg";
 import brandText from "../assets/brand/bytune-Text.svg";
 
@@ -167,17 +172,22 @@ export function TopBar() {
   // results page is where songs get chosen; navigation happens on Enter or
   // a completion click, and the dropdown closes either way.
 
-  // Type-ahead dropdown — BitChord mobile's model: plain text completions
-  // only, no artwork rows while typing. Row 0 offers the typed query itself.
+  // Type-ahead dropdown — YouTube Music's typeahead model: row 0 offers the
+  // typed query itself, then up to 3 text completions (each with a fill
+  // arrow), then up to 12 rich rows that play or open straight away. The
+  // main process drops a completion that just echoes the query.
   const [suggests, setSuggests] = useState<SearchSuggestion[]>([]);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [fieldFocused, setFieldFocused] = useState(false);
-  /** keyboard highlight: 0 = the typed-query row, 1..n = completions, -1 = none */
+  /** keyboard highlight: 0 = the typed-query row, 1..n = suggestions (text, then rich), -1 = none */
   const [activeIdx, setActiveIdx] = useState(-1);
   const suggestSeq = useRef(0);
+  /** finished dropdowns per query — retyping one never refetches */
+  const suggestCache = useRef(new Map<string, SearchSuggestion[]>());
   const inputRef = useRef<HTMLInputElement | null>(null);
   /** the field + both dropdowns — blur is ignored while focus stays inside */
   const searchClusterRef = useRef<HTMLDivElement | null>(null);
+  const suggestListRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const q = query.trim();
@@ -191,23 +201,45 @@ export function TopBar() {
       return;
     }
     const seq = ++suggestSeq.current;
+    const show = (items: SearchSuggestion[]): void => {
+      if (suggestSeq.current !== seq) return; // a newer keystroke won
+      setSuggests(items);
+      setSuggestOpen(items.length > 0);
+    };
+    const cached = suggestCache.current.get(q);
+    if (cached) {
+      show(cached);
+      setActiveIdx(-1);
+      return;
+    }
     const timer = window.setTimeout(() => {
-      window.bytune
-        ?.suggestions(q)
-        .then((res) => {
-          if (suggestSeq.current !== seq) return; // a newer keystroke won
-          // Row 0 already offers the typed query — don't echo it back.
-          const items = ((res?.items ?? []) as SearchSuggestion[]).filter(
-            (s) => s.text.trim().toLowerCase() !== q.toLowerCase()
-          );
-          setSuggests(items.slice(0, 8));
-          setSuggestOpen(items.length > 0);
-          setActiveIdx(-1);
-        })
-        .catch(() => undefined);
+      const api = window.bytune;
+      if (!api) return;
+      const first = api.suggestions(q).then((res) => res?.items ?? [], () => null);
+      void first.then((items) => {
+        show(items ?? []);
+        setActiveIdx(-1);
+      });
+      // The search page's own rows top the rich rows up to 12, appended once
+      // the suggestions have painted — never ahead of them.
+      void Promise.all([first, searchPageOnce(q, "all").catch(() => null)]).then(([items, page]) => {
+        if (!page) return;
+        const full = withSearchRows(items ?? [], page.rows ?? []);
+        if (items) {
+          suggestCache.current.set(q, full);
+          const oldest = suggestCache.current.keys().next().value;
+          if (suggestCache.current.size > 30 && oldest !== undefined) suggestCache.current.delete(oldest);
+        }
+        show(full);
+      });
     }, 160);
     return () => window.clearTimeout(timer);
   }, [query, fieldFocused]);
+
+  // Arrow keys can walk past the dropdown's fold.
+  useEffect(() => {
+    suggestListRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [activeIdx]);
 
   const closeDropdown = (): void => {
     suggestSeq.current++;
@@ -241,6 +273,48 @@ export function TopBar() {
     navigate({ name: "search" });
   };
 
+  /** The fill arrow: the completion goes into the field to keep typing — no search. */
+  const fillSuggestion = (text: string): void => {
+    setQuery(text);
+    setActiveIdx(-1);
+    inputRef.current?.focus();
+  };
+
+  /** A rich row, as the search page's row does it: a song, video or episode
+      plays on its own (AutoPlay carries on); a page opens. */
+  const openSuggestion = (s: SearchSuggestion): void => {
+    const q = query.trim();
+    if (q) useRecents.getState().pushSearch(q);
+    closeDropdown();
+    setFieldFocused(false);
+    inputRef.current?.blur();
+    const recent = useRecentItems.getState();
+    if (s.track) {
+      recent.add({ kind: "song", id: s.track.id, title: s.track.title, subtitle: s.track.artist, thumb: s.track.thumb, track: s.track });
+      usePlayer.getState().playQueue([s.track], 0);
+    } else if (s.browse) {
+      const b = s.browse;
+      if (b.type === "artist" || b.type === "album" || b.type === "playlist") {
+        recent.add({ kind: b.type, id: b.browseId, title: b.title, subtitle: b.subtitle, thumb: b.thumb });
+      }
+      if (b.type === "artist" || b.browseId.startsWith("UC")) navigate({ name: "artist", param: b.browseId });
+      else if (b.type === "album") navigate({ name: "album", param: b.browseId });
+      else if (b.type === "playlist") navigate({ name: "ytplaylist", param: b.browseId });
+      else navigate({ name: "podcast", param: b.browseId });
+    }
+  };
+
+  /** The search page's menu for the same kind of row; it takes over from the dropdown. */
+  const openSuggestionMenu = (e: React.MouseEvent, s: SearchSuggestion): void => {
+    const items = s.track ? trackMenuItems(s.track) : s.browse ? browseMenuItems(s.browse) : [];
+    if (!items.length) return;
+    e.preventDefault();
+    closeDropdown();
+    setFieldFocused(false);
+    inputRef.current?.blur();
+    useUI.getState().openContextMenu(e.clientX, e.clientY, items);
+  };
+
   const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
     if (e.key === "Escape") {
       e.preventDefault();
@@ -255,10 +329,11 @@ export function TopBar() {
       setActiveIdx((i) => Math.max(-1, i - 1));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      // Keyboard-highlighted completion runs itself; anything else runs the
-      // typed query. Either way the dropdown goes away.
-      const pick = suggestOpen && activeIdx >= 1 ? suggests[activeIdx - 1]?.text : query;
-      submitSearch(pick);
+      // A keyboard-highlighted row runs itself; anything else runs the typed
+      // query. Either way the dropdown goes away.
+      const pick = suggestOpen && activeIdx >= 1 ? suggests[activeIdx - 1] : undefined;
+      if (pick?.kind) openSuggestion(pick);
+      else submitSearch(pick?.text ?? query);
     }
   };
 
@@ -386,15 +461,19 @@ export function TopBar() {
               query.trim() !== "" ? "pr-[104px]" : "pr-[72px]"
             }`}
           />
-          {/* Type-ahead dropdown — BitChord mobile's model: the typed query
-              plus plain text completions, no artwork rows while typing. */}
+          {/* Type-ahead dropdown — the typed query, text completions (the
+              arrow fills one in without searching), then rich rows in the
+              queue's compact row style: round art for artists, rounded
+              squares for the rest. */}
           {fieldFocused && suggestOpen && suggests.length > 0 && (
             <div
-              className="absolute left-0 right-0 top-full mt-2 z-50 glass-strong-solid rounded-2xl p-1.5 shadow-float max-h-[420px] overflow-y-auto animate-pop-in"
+              ref={suggestListRef}
+              className="absolute left-0 right-0 top-full mt-2 z-50 glass-strong-solid rounded-2xl p-1.5 shadow-float max-h-[min(600px,calc(100vh_-_88px))] overflow-y-auto animate-pop-in"
               role="listbox"
               aria-label="Search suggestions"
             >
               <button
+                data-active={activeIdx === 0}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => submitSearch(query)}
                 className={`w-full flex items-center gap-3 px-2.5 h-11 rounded-lg text-left transition-colors ${
@@ -406,20 +485,67 @@ export function TopBar() {
                   Search “{query.trim()}”
                 </span>
               </button>
-              {suggests.map((s, i) => (
-                <button
-                  key={`${s.text}-${i}`}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => submitSearch(s.text)}
-                  className={`w-full flex items-center gap-3 px-2.5 h-11 rounded-lg text-left transition-colors ${
-                    activeIdx === i + 1 ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.06]"
-                  }`}
-                >
-                  <Search className="w-4 h-4 text-ink-hi/55 shrink-0" />
-                  <span className="min-w-0 flex-1 text-[14px] text-ink-hi truncate">{s.text}</span>
-                  <CornerDownLeft className="w-4 h-4 text-ink-hi/35 shrink-0" />
-                </button>
-              ))}
+              {suggests.map((s, i) =>
+                s.kind ? (
+                  <button
+                    key={s.id}
+                    data-active={activeIdx === i + 1}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => openSuggestion(s)}
+                    onContextMenu={(e) => openSuggestionMenu(e, s)}
+                    className={`w-full flex items-center gap-3 px-2.5 h-14 rounded-lg text-left transition-colors ${
+                      activeIdx === i + 1 ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.06]"
+                    }`}
+                  >
+                    <Artwork
+                      src={s.thumb}
+                      rounded={s.kind === "artist" ? "rounded-full" : "rounded-md"}
+                      className="w-11 h-11 shrink-0"
+                      iconClassName="w-4 h-4"
+                      alt=""
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[14px] font-semibold truncate text-ink-hi">{s.text}</span>
+                      <span className="block text-[12px] truncate text-ink-hi/55 mt-0.5">{s.subtitle}</span>
+                    </span>
+                  </button>
+                ) : (
+                  <div
+                    key={`t:${s.text}`}
+                    data-active={activeIdx === i + 1}
+                    /* Whole row is the click target, as in Recent searches. */
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => submitSearch(s.text)}
+                    className={`w-full flex cursor-pointer items-center gap-3 pl-2.5 pr-1.5 h-11 rounded-lg transition-colors ${
+                      activeIdx === i + 1 ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.06]"
+                    }`}
+                  >
+                    <button
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        submitSearch(s.text);
+                      }}
+                      className="min-w-0 flex-1 flex items-center gap-3 text-left cursor-pointer"
+                    >
+                      <Search className="w-4 h-4 text-ink-hi/55 shrink-0" />
+                      <span className="text-[14px] text-ink-hi truncate">{s.text}</span>
+                    </button>
+                    <button
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        fillSuggestion(s.text);
+                      }}
+                      title="Fill in"
+                      aria-label={`Fill in "${s.text}"`}
+                      className="p-1.5 rounded-full text-ink-hi/35 hover:text-ink-hi hover:bg-ink-hi/10 transition-colors cursor-pointer"
+                    >
+                      <ArrowUpLeft className="w-4 h-4" />
+                    </button>
+                  </div>
+                )
+              )}
             </div>
           )}
           {/* Recent searches — BitChord mobile's model: an empty focused field
@@ -451,6 +577,17 @@ export function TopBar() {
                      showed the arrow cursor and ate clicks. */
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => submitSearch(q)}
+                  onContextMenu={(e) => {
+                    // The menu takes over from the dropdown, as a typeahead row's does.
+                    e.preventDefault();
+                    closeDropdown();
+                    setFieldFocused(false);
+                    inputRef.current?.blur();
+                    useUI.getState().openContextMenu(e.clientX, e.clientY, [
+                      { label: `Search "${q}"`, icon: Search, action: () => submitSearch(q) },
+                      { label: "Remove from recent searches", icon: X, separatorBefore: true, action: () => removeSearch(q) },
+                    ]);
+                  }}
                   className="group w-full flex cursor-pointer items-center gap-3 pl-2.5 pr-1.5 h-11 rounded-lg hover:bg-ink-hi/[0.06] transition-colors"
                 >
                   <button

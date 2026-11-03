@@ -55,7 +55,7 @@ function SectionCard({ item }: { item: HomeItem }) {
   );
 }
 
-function SongRow({ song, songs, index }: { song: Track; songs: Track[]; index: number }) {
+function SongRow({ song, songs, index, from }: { song: Track; songs: Track[]; index: number; from: string }) {
   const playQueue = usePlayer((s) => s.playQueue);
   const openContextMenu = useUI((s) => s.openContextMenu);
   const drag = useDrag({ track: song });
@@ -66,7 +66,7 @@ function SongRow({ song, songs, index }: { song: Track; songs: Track[]; index: n
   return (
     <div
       {...drag.props}
-      onClick={() => playQueue(songs, index)}
+      onClick={() => playQueue(songs, index, from)}
       onContextMenu={(e) => {
         e.preventDefault();
         openMenu(e.clientX, e.clientY);
@@ -206,7 +206,7 @@ export function ArtistView({ artistId }: { artistId: string }) {
   const shuffle = (): void => {
     if (!top.length) return;
     usePlayer.setState({ shuffle: true });
-    playQueue(top, Math.floor(Math.random() * top.length));
+    playQueue(top, Math.floor(Math.random() * top.length), artistId);
   };
 
   const openMore = (x: number, y: number): void => {
@@ -300,7 +300,7 @@ export function ArtistView({ artistId }: { artistId: string }) {
               <Shuffle className="w-[18px] h-[18px]" />
             </button>
             <button
-              onClick={() => top.length && playQueue(top, 0)}
+              onClick={() => top.length && playQueue(top, 0, artistId)}
               disabled={!top.length}
               className="inline-flex items-center gap-2 h-11 px-6 rounded-full bg-black/45 border border-white/10 text-[14.5px] font-semibold text-white backdrop-blur-sm hover:bg-black/60 transition-all active:scale-[0.98] disabled:opacity-40"
             >
@@ -328,7 +328,7 @@ export function ArtistView({ artistId }: { artistId: string }) {
             <div>
               {top.map((song, i) => (
                 <div key={`${song.id}-${i}`}>
-                  <SongRow song={song} songs={top} index={i} />
+                  <SongRow song={song} songs={top} index={i} from={artistId} />
                   {i < top.length - 1 && <div className="h-px bg-ink-hi/[0.05] ml-[80px] mr-3" />}
                 </div>
               ))}

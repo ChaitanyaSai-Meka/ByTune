@@ -10,6 +10,8 @@ export interface MoodEntry {
   params: string | null;
   /** provider accent color (#RRGGBB), or null when the button carries none */
   color: string | null;
+  /** the moods page heading it sits under ("Moods & moments", "Genres"), when known */
+  section?: string | null;
 }
 
 /** Neutral global fallback — same titles work as searches in every market. */

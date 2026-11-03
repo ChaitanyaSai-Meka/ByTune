@@ -233,7 +233,7 @@ async function bundleEngine() {
       contents: `
         export * from "./src/lib/audio";
         export { initAutoplay, dontPlay } from "./src/lib/autoplay";
-        export { usePlayer, autoplayTail, nextPass, upNext, shownTrack } from "./src/stores/player";
+        export { usePlayer, autoplayTail, nextPass, upNext, shownTrack, playingFromRow } from "./src/stores/player";
         export { useSettings } from "./src/stores/settings";
         export { useLibrary } from "./src/stores/library";
         export { useUI } from "./src/stores/ui";

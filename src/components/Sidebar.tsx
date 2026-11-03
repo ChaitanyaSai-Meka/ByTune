@@ -23,7 +23,7 @@ import {
   User,
 } from "lucide-react";
 import { useLibrary } from "../stores/library";
-import { usePlayer } from "../stores/player";
+import { playingFromRow, usePlayer } from "../stores/player";
 import { useUI } from "../stores/ui";
 import { EqBars } from "./primitives";
 import { upgradeArtwork } from "../lib/artwork";
@@ -62,8 +62,7 @@ function LibraryPill() {
   const navigate = useUI((s) => s.navigate);
   const openDialog = useUI((s) => s.openDialog);
   const openContextMenu = useUI((s) => s.openContextMenu);
-  const current = usePlayer((s) => s.queue[s.index] ?? null);
-  const playing = usePlayer((s) => s.playing);
+  const playingFrom = usePlayer(playingFromRow);
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   /** the row a drag is currently hovering — drives the drop highlight */
@@ -661,7 +660,7 @@ function LibraryPill() {
           </div>
         ) : (
           rows.map((r) => {
-            const isCurrent = current?.id === r.id;
+            const isCurrent = playingFrom !== null && (playingFrom === r.id || playingFrom === r.artistId);
             return (
               <button
                 key={`${r.kind}-${r.id}`}
@@ -723,7 +722,7 @@ function LibraryPill() {
                   </div>
                   <div className="text-[12.5px] text-ink-hi/55 truncate mt-0.5">{r.subtitle}</div>
                 </div>
-                {isCurrent && playing && <EqBars />}
+                {isCurrent && <EqBars />}
                 {((r.singleKey && r.pinned) ||
                   (r.kind === "playlist" &&
                     !r.singleKey &&

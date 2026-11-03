@@ -141,10 +141,19 @@ async function loadCharts(): Promise<HomeShelf[] | null> {
  * unless the provider itself is unreachable, in which case callers fall
  * back to the personalized sections alone.
  */
+let marketInflight: Promise<HomeShelf[] | null> | null = null;
+
 async function loadMarketShelves(): Promise<HomeShelf[] | null> {
-  const [charts, home] = await Promise.all([loadCharts(), loadYtShelves()]);
-  if (!charts && !home) return null;
-  return [...(charts ?? []), ...(home ?? [])];
+  // Overlapping feed rebuilds share one fetch: the regional feed is several pages now.
+  marketInflight ??= (async () => {
+    try {
+      const [charts, home] = await Promise.all([loadCharts(), loadYtShelves()]);
+      return !charts && !home ? null : [...(charts ?? []), ...(home ?? [])];
+    } finally {
+      marketInflight = null;
+    }
+  })();
+  return marketInflight;
 }
 
 /** Last-known shelves for the instant wave-0 paint, stale or fresh. */
@@ -205,6 +214,8 @@ function collectBundles(profile: TasteProfile, ids: string[] | null): Map<string
 
 async function orchestrate(profile: TasteProfile, apply: (sections: HomeSection[]) => void): Promise<void> {
   pruneBundles();
+  // Home's crate takes the market's playlists whatever the maturity; they load alongside the artist pages.
+  const marketLoad = loadMarketShelves();
 
   // Wave 1 — identity. Names the meta cache knows resolve for free.
   const topNames = profile.artists.slice(0, 6);
@@ -226,7 +237,7 @@ async function orchestrate(profile: TasteProfile, apply: (sections: HomeSection[
   await Promise.all(seeds.map((a) => getArtistBundle(a.artistId as string)));
 
   const seedIds = seeds.map((a) => a.artistId as string);
-  apply(buildHomeSections({ profile, bundles: collectBundles(profile, seedIds), ytShelves: null }));
+  apply(buildHomeSections({ profile, bundles: collectBundles(profile, seedIds), ytShelves: null, market: cachedMarketShelves() }));
 
   // Wave 3 — related artists' pages feed the discovery pools; YouTube's own
   // feed covers cold start and pads a thin feed.
@@ -239,12 +250,13 @@ async function orchestrate(profile: TasteProfile, apply: (sections: HomeSection[
 
   const feedThin = collectBundles(profile, [...seedIds, ...relatedIds]).size < 2;
   const wantYt = feedThin || profile.maturity === "cold" || profile.maturity === "light";
-  const marketShelves = wantYt ? await loadMarketShelves() : null;
+  const market = await marketLoad;
   apply(
     buildHomeSections({
       profile,
       bundles: collectBundles(profile, [...seedIds, ...relatedIds]),
-      ytShelves: marketShelves,
+      ytShelves: wantYt ? market : null,
+      market,
     })
   );
 }
@@ -295,8 +307,11 @@ export function useHomeFeed(): { sections: HomeSection[]; profile: TasteProfile 
       buildHomeSections({
         profile,
         bundles: collectBundles(profile, null),
-        ytShelves: cachedMarketShelves(),
+        // The market cache now fills for every listener (the crate); only newer listeners get its rows,
+        // so a settled feed never flashes rows the orchestration then drops.
+        ytShelves: profile.maturity === "cold" || profile.maturity === "light" ? cachedMarketShelves() : null,
         moods: moodsCache?.titles ?? undefined,
+        market: cachedMarketShelves(),
       })
     );
 
@@ -315,6 +330,7 @@ export function useHomeFeed(): { sections: HomeSection[]; profile: TasteProfile 
             // Fetch failed → the neutral global chips; never a hardcoded
             // country list, and only after the provider had its chance.
             moods: (moodTitles ?? FALLBACK_MOODS.map((m) => m.title)) as string[],
+            market: shelves,
           })
         );
       });

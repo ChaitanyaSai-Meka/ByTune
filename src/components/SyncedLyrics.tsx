@@ -20,6 +20,9 @@ import { usePlayer } from "../stores/player";
 import { useSettings } from "../stores/settings";
 import type { LyricsResult, SyncedLyricWord } from "../types";
 
+/** How long the lyrics take to glide to the next line. */
+const GLIDE_MS = 600;
+
 interface LyricsViewProps {
   lyrics: LyricsResult | null;
   loading: boolean;
@@ -202,6 +205,7 @@ export function LyricsView({
   const glowLines = blurOn && !reduceMotion && !reduceBlur;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const activeRef = useRef<HTMLButtonElement | null>(null);
+  const glide = useRef(0);
 
   // BitChord mobile's LyricsLoadingLine: the lookup's stand-in is one of the
   // loading phrases — no spinner — picked once per track and held there.
@@ -245,21 +249,36 @@ export function LyricsView({
   // `anchor` is the fraction of the container height where the live line's
   // centre comes to rest: 0.5 = centred (default), the fullscreen player
   // passes the album cover's measured centre so the line sits beside it.
+  // The move is a glide: an ease-out over GLIDE_MS, restarted from wherever it
+  // is when the next line comes. A long jump (a seek, lyrics opening
+  // mid-song) lands at once, as does every move under Reduce motion.
   useEffect(() => {
     if (activeIndex < 0) return;
     const raf = window.requestAnimationFrame(() => {
       const container = containerRef.current;
       const el = activeRef.current;
       if (!container || !el) return;
-      const target =
-        el.offsetTop + el.clientHeight / 2 - container.clientHeight * anchor;
+      const target = Math.max(0, el.offsetTop + el.clientHeight / 2 - container.clientHeight * anchor);
+      const from = container.scrollTop;
+      window.cancelAnimationFrame(glide.current);
       const still =
         document.documentElement.classList.contains("reduce-motion") ||
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      container.scrollTo({ top: Math.max(0, target), behavior: still ? "auto" : "smooth" });
+      if (still || Math.abs(target - from) > container.clientHeight * 1.5) {
+        container.scrollTop = target;
+        return;
+      }
+      const start = performance.now();
+      const step = (now: number): void => {
+        const t = Math.min(1, (now - start) / GLIDE_MS);
+        container.scrollTop = from + (target - from) * (1 - (1 - t) ** 4);
+        if (t < 1) glide.current = window.requestAnimationFrame(step);
+      };
+      glide.current = window.requestAnimationFrame(step);
     });
     return () => window.cancelAnimationFrame(raf);
   }, [activeIndex, synced, anchor]);
+  useEffect(() => () => window.cancelAnimationFrame(glide.current), []);
 
   if (loading) {
     // Words, not a spinner — mobile's LyricsLoadingLine, dimmed like an
@@ -333,6 +352,9 @@ export function LyricsView({
       >
         <div
           ref={containerRef}
+          // Scrolling by hand stops a glide instead of fighting it.
+          onWheel={() => window.cancelAnimationFrame(glide.current)}
+          onPointerDown={() => window.cancelAnimationFrame(glide.current)}
           className="absolute inset-0 overflow-y-auto scroll-host px-6 py-0"
           style={{
             // Lines melt into the dark at the panel edges instead of stopping hard.
