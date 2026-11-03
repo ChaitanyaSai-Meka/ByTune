@@ -86,6 +86,7 @@ function fixture() {
           if (name === "./pip") return { registerPipIpc() {}, isTrustedSender: () => true };
           if (name === "./stream-proxy") return { setDownloadedFileLookup() {} };
           if (name === "./downloaded-files") return { noteLibrary() {}, noteDownloaded() {}, downloadedFilePath: () => null };
+          if (name === "./spotify") return { forgetSpotify: async () => {} };
           return {};
         }
         if (name.startsWith(".")) return load(path.resolve(path.dirname(file), `${name}.ts`));

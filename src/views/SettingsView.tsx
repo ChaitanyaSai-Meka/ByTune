@@ -42,6 +42,9 @@ import {
   useSettings,
 } from "../stores/settings";
 import { useSession } from "../lib/session";
+import { connectSpotify, useSpotify } from "../lib/spotify";
+import { SpotifyIcon } from "../components/SpotifyIcon";
+import { MATCH_LANGUAGES, type MatchLanguage } from "../../electron/track-match";
 import { describeLyricsShift } from "../lib/lyricsOffset";
 import { setOnboardingIntent } from "../lib/onboardingIntent";
 import { GuestDeleteModal } from "../components/AccountModals";
@@ -464,6 +467,96 @@ function OutputDeviceGroup() {
   );
 }
 
+const MATCH_LANGUAGE_LABEL: Record<MatchLanguage | "", string> = {
+  "": "Any",
+  telugu: "Telugu",
+  tamil: "Tamil",
+  hindi: "Hindi",
+  kannada: "Kannada",
+  malayalam: "Malayalam",
+  english: "English",
+};
+
+/**
+ * Connect Spotify: the listener's own Spotify playlists and Liked Songs in the sidebar, matched
+ * to YouTube Music. The session stays in main (electron/spotify.ts), sealed, never uploaded.
+ * The language row applies to every import too.
+ */
+function ConnectedServicesGroup() {
+  const status = useSpotify((s) => s.status);
+  const connecting = useSpotify((s) => s.connecting);
+  const language = useSettings((s) => s.matchLanguage);
+  const ui = useUI.getState();
+  const connect = (): void => void connectSpotify();
+  return (
+    <SettingsGroup
+      header="Connected services"
+      footer="Connect Spotify signs in to Spotify in a window of its own; ByTune keeps that session on this computer, encrypted, and never uploads it. It reads your playlists the way Spotify's web player does, which isn't an official Spotify feature: it may stop working, and it isn't allowed by Spotify's terms. Songs are found on YouTube Music to play."
+    >
+      <SettingsRow
+        icon={SpotifyIcon}
+        title="Spotify"
+        subtitle={
+          status.connected
+            ? status.problem ?? (status.name ? `Connected as ${status.name}` : "Connected")
+            : connecting
+              ? "Finish signing in in the Spotify window"
+              : "Your playlists and Liked Songs, in your library"
+        }
+        trailing={
+          status.connected ? (
+            <div className="flex items-center gap-2">
+              {status.problem && (
+                <button onClick={connect} className="h-8 px-3.5 rounded-full text-[13px] font-semibold bg-ink-hi/[0.08] text-ink-hi hover:bg-ink-hi/[0.14] transition-colors">
+                  Reconnect
+                </button>
+              )}
+              <button
+                onClick={() =>
+                  ui.openDialog({
+                    title: "Disconnect Spotify?",
+                    body: "ByTune forgets your Spotify session and its playlists here. Playlists you saved to your library stay.",
+                    confirmLabel: "Disconnect",
+                    danger: true,
+                    onConfirm: () => void useSpotify.getState().disconnect().then(() => ui.toast("Spotify disconnected")),
+                  })
+                }
+                className="h-8 px-3.5 rounded-full text-[13px] font-semibold bg-ink-hi/[0.08] text-ink-hi hover:bg-ink-hi/[0.14] transition-colors"
+              >
+                Disconnect
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={connect}
+              disabled={connecting}
+              className="h-8 px-3.5 rounded-full text-[13px] font-semibold bg-accent text-on-primary hover:brightness-110 transition disabled:opacity-50"
+            >
+              {connecting ? "Connecting…" : "Connect"}
+            </button>
+          )
+        }
+      />
+      <Divider />
+      <SettingsRow
+        icon={Languages}
+        title="Song versions"
+        subtitle="When a song has versions in several languages, imports and Spotify playlists pick this one"
+        value={MATCH_LANGUAGE_LABEL[language]}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) =>
+          toggleDropdownAt(
+            e,
+            qualityMenu(["", ...MATCH_LANGUAGES] as (MatchLanguage | "")[], MATCH_LANGUAGE_LABEL, language, (l) =>
+              useSettings.getState().setMatchLanguage(l)
+            )
+          )
+        }
+      />
+    </SettingsGroup>
+  );
+}
+
 /**
  * ByTune account — the cloud layer above the YouTube cookie. Guests keep
  * everything local; signed-in users get automatic cloud backup of library,
@@ -811,6 +904,8 @@ export function SettingsView() {
       <div data-setting-group>
         <CloudAccountGroup />
       </div>
+
+      <ConnectedServicesGroup />
 
       <SettingsGroup header="Audio quality">
         <SettingsRow

@@ -9,8 +9,9 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { FileUp, Folder, ListPlus, Plus } from "lucide-react";
+import { ClipboardList, FileUp, Folder, ListPlus, Plus } from "lucide-react";
 import { importPlaylistFile } from "../lib/playlistShare";
+import { importFromText } from "../lib/importSongs";
 import { useLibrary, type LibraryFolder } from "../stores/library";
 import { useUI } from "../stores/ui";
 
@@ -95,6 +96,19 @@ export function CreateMenu({ onFolderCreated }: { onFolderCreated?: (folder: Lib
     });
   };
 
+  const importList = (): void => {
+    setOpen(false);
+    useUI.getState().openDialog({
+      title: "Import a playlist",
+      body: "Paste a Spotify playlist link, or songs one per line (Artist - Title). ByTune finds each song on YouTube Music before you save. Spotify links are read from Spotify's public page, which isn't an official feature and may stop working.",
+      initialValue: "",
+      placeholder: "https://open.spotify.com/playlist/…\n\nor\n\nTame Impala - Loser\nColdplay - Yellow",
+      multiline: true,
+      confirmLabel: "Import",
+      onConfirm: (value) => void importFromText(value),
+    });
+  };
+
   return (
     <div className="relative" ref={ref}>
       <button
@@ -141,6 +155,18 @@ export function CreateMenu({ onFolderCreated }: { onFolderCreated?: (folder: Lib
               </span>
             </button>
             <button
+              onClick={importList}
+              className="w-full flex items-center gap-3 px-2.5 py-2.5 rounded-lg text-left hover:bg-ink-hi/[0.06] transition-colors"
+            >
+              <span className="w-10 h-10 rounded-full bg-ink-hi/[0.08] grid place-items-center shrink-0">
+                <ClipboardList className="w-5 h-5 text-ink-hi" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[14px] font-semibold text-ink-hi">Import from Spotify or a list</span>
+                <span className="block text-[12px] text-ink-hi/55 truncate">Paste a playlist link or song names</span>
+              </span>
+            </button>
+            <button
               onClick={() => {
                 setOpen(false);
                 void importPlaylistFile();
@@ -151,8 +177,8 @@ export function CreateMenu({ onFolderCreated }: { onFolderCreated?: (folder: Lib
                 <FileUp className="w-5 h-5 text-ink-hi" />
               </span>
               <span className="min-w-0">
-                <span className="block text-[14px] font-semibold text-ink-hi">Import playlist</span>
-                <span className="block text-[12px] text-ink-hi/55 truncate">From an .m3u8 or ByTune .json file</span>
+                <span className="block text-[14px] font-semibold text-ink-hi">Import a file</span>
+                <span className="block text-[12px] text-ink-hi/55 truncate">.csv, .txt, .m3u8 or ByTune .json</span>
               </span>
             </button>
           </div>,

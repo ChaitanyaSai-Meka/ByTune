@@ -1,0 +1,817 @@
+{
+ "note": "YouTube Music Songs-search rows (first 8), captured 2026-11-03 with ByTune's own parser, region IN.",
+ "searches": {
+  "Loser Tame Impala": [
+   {
+    "id": "MX7FSAnRPug",
+    "title": "Loser",
+    "artist": "Tame Impala",
+    "album": "Deadbeat",
+    "duration": 224
+   },
+   {
+    "id": "GQgL-Dk9sq0",
+    "title": "Loser",
+    "artist": "Tame Impala",
+    "album": "Loser",
+    "duration": 224
+   },
+   {
+    "id": "BE7H6FjioaA",
+    "title": "The Loser",
+    "artist": "Verzache",
+    "album": "The Loser",
+    "duration": 132
+   },
+   {
+    "id": "IlO44EveV_8",
+    "title": "LOSER",
+    "artist": "SUMIXYZ",
+    "album": "LOSER",
+    "duration": 254
+   },
+   {
+    "id": "kKjp7rTdp2s",
+    "title": "Losers",
+    "artist": "Karencici",
+    "album": "Loser.",
+    "duration": 154
+   },
+   {
+    "id": "g-9wdA-fjYY",
+    "title": "Loser",
+    "artist": "Sueco",
+    "album": "Loser",
+    "duration": 134
+   },
+   {
+    "id": "fmqB7Q2vu9o",
+    "title": "Loser",
+    "artist": "Wez Morgan",
+    "album": "Loser",
+    "duration": 243
+   },
+   {
+    "id": "eZR2JRLBXus",
+    "title": "Loser",
+    "artist": "Franklaay & Melodyz Town",
+    "album": "Loser",
+    "duration": 173
+   }
+  ],
+  "Clarity Zedd": [
+   {
+    "id": "Lur-rvf6A1c",
+    "title": "Clarity (feat. Foxes)",
+    "artist": "Zedd",
+    "album": "Clarity",
+    "duration": 272
+   },
+   {
+    "id": "2HDbyIdsmsg",
+    "title": "Clarity (But it hits different)",
+    "artist": "Kenke",
+    "album": "Clarity",
+    "duration": 214
+   },
+   {
+    "id": "ZhFNT2xVp8I",
+    "title": "Clarity (Rock)",
+    "artist": "Our Last Night",
+    "album": "Clarity (Rock)",
+    "duration": 206
+   },
+   {
+    "id": "y9vF2lYfcaQ",
+    "title": "Clarity (Club Mix)",
+    "artist": "DJ Angelina James",
+    "album": "EDM Dance Party!",
+    "duration": 300
+   },
+   {
+    "id": "V6Chv3TEf2c",
+    "title": "Find You (Acoustic - Live In Los Angeles) (feat. Matthew Koma & Miriam Bryant)",
+    "artist": "Zedd",
+    "album": "Find You (Acoustic - Live In Los Angeles)",
+    "duration": 198
+   },
+   {
+    "id": "3fTgHkD94Iw",
+    "title": "Clarity (slowed to perfection)",
+    "artist": "Luke Muzzic & TommyMuzzic",
+    "album": "Clarity",
+    "duration": 315
+   },
+   {
+    "id": "EkvnBdKbMmk",
+    "title": "Clarity [Originally Performed By Zedd] [Karaoke Version] (feat. Foxes)",
+    "artist": "Paris Music",
+    "album": "Karaoke Hits 2013, Vol. 8",
+    "duration": 272
+   },
+   {
+    "id": "XpFPMTkH3ZY",
+    "title": "Clarity (feat. Dover Quartet)",
+    "artist": "Brooklyn Duo",
+    "album": "Brooklyn Sessions III",
+    "duration": 239
+   }
+  ],
+  "Samajavaragamana Sid Sriram": [
+   {
+    "id": "peLhDdjKUWU",
+    "title": "Samajavaragamana",
+    "artist": "Sid Sriram",
+    "album": "Ala Vaikunthapurramuloo",
+    "duration": 220
+   },
+   {
+    "id": "iacaDim65wg",
+    "title": "Choosi Chudangane",
+    "artist": "Anurag Kulkarni & Mahathi Swara Sagar",
+    "album": "Chalo",
+    "duration": 203
+   },
+   {
+    "id": "pb1NL71uFBs",
+    "title": "Arerey Manasa (From \"Falaknuma Das\")",
+    "artist": "Vivek Sagar, Sid Sriram & Kittu Vissapragada",
+    "album": "Arerey Manasa (From \"Falaknuma Das\")",
+    "duration": 302
+   },
+   {
+    "id": "ICxZXUXz9oc",
+    "title": "Samajavaragamana (cover)",
+    "artist": "Curry",
+    "album": "Samajavaragamana (cover)",
+    "duration": 116
+   },
+   {
+    "id": "2qvhcsy3YkA",
+    "title": "Kanne (Telugu)",
+    "artist": "Sid Sriram",
+    "album": "Kanne (Telugu)",
+    "duration": 202
+   },
+   {
+    "id": "YHKBpwIgMpk",
+    "title": "Mella Mellagaa",
+    "artist": "Sid Sriram, Aditi Bhavaraju & Judah Sandhy",
+    "album": "The Magic Of Sid Sriram",
+    "duration": 243
+   },
+   {
+    "id": "u8RG4TtrXkw",
+    "title": "Samajavaragamana",
+    "artist": "Vaikom Vijayalakshmi & Thyagaraja",
+    "album": "Samajavaragamana",
+    "duration": 436
+   },
+   {
+    "id": "suL0MlSjJ2k",
+    "title": "Nee Valle (From \"Sangeet\")",
+    "artist": "Sid Sriram",
+    "album": "Nee Valle (From \"Sangeet\")",
+    "duration": 266
+   }
+  ],
+  "Kesariya Arijit Singh": [
+   {
+    "id": "NJAv_7lHUIU",
+    "title": "Kesariya (From \"Brahmastra\") (Tu Fuljhadiyo Wale Tyohaaro Jesi - Happy Diwali)",
+    "artist": "Arijit Singh",
+    "album": "Kesariya (From \"Brahmastra\")",
+    "duration": 269
+   },
+   {
+    "id": "NEDfKMxnSpc",
+    "title": "Kesariya Balam",
+    "artist": "Babu Khan, Kailash Khan, Gajee Khan & Sonu Khan Langa",
+    "album": "Kesariyo - Rajasthani Folk Songs",
+    "duration": 282
+   },
+   {
+    "id": "_tDOaWIFfYI",
+    "title": "Kesariya Balam Padharo Mhare Desh",
+    "artist": "Seema Mishra",
+    "album": "Kesariya Balam Padharo Mhare Desh",
+    "duration": 473
+   },
+   {
+    "id": "YALvuUpY_b0",
+    "title": "Apna Bana Le (From \"Bhediya\")",
+    "artist": "Arijit Singh & Sachin-Jigar",
+    "album": "Apna Bana Le",
+    "duration": 262
+   },
+   {
+    "id": "W7s3a5KgRN0",
+    "title": "Kesariya Garba No Rang Lagyo",
+    "artist": "Heart Atteck Music",
+    "album": "Kesariya Garba No Rang Lagyo",
+    "duration": 259
+   },
+   {
+    "id": "l02tc0C4Rl8",
+    "title": "Kesariya Kanwar Baki Ka Bhanwar",
+    "artist": "Sohan Singh",
+    "album": "Kesariya Kanwar Baki Ka Bhanwar",
+    "duration": 316
+   },
+   {
+    "id": "r4A8Ia9ynFY",
+    "title": "SHERIYA",
+    "artist": "ARJN, KDS & RONN",
+    "album": "SHERIYA",
+    "duration": 192
+   },
+   {
+    "id": "Vn8gC-kCCqQ",
+    "title": "DIL BEKRAR 2",
+    "artist": "KR. PRITAM",
+    "album": "DIL BEKRAR 2",
+    "duration": 319
+   }
+  ],
+  "Rowdy Baby Dhanush": [
+   {
+    "id": "hwfk5_50qJ4",
+    "title": "Rowdy Baby",
+    "artist": "Dhanush, Dhee & Yuvan Shankar Raja",
+    "album": "Maari 2 (Original Motion Picture Soundtrack)",
+    "duration": 282
+   },
+   {
+    "id": "wcpgNauEovM",
+    "title": "Rowdy Baby",
+    "artist": "Dhanush, M. M. Manasi & Yuvan Shankar Raja",
+    "album": "Maari 2 [Telugu] (Original Motion Picture Soundtrack)",
+    "duration": 282
+   },
+   {
+    "id": "dTmufFzP8p4",
+    "title": "Aa Re Pritam Pyaare",
+    "artist": "Sajid Wajid",
+    "album": "Rowdy Rathore (Original Motion Picture Soundtrack)",
+    "duration": 260
+   },
+   {
+    "id": "VMkfB9BMk7U",
+    "title": "Love Song",
+    "artist": "D'n'R",
+    "album": "Unplugged",
+    "duration": 250
+   },
+   {
+    "id": "J5pUMLcnBlM",
+    "title": "Rowdy",
+    "artist": "Jamie Leighanne",
+    "album": "Rowdy",
+    "duration": 200
+   },
+   {
+    "id": "9BHgU8rAov0",
+    "title": "En maima Peru (feat. Myma Sudhakar)",
+    "artist": "Gana Sudhakar",
+    "album": "En maima Peru",
+    "duration": 333
+   },
+   {
+    "id": "OMoOyJnaIwE",
+    "title": "Anu's Mom, The principal, Knows Krishna As a Student",
+    "artist": "Aramaan Merugu",
+    "album": "Rowdy Baby OST (Vol1) (Original background score)",
+    "duration": 17
+   },
+   {
+    "id": "XSTTBVFiObg",
+    "title": "Aura 10/10 (From \"Meesaya Murukku 2\")",
+    "artist": "Hiphop Tamizha",
+    "album": "Aura 10/10 (From \"Meesaya Murukku 2\")",
+    "duration": 130
+   }
+  ],
+  "Bohemian Rhapsody Queen": [
+   {
+    "id": "BSTsnWoslP4",
+    "title": "Bohemian Rhapsody",
+    "artist": "Queen",
+    "album": "A Night At The Opera",
+    "duration": 355
+   },
+   {
+    "id": "_xwmsnDWfxQ",
+    "title": "Bohemian Rhapsody",
+    "artist": "Alex Goot, Sam Tsui, Tyler Ward & Kurt Hugo Schneider",
+    "album": "Bohemian Rhapsody",
+    "duration": 357
+   },
+   {
+    "id": "r4BYQMyPqR8",
+    "title": "Bohemian Rhapsody",
+    "artist": "Sungha Jung",
+    "album": "Sungha Jung Cover Compilation 11",
+    "duration": 368
+   },
+   {
+    "id": "ozJwIWv7Re8",
+    "title": "Bohemian Rhapsody",
+    "artist": "The Royal Philharmonic Orchestra",
+    "album": "The Royal Philharmonic Orchestra Plays Queen Classic",
+    "duration": 377
+   },
+   {
+    "id": "_Xsu44ppnFQ",
+    "title": "Bohemian Rhapsody x Walk It Talk It",
+    "artist": "nimphia & klyron",
+    "album": "Bohemian Rhapsody x Walk It Talk It",
+    "duration": 114
+   },
+   {
+    "id": "-G02yb01zsA",
+    "title": "Bohemian Rhapsody",
+    "artist": "Royal Philharmonic Orchestra",
+    "album": "The Royal Philharmonic Orchestra Plays… Queen",
+    "duration": 381
+   },
+   {
+    "id": "bRA09E-IkaI",
+    "title": "Bohemian Rhapsody",
+    "artist": "Joyful Soul Choir",
+    "album": "Bohemian Rhapsody",
+    "duration": 374
+   },
+   {
+    "id": "cYmBiULNTDo",
+    "title": "Bohemian Rhapsody (Piano Version)",
+    "artist": "The Chillest",
+    "album": "The Chillest Covers",
+    "duration": 452
+   }
+  ],
+  "Srivalli Sid Sriram": [
+   {
+    "id": "iks48tNYy6o",
+    "title": "Srivalli",
+    "artist": "Javed Ali",
+    "album": "Pushpa The Rise Part - 01",
+    "duration": 225
+   },
+   {
+    "id": "AbaAxgufFA8",
+    "title": "Naatu Naatu",
+    "artist": "Rahul Sipligunj & Kaala Bhairava",
+    "album": "Rrr",
+    "duration": 215
+   },
+   {
+    "id": "-InAeg1q9UM",
+    "title": "Peelings",
+    "artist": "Javed Ali & Madhubanti Bagchi",
+    "album": "Pushpa 2 The Rule - Hindi",
+    "duration": 248
+   },
+   {
+    "id": "m7LJQlrWfWE",
+    "title": "Brundavanive (From \"Gam Gam Ganesha\")",
+    "artist": "Sid Sriram & Chaitan Bharadwaj",
+    "album": "Brundavanive (From \"Gam Gam Ganesha\")",
+    "duration": 219
+   },
+   {
+    "id": "Zs-Jm9Zd2XY",
+    "title": "Khwaishein",
+    "artist": "Shivali",
+    "album": "Khwaishein",
+    "duration": 298
+   },
+   {
+    "id": "O1_Y3BwuxUA",
+    "title": "Nowhere to Stand (feat. Sid Sriram)",
+    "artist": "Sandunes",
+    "album": "Nowhere to Stand",
+    "duration": 233
+   },
+   {
+    "id": "ZWOTSMK-FU4",
+    "title": "Urike Urike - Chill Lofi",
+    "artist": "YJ Music, Sid Sriram & Ramya Behara",
+    "album": "Urike Urike - Chill Lofi",
+    "duration": 273
+   },
+   {
+    "id": "AK-bIa0OJ9Y",
+    "title": "Frustration",
+    "artist": "Union Jack",
+    "album": "Violence",
+    "duration": 160
+   }
+  ],
+  "夜に駆ける YOASOBI": [
+   {
+    "id": "by4SYYWlhEs",
+    "title": "夜に駆ける",
+    "artist": "YOASOBI",
+    "album": "夜に駆ける",
+    "duration": 262
+   },
+   {
+    "id": "Nv7ZFVGPct8",
+    "title": "夜に駆ける (From \"THE FIRST TAKE\")",
+    "artist": "YOASOBI",
+    "album": "夜に駆ける (From \"THE FIRST TAKE\")",
+    "duration": 249
+   },
+   {
+    "id": "ZQx1ulFnhAk",
+    "title": "ヨアソビ - night play",
+    "artist": "yoasobi",
+    "album": "night play",
+    "duration": 218
+   },
+   {
+    "id": "IzJ_ioBHrPU",
+    "title": "Idol",
+    "artist": "YOASOBI",
+    "album": "Idol",
+    "duration": 214
+   },
+   {
+    "id": "pxwgQBt_5n8",
+    "title": "夜に駆ける (Cover Ver.) - YORUNI KAKERU (Cover Ver.)",
+    "artist": "Woman Cover Project",
+    "album": "SNS HITS J-POP 2021",
+    "duration": 261
+   },
+   {
+    "id": "AfI9GT-8bkQ",
+    "title": "UNDEAD (English Version)",
+    "artist": "YOASOBI",
+    "album": "UNDEAD (English Version)",
+    "duration": 183
+   },
+   {
+    "id": "lqiw_wLwHyk",
+    "title": "夜に駆ける (Cover Ver.) [Mixed] - Yoruni Kakeru (Cover Ver.) [Mixed]",
+    "artist": "Woman Cover Project",
+    "album": "The 74 Covers -J -Pop Best- Vol.2 (DJ MIX)",
+    "duration": 95
+   },
+   {
+    "id": "l1OW15jexqE",
+    "title": "夜に駆ける (Cover) - YORUNI KAKERU (Cover)",
+    "artist": "Sakura Momoko",
+    "album": "Sakura Momoko J-Pop Cover Vol.35",
+    "duration": 336
+   }
+  ],
+  "Srivalli Javed Ali": [
+   {
+    "id": "iks48tNYy6o",
+    "title": "Srivalli",
+    "artist": "Javed Ali",
+    "album": "Pushpa The Rise Part - 01",
+    "duration": 225
+   },
+   {
+    "id": "T7xmqisFI-Y",
+    "title": "Oo Bolega Ya Oo Oo Bolega",
+    "artist": "Kanika Kapoor",
+    "album": "Pushpa The Rise Part - 01",
+    "duration": 227
+   },
+   {
+    "id": "shxkkJHJJUs",
+    "title": "Hulagi Kshetrada Sri Huligemma",
+    "artist": "B.R. Chhaya & Chandrika Gururaj",
+    "album": "Sri Huligemma Amrithwani",
+    "duration": 1161
+   },
+   {
+    "id": "b1wnrCREDj0",
+    "title": "Pushpa Pushpa",
+    "artist": "Mika Singh & Nakash Aziz",
+    "album": "Pushpa 2 The Rule - Hindi",
+    "duration": 257
+   },
+   {
+    "id": "mDK7-4zGj1k",
+    "title": "Shrivalli Tuna Pyar Ma Dil Dhadake (dj Remix Song)",
+    "artist": "Govind Gaikwad",
+    "album": "Shrivalli Tuna Pyar Ma Dil Dhadake (dj Remix Song)",
+    "duration": 243
+   },
+   {
+    "id": "4URIjSg6o3o",
+    "title": "Peelings",
+    "artist": "Senthil Ganesh & Rajalakshmi",
+    "album": "Pushpa 2 The Rule - Tamil",
+    "duration": 248
+   },
+   {
+    "id": "zjcFE4t8acY",
+    "title": "Angaaron",
+    "artist": "Shreya Ghoshal",
+    "album": "Pushpa 2 The Rule - Hindi",
+    "duration": 261
+   },
+   {
+    "id": "EZ-2EsbRwtA",
+    "title": "Shrivalli",
+    "artist": "Gulab Khojan",
+    "album": "Shrivalli",
+    "duration": 647
+   }
+  ],
+  "Yellow Coldplay": [
+   {
+    "id": "9qnqYL0eNNI",
+    "title": "Yellow",
+    "artist": "Coldplay",
+    "album": "Parachutes",
+    "duration": 267
+   },
+   {
+    "id": "j_JaDDcyIIU",
+    "title": "Yellow Submarine",
+    "artist": "The Beatles",
+    "album": "Yellow Submarine Songtrack",
+    "duration": 160
+   },
+   {
+    "id": "phILDUWE1oM",
+    "title": "Yellow",
+    "artist": "Alex Goot & Jada Facer",
+    "album": "Yellow",
+    "duration": 237
+   },
+   {
+    "id": "xQt0OfZ55pE",
+    "title": "Yellow (in the style of Coldplay)",
+    "artist": "Pop Music Workshop",
+    "album": "Free guitar backing tracks Vol.3",
+    "duration": 279
+   },
+   {
+    "id": "yDy-4c9GEi0",
+    "title": "Yellow",
+    "artist": "Midnite String Quartet",
+    "album": "MSQ Performs Coldplay",
+    "duration": 242
+   },
+   {
+    "id": "Hjov1mUm2Z8",
+    "title": "Yellow (Karaoke Version) [Originally Performed By Coldplay]",
+    "artist": "Zoom Karaoke",
+    "album": "Zoom Karaoke Party, Vol. 208",
+    "duration": 267
+   },
+   {
+    "id": "XLOTYccec3g",
+    "title": "Yellow (In the Style of Coldplay) [Karaoke Version]",
+    "artist": "The Karaoke Channel",
+    "album": "The Karaoke Channel - Modern Rock, Vol. 6",
+    "duration": 269
+   },
+   {
+    "id": "1GaMcjKqVy8",
+    "title": "Yellow (Originally Performed by Coldplay) (Karaoke Version)",
+    "artist": "karaoke SESH",
+    "album": "Yellow (Originally Performed by Coldplay) (Karaoke Version)",
+    "duration": 270
+   }
+  ],
+  "Srivalli Sid Sriram Telugu": [
+   {
+    "id": "iks48tNYy6o",
+    "title": "Srivalli",
+    "artist": "Javed Ali",
+    "album": "Pushpa The Rise Part - 01",
+    "duration": 225
+   },
+   {
+    "id": "TMMddy86RIg",
+    "title": "Kanulalo Kalale",
+    "artist": "Aditya Tadepalli",
+    "album": "Cheppina Evaru Nammaru",
+    "duration": 175
+   },
+   {
+    "id": "4B5kqxbCp3E",
+    "title": "Nagumomu Thaarale",
+    "artist": "Sid Sriram",
+    "album": "Radhe Shyam",
+    "duration": 295
+   },
+   {
+    "id": "xletLqzYUGc",
+    "title": "Sooseki",
+    "artist": "Shreya Ghoshal",
+    "album": "Pushpa 2 The Rule - Telugu",
+    "duration": 261
+   },
+   {
+    "id": "Y_uSxlG85Jc",
+    "title": "FALLING",
+    "artist": "OAFF & Sid Sriram",
+    "album": "Between Flowers",
+    "duration": 187
+   },
+   {
+    "id": "sZNttDqQXzE",
+    "title": "Parayuvaan (From \"Ishq\")",
+    "artist": "Jakes Bejoy, Sid Sriram, Neha S Nair & Joe Paul",
+    "album": "Parayuvaan (From \"Ishq\")",
+    "duration": 278
+   },
+   {
+    "id": "peLhDdjKUWU",
+    "title": "Samajavaragamana",
+    "artist": "Sid Sriram",
+    "album": "Ala Vaikunthapurramuloo",
+    "duration": 220
+   },
+   {
+    "id": "gs64zov_o6o",
+    "title": "Kanalede Nuvvani",
+    "artist": "Sid Sriram, Laxmi Dasa & Jadhav Ayaan",
+    "album": "Kanalede Nuvvani",
+    "duration": 249
+   }
+  ],
+  "Srivalli Telugu": [
+   {
+    "id": "iks48tNYy6o",
+    "title": "Srivalli",
+    "artist": "Javed Ali",
+    "album": "Pushpa The Rise Part - 01",
+    "duration": 225
+   },
+   {
+    "id": "xletLqzYUGc",
+    "title": "Sooseki",
+    "artist": "Shreya Ghoshal",
+    "album": "Pushpa 2 The Rule - Telugu",
+    "duration": 261
+   },
+   {
+    "id": "88EnnHfplJc",
+    "title": "Yeda Poinado",
+    "artist": "Nikhita Srivalli, Kailash Kher & Penchal Das",
+    "album": "Aravindha Sametha",
+    "duration": 306
+   },
+   {
+    "id": "S_COlHeKJK4",
+    "title": "Namo Re (From \"Nagabandham\") (Telugu)",
+    "artist": "Sindhuja Srinivasan, Aishwarya Daruri, Junaid Kumar & ABHE",
+    "album": "Namo Re (From \"Nagabandham\") (Telugu)",
+    "duration": 258
+   },
+   {
+    "id": "EBZqELwmsLM",
+    "title": "Vinudu Vinudu",
+    "artist": "Nagarjuna & Srivalli",
+    "album": "Sitha Rama Raju",
+    "duration": 130
+   },
+   {
+    "id": "muaaSjYOgR4",
+    "title": "Ravi Varma Chitrama",
+    "artist": "Mani Sharma, Chaitanya Prasad, Sree Krishna & Harini Ivaturi",
+    "album": "Fashion Designer S/O Ladies Tailor (Original Motion Picture Soundtrack)",
+    "duration": 281
+   },
+   {
+    "id": "VMLUzxv98zM",
+    "title": "Prema Prema Prema",
+    "artist": "Ml Shruthi",
+    "album": "Siddhartha",
+    "duration": 258
+   },
+   {
+    "id": "6qZy8slw7kE",
+    "title": "Tali O Mankalamma",
+    "artist": "P.N. Lingaraju",
+    "album": "Mayadari Maisamma",
+    "duration": 369
+   }
+  ],
+  "Rowdy Baby Dhanush Telugu": [
+   {
+    "id": "hwfk5_50qJ4",
+    "title": "Rowdy Baby",
+    "artist": "Dhanush, Dhee & Yuvan Shankar Raja",
+    "album": "Maari 2 (Original Motion Picture Soundtrack)",
+    "duration": 282
+   },
+   {
+    "id": "wcpgNauEovM",
+    "title": "Rowdy Baby",
+    "artist": "Dhanush, M. M. Manasi & Yuvan Shankar Raja",
+    "album": "Maari 2 [Telugu] (Original Motion Picture Soundtrack)",
+    "duration": 282
+   },
+   {
+    "id": "r90LZR5euR4",
+    "title": "Yegise' Nadhi",
+    "artist": "Harris Jayaraj",
+    "album": "Anekudu (Original Motion Picture Soundtrack)",
+    "duration": 314
+   },
+   {
+    "id": "N0UfdA7PJL0",
+    "title": "Bagulu Odayum Dagulu Mari (The Return of Maari)",
+    "artist": "Anirudh Ravichander & Dhanush",
+    "album": "Maari (Original Motion Picture Soundtrack)",
+    "duration": 67
+   },
+   {
+    "id": "q1gZPCV0dn4",
+    "title": "Naughty Girl",
+    "artist": "Simha & Geetha Madhuri",
+    "album": "Shadow",
+    "duration": 249
+   },
+   {
+    "id": "UCI15vh84bY",
+    "title": "Ekindhi Le",
+    "artist": "Hemachandra",
+    "album": "Ee Rojullo",
+    "duration": 232
+   },
+   {
+    "id": "6NyezlZFJig",
+    "title": "Rangu Maar",
+    "artist": "Anurag Kulkarni",
+    "album": "Maitrivanam",
+    "duration": 194
+   },
+   {
+    "id": "4gs4PMKpOnE",
+    "title": "Kamala (Telugu)",
+    "artist": "Vivek - Mervin, Deepak & Sahithi Chaganti",
+    "album": "Vijay Sethupathi (Original Motion Picture Soundtrack)",
+    "duration": 244
+   }
+  ],
+  "Oo Antava Telugu": [
+   {
+    "id": "Je9ILyQH-6k",
+    "title": "O Apparao",
+    "artist": "Murli",
+    "album": "Yama Goal Malli Modalainde",
+    "duration": 326
+   },
+   {
+    "id": "6VLcJC1uHD4",
+    "title": "Daddy Mummy",
+    "artist": "Devi Sri Prasad, Mamta Mohandas, Naveen Madhav & Viveka",
+    "album": "Villu (Original Motion Picture Soundtrack)",
+    "duration": 261
+   },
+   {
+    "id": "fg9h-XtMKqM",
+    "title": "Pushpa Vs Shekhawat",
+    "artist": "Devi Sri Prasad",
+    "album": "Pushpa 2 The Rule Ost",
+    "duration": 509
+   },
+   {
+    "id": "BZymG_5gXWs",
+    "title": "Wama",
+    "artist": "Mudo Mix",
+    "album": "Wama",
+    "duration": 225
+   },
+   {
+    "id": "62pnGrSIwXg",
+    "title": "Omkareswari",
+    "artist": "Shankar Mahadevan & M.M.Keeravani",
+    "album": "Badrenath",
+    "duration": 300
+   },
+   {
+    "id": "6fMjZDPlFM8",
+    "title": "O Sakkanoda (From \"Guru\")",
+    "artist": "Dhee & Santhosh Narayanan",
+    "album": "O Sakkanoda (From \"Guru\")",
+    "duration": 252
+   },
+   {
+    "id": "kqePcK54w1w",
+    "title": "Yennegu Hennigu (From \"Ek Love Ya\")",
+    "artist": "Mangli, Kailash Kher & Arjun Janya",
+    "album": "Yennegu Hennigu (From \"Ek Love Ya\")",
+    "duration": 218
+   },
+   {
+    "id": "suxnHjcmLio",
+    "title": "Osey Ramulamma",
+    "artist": "Vandemataram Srinivas & Swarnalatha",
+    "album": "Osey Ramulamma",
+    "duration": 283
+   }
+  ]
+ }
+}

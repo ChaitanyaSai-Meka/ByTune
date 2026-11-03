@@ -51,6 +51,12 @@ async function harness({ legacyStores = false } = {}) {
         setDownloadedFileLookup() {},
       };
       if (name === "./downloaded-files") return { noteLibrary() {}, noteDownloaded() {}, downloadedFilePath: () => null };
+      if (name === "./spotify") return {
+        LIKED_ID: "liked",
+        spotifyPlaylist: (id) => { calls.push(["spotifyPlaylist", id]); return { name: "x", songs: [], total: 0 }; },
+        publicPlaylist: (link) => { calls.push(["publicPlaylist", link]); return { name: "x", songs: [], total: 0 }; },
+        matchSong: (song, prefer) => { calls.push(["match", JSON.parse(JSON.stringify(song)), prefer]); return null; },
+      };
       if (name.startsWith("./")) return {};
       return require(name);
     },
@@ -159,4 +165,44 @@ test("music:moodPage takes the same checks: only a moods page's own category", a
   }
   assert.deepEqual(h.calls, [["moodPage", "FEmusic_moods_and_genres_category", params]]);
   await assert.rejects(h.invoke("music:moodPage", undefined, false), /Untrusted IPC sender/);
+});
+
+test("spotify:playlist takes only Liked Songs or a 22-character Spotify id", async () => {
+  const h = await harness();
+  const ID = "37i9dQZF1DXcBWIGoYBM5M";
+  for (const id of ["", "x", ID + "x", ID.slice(1), "../../x", "liked ", "LIKED", null, 42, {}, [ID]]) {
+    await assert.rejects(h.call("spotify:playlist", id), /Not a Spotify playlist/, JSON.stringify(id));
+  }
+  await h.call("spotify:playlist", ID);
+  await h.call("spotify:playlist", "liked");
+  assert.deepEqual(h.calls, [["spotifyPlaylist", ID], ["spotifyPlaylist", "liked"]]);
+  await assert.rejects(h.invoke("spotify:playlist", ID, false), /Untrusted IPC sender/);
+});
+
+test("spotify:publicPlaylist takes one short string; main checks it's a Spotify link", async () => {
+  const h = await harness();
+  for (const link of [null, 42, {}, ["https://open.spotify.com/playlist/x"], "h".repeat(501)]) {
+    await assert.rejects(h.call("spotify:publicPlaylist", link), /isn't a link/);
+  }
+  await h.call("spotify:publicPlaylist", "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M");
+  assert.equal(h.calls.length, 1);
+  await assert.rejects(h.invoke("spotify:publicPlaylist", "x", false), /Untrusted IPC sender/);
+});
+
+test("match:song passes on only a clean song: known fields, bounded text, a real length and Spotify id", async () => {
+  const h = await harness();
+  for (const song of [null, 42, "Yellow", {}, { title: "" }, { title: "  ", artist: "" }, { title: "Yellow" }, { title: "x".repeat(301), artist: "" }, { title: "Yellow", artist: 5 }]) {
+    await assert.rejects(h.call("match:song", song, ""), /Not a song/, JSON.stringify(song));
+  }
+  assert.equal(h.calls.length, 0);
+  await h.call("match:song", JSON.parse('{"title":"Yellow","artist":"Coldplay","album":"Parachutes","duration":266.4,"spotifyId":"3AJwUDP919kvQ9QcozQPxg","thumb":"file:///x","__proto__":{"polluted":1},"extra":"x"}'), "telugu");
+  await h.call("match:song", { title: "Yellow", artist: "", duration: -5, spotifyId: "../x", album: 7 }, 42);
+  await h.call("match:song", { title: "Yellow", artist: "", duration: 1e9 }, "telugu");
+  assert.deepEqual(h.calls, [
+    ["match", { title: "Yellow", artist: "Coldplay", duration: 266, album: "Parachutes", spotifyId: "3AJwUDP919kvQ9QcozQPxg" }, "telugu"],
+    ["match", { title: "Yellow", artist: "", duration: 0 }, ""],
+    ["match", { title: "Yellow", artist: "", duration: 0 }, "telugu"],
+  ]);
+  assert.equal(({}).polluted, undefined);
+  await assert.rejects(h.invoke("match:song", { title: "Yellow", artist: "" }, false), /Untrusted IPC sender/);
 });

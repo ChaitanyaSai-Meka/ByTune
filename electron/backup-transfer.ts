@@ -12,6 +12,8 @@
  * Library and player stores already round-trip as envelopes untouched.
  */
 
+import { MATCH_LANGUAGES } from "./track-match";
+
 /** Device-local settings a backup must never carry or overwrite. */
 export const DEVICE_LOCAL_SETTINGS = new Set(["downloadDir", "localMusicFolder", "audioSinkId", "lyricsOffset"]);
 
@@ -46,7 +48,13 @@ export const SETTINGS_KEYS = new Set([
   "audioSinkId",
   "lyricsOffset",
   "loudnessLevel",
+  "matchLanguage",
 ]);
+
+/** The import language preference: "" (any) or one of the matcher's languages. */
+export function matchLanguageOk(v: unknown): boolean {
+  return v === "" || (MATCH_LANGUAGES as readonly unknown[]).includes(v);
+}
 
 /** Equalizer band gains: one dB value per band (EQ_BANDS in src/lib/audio.ts has 10), within ±12. */
 export function eqGainsOk(v: unknown): boolean {
@@ -123,7 +131,7 @@ export function settingsFromBackup(incoming: unknown, currentEnvelope: unknown):
       continue;
     }
     // A malformed gains list would break the equalizer and the Settings page.
-    if (k in inc && (k !== "eqGains" || eqGainsOk(inc[k])) && (k !== "eqPresets" || eqPresetsOk(inc[k])) && (k !== "loudnessLevel" || ["off", "quiet", "normal", "loud"].includes(inc[k] as string))) next[k] = inc[k];
+    if (k in inc && (k !== "eqGains" || eqGainsOk(inc[k])) && (k !== "eqPresets" || eqPresetsOk(inc[k])) && (k !== "loudnessLevel" || ["off", "quiet", "normal", "loud"].includes(inc[k] as string)) && (k !== "matchLanguage" || matchLanguageOk(inc[k]))) next[k] = inc[k];
   }
   return next;
 }

@@ -2939,3 +2939,25 @@ html.reduce-motion .fit-text {
     transform: scale(1.7);
   }
 }
+
+/* A list that scrolls under a header or a panel's edge: its rows fade out at an
+   edge only while more lies past it (useEdgeFades sets the two sizes), and the
+   fades ease in and out instead of snapping. */
+@property --fade-top {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --fade-bottom {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+.edge-fades {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent);
+  transition: --fade-top 180ms ease, --fade-bottom 180ms ease;
+}
+html.reduce-motion .edge-fades {
+  transition: none;
+}

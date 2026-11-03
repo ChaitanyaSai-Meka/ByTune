@@ -26,7 +26,7 @@ import {
 import { TrackList } from "../components/TrackList";
 import { Btn, EmptyState, Pills, PlayOverlay } from "../components/primitives";
 import { CreateMenu } from "../components/CreateMenu";
-import { useLibrary, type LibraryFolder, type Playlist } from "../stores/library";
+import { isPinned, useLibrary, type LibraryFolder, type Playlist } from "../stores/library";
 import { usePlayer } from "../stores/player";
 import { useUI } from "../stores/ui";
 import { dragHasAlbum, dragHasPlaylist, readAlbum, readPlaylist, useDrag } from "../lib/dnd";
@@ -453,9 +453,9 @@ export function LibraryView() {
           <div className="flex flex-wrap gap-5">
             {(
               [
-                { key: "liked" as const, pinned: pinnedSingles?.liked ?? true },
-                { key: "downloads" as const, pinned: pinnedSingles?.downloads ?? true },
-                { key: "local" as const, pinned: pinnedSingles?.local ?? true },
+                { key: "liked" as const, pinned: isPinned(pinnedSingles, "liked") },
+                { key: "downloads" as const, pinned: isPinned(pinnedSingles, "downloads") },
+                { key: "local" as const, pinned: isPinned(pinnedSingles, "local") },
               ]
                 .sort((a, b) => Number(b.pinned) - Number(a.pinned))
                 .map(({ key, pinned }) => {

@@ -22,7 +22,7 @@ import {
   PinOff,
   User,
 } from "lucide-react";
-import { useLibrary, type Playlist } from "../stores/library";
+import { isPinned, useLibrary, type PinnedSingleKey, type Playlist } from "../stores/library";
 import { playingFromRow, usePlayer } from "../stores/player";
 import { useUI } from "../stores/ui";
 import { EqBars } from "./primitives";
@@ -35,7 +35,12 @@ import { playlistFolderItems, playlistHeaderItems } from "../lib/trackActions";
 import { draggingFromPlaylist, dragHasAlbum, dragHasArtist, dragHasPlaylist, dragHasTrack, readAlbum, readArtist, readPlaylist, readTrack, type AlbumPayload, type ArtistPayload, type PlaylistPayload } from "../lib/dnd";
 import { requireBridge } from "../lib/bridge";
 import { downloadAll, startDownload } from "../lib/downloads";
+import { askToConnectSpotify, useSpotify } from "../lib/spotify";
+import { useEdgeFades } from "../lib/useEdgeFades";
+import { SpotifyIcon } from "./SpotifyIcon";
 import type { Track } from "../types";
+
+const SPOTIFY_ROW = "__spotify__";
 
 /* ============================================================ nav */
 
@@ -44,7 +49,7 @@ interface LibRow {
   title: string;
   subtitle: string;
   thumb?: string;
-  kind: "playlist" | "artist" | "folder" | "local" | "downloads" | "replay";
+  kind: "playlist" | "artist" | "folder" | "local" | "downloads" | "replay" | "spotify";
   /** artist-imported playlists open the artist page instead of the list */
   artistId?: string;
   /** playlists: the folder they're filed in; folders: their own id */
@@ -52,7 +57,7 @@ interface LibRow {
   /** Liked / Downloads / Local shortcut rows carry their pin state */
   pinned?: boolean;
   /** which shortcut pin this row toggles (liked / downloads / local) */
-  singleKey?: "liked" | "downloads" | "local";
+  singleKey?: PinnedSingleKey;
 }
 
 function LibraryPill() {
@@ -62,12 +67,17 @@ function LibraryPill() {
   const followedArtists = useLibrary((s) => s.followedArtists);
   const downloads = useLibrary((s) => s.downloads);
   const pinnedSingles = useLibrary((s) => s.pinnedSingles);
+  const spotifyConnected = useSpotify((s) => s.status.connected);
+  const spotifyProblem = useSpotify((s) => s.status.problem);
+  const spotifyPlaylists = useSpotify((s) => s.playlists);
   const navigate = useUI((s) => s.navigate);
   const openDialog = useUI((s) => s.openDialog);
   const openContextMenu = useUI((s) => s.openContextMenu);
   const playingFrom = usePlayer(playingFromRow);
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const listRef = useRef<HTMLDivElement | null>(null);
+  useEdgeFades(listRef);
   /** the row a drag is currently hovering — drives the drop highlight */
   const [dropHover, setDropHover] = useState<string | null>(null);
   /** a playlist drag is over the library panel — import-anywhere affordance */
@@ -111,11 +121,11 @@ function LibraryPill() {
   // folders (collapsible), followed artists and Local Music. Recently-played
   // history is NOT library material — it lives in the queue panel's
   // "Recently played" tab.
-  // Liked / Downloads / Local are pinned by default; unpinning sends the row
-  // to the bottom of the list (re-pin from its right-click menu).
+  // Shortcut rows: Liked, Spotify and Replay are pinned by default, Downloads and
+  // Local Music not; an unpinned one sits at the bottom of the list (re-pin from
+  // its right-click menu).
   const doneDownloads = Object.values(downloads).filter((d) => d.status === "done");
-  const singlePinned = (k: "liked" | "downloads" | "local"): boolean =>
-    pinnedSingles?.[k] ?? true;
+  const singlePinned = (k: PinnedSingleKey): boolean => isPinned(pinnedSingles, k);
 
   const likedRow: LibRow = {
     id: "__liked__",
@@ -143,12 +153,33 @@ function LibraryPill() {
     pinned: singlePinned("local"),
     singleKey: "local",
   };
-  const singles: LibRow[] = [likedRow, downloadsRow, localRow];
+  // Always listed: connected, it opens the account's playlists; not yet, it asks to connect.
+  const spotifyLists = spotifyPlaylists.length;
+  const spotifyRow: LibRow = {
+    id: SPOTIFY_ROW,
+    title: "Spotify",
+    subtitle: !spotifyConnected
+      ? "Connect your playlists"
+      : spotifyProblem
+        ? "Needs reconnecting"
+        : `Connected · ${spotifyLists} ${spotifyLists === 1 ? "playlist" : "playlists"}`,
+    kind: "spotify",
+    pinned: singlePinned("spotify"),
+    singleKey: "spotify",
+  };
+  // Replay: listening stats, otherwise only reachable from Settings.
+  const replayRow: LibRow = {
+    id: "__replay__",
+    title: "Replay",
+    subtitle: "Your listening stats",
+    kind: "replay",
+    pinned: singlePinned("replay"),
+    singleKey: "replay",
+  };
+  const singles: LibRow[] = [likedRow, spotifyRow, replayRow, downloadsRow, localRow];
 
   const rows: LibRow[] = [];
   for (const r of singles.filter((r) => r.pinned)) rows.push(r);
-  // Replay: listening stats, otherwise only reachable from Settings.
-  rows.push({ id: "__replay__", title: "Replay", subtitle: "Your listening stats", kind: "replay" });
   for (const a of followedArtists) {
     rows.push({ id: a.id, title: a.name, subtitle: "Artist", thumb: a.thumb, kind: "artist" });
   }
@@ -475,6 +506,10 @@ function LibraryPill() {
       case "replay":
         navigate({ name: "replay" });
         break;
+      case "spotify":
+        if (spotifyConnected) navigate({ name: "spotify" });
+        else askToConnectSpotify();
+        break;
     }
   };
 
@@ -661,7 +696,7 @@ function LibraryPill() {
 
       {/* Rows — drops bubble to the panel root, which imports playlists and
           artists anywhere they land; specific rows handle their own targets. */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2 pt-1 space-y-0.5">
+      <div ref={listRef} className="edge-fades flex-1 min-h-0 overflow-y-auto px-2 pb-2 pt-1 space-y-0.5">
         {rows.length === 0 ? (
           <div className="px-3 py-8 text-center text-[13px] text-ink-hi/55">
             Nothing here yet — play a track to fill your library.
@@ -698,6 +733,10 @@ function LibraryPill() {
                 ) : r.kind === "folder" ? (
                   <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
                     <Folder className="w-5 h-5 text-ink-hi/55" />
+                  </span>
+                ) : r.kind === "spotify" ? (
+                  <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
+                    <SpotifyIcon className="w-6 h-6" />
                   </span>
                 ) : r.kind === "local" || r.kind === "replay" ? (
                   <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">

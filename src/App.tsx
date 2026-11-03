@@ -16,6 +16,7 @@ import { initAutoplay } from "./lib/autoplay";
 import { setAmbientFromArtwork } from "./lib/ambient";
 import { listenForDownloadProgress } from "./lib/downloads";
 import { listenForOpenedFiles } from "./lib/openedFiles";
+import { useSpotify } from "./lib/spotify";
 import { FileDropOverlay } from "./components/FileDropOverlay";
 import { LYRICS_NUDGE_STEP, useLyricsNudge } from "./lib/lyricsOffset";
 import { watchMenuCommands } from "./lib/menuCommands";
@@ -36,6 +37,8 @@ import { DownloadsView } from "./views/DownloadsView";
 import { ExploreView } from "./views/ExploreView";
 import { HomeView } from "./views/HomeView";
 import { RemotePlaylistView } from "./views/RemotePlaylistView";
+import { MatchedPlaylistView } from "./views/MatchedPlaylistView";
+import { SpotifyView } from "./views/SpotifyView";
 import { LibraryView } from "./views/LibraryView";import { LocalMusicView } from "./views/LocalMusicView";
 import { PlaylistView } from "./views/PlaylistView";
 import { ReplayView } from "./views/ReplayView";
@@ -275,6 +278,10 @@ function CurrentView(): ReactNode {
       return <PlaylistView playlistId={view.param ?? ""} />;
     case "ytplaylist":
       return <RemotePlaylistView playlistId={view.param ?? ""} />;
+    case "import":
+      return <MatchedPlaylistView key={view.param} spotifyId={null} importId={view.param ?? ""} />;
+    case "spotify":
+      return view.param ? <MatchedPlaylistView key={view.param} spotifyId={view.param} /> : <SpotifyView />;
     case "album":
       return <AlbumView albumId={view.param ?? ""} />;
     case "artist":
@@ -333,6 +340,9 @@ export default function App() {
 
   // Audio files opened with ByTune or dropped on the window play at once.
   useEffect(() => listenForOpenedFiles(), []);
+  useEffect(() => {
+    void useSpotify.getState().refresh().catch(() => undefined);
+  }, []);
 
   // Native miniplayer bridge: push playback snapshots to the PiP window and
   // execute transport commands coming back from it.

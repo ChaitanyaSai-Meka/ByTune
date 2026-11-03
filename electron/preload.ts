@@ -1,6 +1,9 @@
 /** Preload — exposes a minimal, typed API to the renderer via contextBridge. */
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import type { DownloadProgress, MoodPage, PodcastPage, PodcastShelf, RadioPage, SearchSuggestion, Track } from "../src/types";
+import type {
+  DownloadProgress, ImportedPlaylist, ImportSong, MoodPage, PodcastPage, PodcastShelf, RadioPage, SearchSuggestion, SpotifyPlaylistInfo,
+  SpotifyStatus, Track,
+} from "../src/types";
 import type { LocalTrack } from "./local-library";
 
 // The PiP window loads this same preload but its scope requests are rejected
@@ -150,7 +153,16 @@ const api = {
   backupExport: () => ipcRenderer.invoke("backup:export"),
   playlistExport: (name: string, m3u8: string, json: string): Promise<{ path?: string; cancelled?: boolean }> =>
     ipcRenderer.invoke("playlist:export", name, m3u8, json),
-  playlistImport: (): Promise<{ name: string; text: string } | null> => ipcRenderer.invoke("playlist:import"),
+  playlistImport: (): Promise<{ name: string; ext: string; text: string } | null> => ipcRenderer.invoke("playlist:import"),
+  /** Spotify: a public playlist link (no sign-in), and Connect Spotify with the listener's own session. */
+  spotifyPublicPlaylist: (link: string): Promise<ImportedPlaylist> => ipcRenderer.invoke("spotify:publicPlaylist", link),
+  spotifyStatus: (): Promise<SpotifyStatus> => ipcRenderer.invoke("spotify:status"),
+  spotifyConnect: (): Promise<SpotifyStatus> => ipcRenderer.invoke("spotify:connect"),
+  spotifyDisconnect: (): Promise<SpotifyStatus> => ipcRenderer.invoke("spotify:disconnect"),
+  spotifyPlaylists: (): Promise<SpotifyPlaylistInfo[]> => ipcRenderer.invoke("spotify:playlists"),
+  spotifyPlaylist: (id: string): Promise<ImportedPlaylist> => ipcRenderer.invoke("spotify:playlist", id),
+  /** The YouTube Music song a song from elsewhere is, or null. */
+  matchSong: (song: ImportSong, prefer: string): Promise<Track | null> => ipcRenderer.invoke("match:song", song, prefer),
   /** Replay's share card: save the PNG through the native dialog, or copy it as an image. */
   saveReplayImage: (png: Uint8Array, name: string): Promise<{ path?: string; cancelled?: boolean }> =>
     ipcRenderer.invoke("replay:saveImage", png, name),

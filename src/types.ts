@@ -185,6 +185,46 @@ export interface RemotePlaylistPage {
   tracks: Track[];
 }
 
+/** A song from outside ByTune (a Spotify playlist, a CSV or pasted line), before it is matched to YouTube Music. */
+export interface ImportSong {
+  title: string;
+  /** every credited artist, as the source writes them ("" = unknown) */
+  artist: string;
+  album?: string;
+  /** seconds (0 = unknown) */
+  duration: number;
+  thumb?: string;
+  explicit?: boolean;
+  /** Spotify's track id, when the song came from Spotify */
+  spotifyId?: string;
+}
+
+/** A playlist from outside ByTune, as read: its songs, and how many the source lists. */
+export interface ImportedPlaylist {
+  name: string;
+  owner?: string;
+  thumb?: string;
+  songs: ImportSong[];
+  /** songs the source lists; more than songs.length when it couldn't all be read */
+  total: number;
+}
+
+/** A playlist in the connected Spotify library ("liked" = Liked Songs). */
+export interface SpotifyPlaylistInfo {
+  id: string;
+  name: string;
+  owner?: string;
+  thumb?: string;
+}
+
+export interface SpotifyStatus {
+  connected: boolean;
+  /** the Spotify account's display name */
+  name?: string;
+  /** why the connection isn't working (expired session, Spotify changed something) */
+  problem?: string;
+}
+
 export interface DownloadProgress {
   id: string;
   downloaded: number;

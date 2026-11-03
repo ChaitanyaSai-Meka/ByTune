@@ -1,0 +1,99 @@
+{
+ "data": {
+  "me": {
+   "libraryV3": {
+    "__typename": "LibraryPage",
+    "totalCount": 4,
+    "items": [
+     {
+      "item": {
+       "__typename": "PlaylistResponseWrapper",
+       "_uri": "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M",
+       "data": {
+        "__typename": "Playlist",
+        "name": "Today’s Top Hits",
+        "ownerV2": {
+         "data": {
+          "__typename": "User",
+          "name": "Spotify"
+         }
+        },
+        "images": {
+         "items": [
+          {
+           "sources": [
+            {
+             "height": 300,
+             "url": "https://i.scdn.co/image/ab67616d00001e02aaaaaaaaaaaaaaaaaaaaaaaa",
+             "width": 300
+            },
+            {
+             "height": 640,
+             "url": "https://i.scdn.co/image/ab67616d0000b273aaaaaaaaaaaaaaaaaaaaaaaa",
+             "width": 640
+            }
+           ]
+          }
+         ]
+        }
+       }
+      }
+     },
+     {
+      "item": {
+       "__typename": "FolderResponseWrapper",
+       "_uri": "spotify:user:someone:folder:abc",
+       "data": {
+        "__typename": "Folder",
+        "name": "Old stuff"
+       }
+      }
+     },
+     {
+      "item": {
+       "__typename": "PlaylistResponseWrapper",
+       "_uri": "spotify:playlist:5ABHKGoOzxkaa28ttQV9sE",
+       "data": {
+        "__typename": "Playlist",
+        "name": "road trip",
+        "ownerV2": {
+         "data": {
+          "__typename": "User",
+          "name": "Me"
+         }
+        },
+        "images": {
+         "items": [
+          {
+           "sources": [
+            {
+             "height": 300,
+             "url": "https://i.scdn.co/image/ab67616d00001e02aaaaaaaaaaaaaaaaaaaaaaaa",
+             "width": 300
+            },
+            {
+             "height": 640,
+             "url": "https://i.scdn.co/image/ab67616d0000b273aaaaaaaaaaaaaaaaaaaaaaaa",
+             "width": 640
+            }
+           ]
+          }
+         ]
+        }
+       }
+      }
+     },
+     {
+      "item": {
+       "__typename": "PlaylistResponseWrapper",
+       "_uri": "spotify:playlist:0000000000000000000000",
+       "data": {
+        "__typename": "NotFound"
+       }
+      }
+     }
+    ]
+   }
+  }
+ }
+}

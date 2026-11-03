@@ -1,0 +1,253 @@
+{
+ "data": {
+  "playlistV2": {
+   "__typename": "Playlist",
+   "name": "Today’s Top Hits",
+   "description": "The hottest 50. Cover: Tame Impala",
+   "uri": "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M",
+   "ownerV2": {
+    "data": {
+     "__typename": "User",
+     "name": "Spotify",
+     "username": "spotify"
+    }
+   },
+   "images": {
+    "items": [
+     {
+      "sources": [
+       {
+        "height": null,
+        "url": "https://i.scdn.co/image/ab67706f00000002960019ea66cba66a44fdd4c2",
+        "width": null
+       }
+      ]
+     }
+    ]
+   },
+   "content": {
+    "__typename": "PlaylistItemsPage",
+    "totalCount": 50,
+    "pagingInfo": {
+     "limit": 100,
+     "offset": 0
+    },
+    "items": [
+     {
+      "itemV2": {
+       "__typename": "TrackResponseWrapper",
+       "data": {
+        "__typename": "Track",
+        "albumOfTrack": {
+         "artists": {
+          "items": [
+           {
+            "profile": {
+             "name": "Tame Impala"
+            },
+            "uri": "spotify:artist:5INjqkS1o8h1imAzPqGZBb"
+           }
+          ]
+         },
+         "coverArt": {
+          "sources": [
+           {
+            "height": 300,
+            "url": "https://i.scdn.co/image/ab67616d00001e02208500450dcd0fd294d7bd3b",
+            "width": 300
+           },
+           {
+            "height": 64,
+            "url": "https://i.scdn.co/image/ab67616d00004851208500450dcd0fd294d7bd3b",
+            "width": 64
+           },
+           {
+            "height": 640,
+            "url": "https://i.scdn.co/image/ab67616d0000b273208500450dcd0fd294d7bd3b",
+            "width": 640
+           }
+          ]
+         },
+         "date": {
+          "isoString": "2025-10-17T00:00:00Z",
+          "precision": "DAY"
+         },
+         "name": "Deadbeat",
+         "uri": "spotify:album:5WulAOx9ilWy1h8UGZ1gkI"
+        },
+        "artists": {
+         "items": [
+          {
+           "profile": {
+            "name": "Tame Impala"
+           },
+           "uri": "spotify:artist:5INjqkS1o8h1imAzPqGZBb"
+          }
+         ]
+        },
+        "contentRating": {
+         "label": "EXPLICIT"
+        },
+        "discNumber": 1,
+        "trackDuration": {
+         "totalMilliseconds": 223069
+        },
+        "mediaType": "AUDIO",
+        "name": "Loser",
+        "playability": {
+         "playable": true,
+         "reason": "PLAYABLE"
+        },
+        "trackNumber": 4,
+        "uri": "spotify:track:7bxaFZ1O3cHkgLKMsdC3xR"
+       }
+      },
+      "uid": "6d2f566d4b543975424441"
+     },
+     {
+      "itemV2": {
+       "__typename": "TrackResponseWrapper",
+       "data": {
+        "__typename": "Track",
+        "albumOfTrack": {
+         "artists": {
+          "items": [
+           {
+            "profile": {
+             "name": "Tate McRae"
+            },
+            "uri": "spotify:artist:45dkTj5sMRSjrmBSBeiHym"
+           }
+          ]
+         },
+         "coverArt": {
+          "sources": [
+           {
+            "height": 300,
+            "url": "https://i.scdn.co/image/ab67616d00001e02f2d3185e46b03c243f60ce53",
+            "width": 300
+           },
+           {
+            "height": 64,
+            "url": "https://i.scdn.co/image/ab67616d00004851f2d3185e46b03c243f60ce53",
+            "width": 64
+           },
+           {
+            "height": 640,
+            "url": "https://i.scdn.co/image/ab67616d0000b273f2d3185e46b03c243f60ce53",
+            "width": 640
+           }
+          ]
+         },
+         "date": {
+          "isoString": "2026-10-15T00:00:00Z",
+          "precision": "DAY"
+         },
+         "name": "Housewife",
+         "uri": "spotify:album:6JvmSyocXef7RZDZFaymNl"
+        },
+        "artists": {
+         "items": [
+          {
+           "profile": {
+            "name": "Tate McRae"
+           },
+           "uri": "spotify:artist:45dkTj5sMRSjrmBSBeiHym"
+          }
+         ]
+        },
+        "contentRating": {
+         "label": "NONE"
+        },
+        "discNumber": 1,
+        "trackDuration": {
+         "totalMilliseconds": 208810
+        },
+        "mediaType": "AUDIO",
+        "name": "Housewife",
+        "playability": {
+         "playable": true,
+         "reason": "PLAYABLE"
+        },
+        "trackNumber": 1,
+        "uri": "spotify:track:2sFepQNyl1WjpROruP8bJ0"
+       }
+      },
+      "uid": "33345a6b58796e51557934"
+     },
+     {
+      "itemV2": {
+       "__typename": "TrackResponseWrapper",
+       "data": {
+        "__typename": "Track",
+        "albumOfTrack": {
+         "artists": {
+          "items": [
+           {
+            "profile": {
+             "name": "ADÉLA"
+            },
+            "uri": "spotify:artist:2qanRMyA5bNuTvz1dK45OP"
+           }
+          ]
+         },
+         "coverArt": {
+          "sources": [
+           {
+            "height": 300,
+            "url": "https://i.scdn.co/image/ab67616d00001e02ac9d5d5263e9f03802d6864c",
+            "width": 300
+           },
+           {
+            "height": 64,
+            "url": "https://i.scdn.co/image/ab67616d00004851ac9d5d5263e9f03802d6864c",
+            "width": 64
+           },
+           {
+            "height": 640,
+            "url": "https://i.scdn.co/image/ab67616d0000b273ac9d5d5263e9f03802d6864c",
+            "width": 640
+           }
+          ]
+         },
+         "date": {
+          "isoString": "2026-09-04T00:00:00Z",
+          "precision": "DAY"
+         },
+         "name": "PRIMA",
+         "uri": "spotify:album:2yDFVH9CeOHt0sc9eI0aBs"
+        },
+        "artists": {
+         "items": [
+          {
+           "profile": {
+            "name": "ADÉLA"
+           },
+           "uri": "spotify:artist:2qanRMyA5bNuTvz1dK45OP"
+          }
+         ]
+        },
+        "contentRating": {
+         "label": "EXPLICIT"
+        },
+        "discNumber": 1,
+        "trackDuration": {
+         "totalMilliseconds": 181270
+        },
+        "mediaType": "AUDIO",
+        "name": "Nicole Kidman",
+        "playability": {
+         "playable": true,
+         "reason": "PLAYABLE"
+        },
+        "trackNumber": 2,
+        "uri": "spotify:track:70cHKK8bHAfJrOGVnfRG9J"
+       }
+      },
+      "uid": "6b754146414d5346426877"
+     }
+    ]
+   }
+  }
+ }
+}

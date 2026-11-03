@@ -14,6 +14,7 @@ import * as locallib from "./local-library";
 import * as mediaControls from "./media-controls";
 import * as persist from "./persist";
 import * as pip from "./pip";
+import * as spotify from "./spotify";
 import * as stats from "./stats";
 import { proxyUrlFor, proxyUrlForLocalTrack, setDownloadedFileLookup, startStreamProxy } from "./stream-proxy";
 import * as auth from "./supabase";
@@ -481,6 +482,39 @@ function registerIpc(): void {
     return art ? art.data : null;
   });
 
+  // Spotify (electron/spotify.ts): the session stays in main; the page only gets playlists and songs.
+  ipc.handle("spotify:status", () => spotify.spotifyStatus());
+  ipc.handle("spotify:connect", () => spotify.connectSpotify(mainWindow));
+  ipc.handle("spotify:disconnect", async () => {
+    await spotify.forgetSpotify();
+    return spotify.spotifyStatus();
+  });
+  ipc.handle("spotify:playlists", () => spotify.spotifyPlaylists());
+  ipc.handle("spotify:playlist", (_e, id: unknown) => {
+    if (typeof id !== "string" || (id !== spotify.LIKED_ID && !/^[A-Za-z0-9]{22}$/.test(id))) throw new Error("Not a Spotify playlist");
+    return spotify.spotifyPlaylist(id);
+  });
+  ipc.handle("spotify:publicPlaylist", (_e, link: unknown) => {
+    if (typeof link !== "string" || link.length > 500) throw new Error("That isn't a link to a Spotify playlist.");
+    return spotify.publicPlaylist(link);
+  });
+  ipc.handle("match:song", (_e, song: unknown, prefer: unknown) => {
+    const s = song as Record<string, unknown> | null;
+    const text = (v: unknown, max: number): v is string => typeof v === "string" && v.length <= max;
+    if (!s || typeof s !== "object" || !text(s.title, 300) || !s.title.trim() || !text(s.artist, 300)) throw new Error("Not a song");
+    const duration = typeof s.duration === "number" && Number.isFinite(s.duration) && s.duration > 0 && s.duration < 86_400 ? Math.round(s.duration) : 0;
+    return spotify.matchSong(
+      {
+        title: s.title,
+        artist: s.artist,
+        duration,
+        ...(text(s.album, 300) ? { album: s.album } : {}),
+        ...(typeof s.spotifyId === "string" && /^[A-Za-z0-9]{22}$/.test(s.spotifyId) ? { spotifyId: s.spotifyId } : {}),
+      },
+      typeof prefer === "string" ? prefer : ""
+    );
+  });
+
   ipc.handle("canvas:get", (_e, q: { title?: string; artist?: string; album?: string }) =>
     canvas.canvasFor(String(q?.title ?? ""), String(q?.artist ?? ""), q?.album ? String(q.album) : undefined)
   );
@@ -555,7 +589,7 @@ function registerIpc(): void {
       sync.resetSyncState();
       await auth.signOut();
       stats.resetStats();
-      await Promise.all([downloads.resetDownloads(), locallib.resetLocalLibrary()]);
+      await Promise.all([downloads.resetDownloads(), locallib.resetLocalLibrary(), spotify.forgetSpotify()]);
       await persist.resetAppData();
       downloaded.noteLibrary(null);
       // Approvals live in memory too — drop them and re-approve the default
@@ -639,13 +673,17 @@ function registerIpc(): void {
     const opts = {
       title: "Import playlist",
       properties: ["openFile" as const],
-      filters: [{ name: "Playlists", extensions: ["m3u8", "m3u", "json"] }],
+      filters: [{ name: "Playlists and song lists", extensions: ["m3u8", "m3u", "json", "csv", "txt"] }],
     };
     const res = mainWindow ? await dialog.showOpenDialog(mainWindow, opts) : await dialog.showOpenDialog(opts);
     const file = res.canceled ? undefined : res.filePaths[0];
     if (!file) return null;
     if ((await fs.promises.stat(file)).size > PLAYLIST_FILE_MAX) throw new Error("That file is too large for a playlist");
-    return { name: path.basename(file).replace(/\.(m3u8?|json)$/i, ""), text: await fs.promises.readFile(file, "utf-8") };
+    return {
+      name: path.basename(file).replace(/\.(m3u8?|json|csv|txt)$/i, ""),
+      ext: path.extname(file).slice(1).toLowerCase(),
+      text: await fs.promises.readFile(file, "utf-8"),
+    };
   });
   ipc.handle("backup:import", () => backupImport(mainWindow));
 
@@ -703,6 +741,8 @@ function registerIpc(): void {
     if (previous !== info.userId) {
       sync.resetSyncState(info.userId ?? undefined);
       stats.reloadStore();
+      // A connected Spotify belongs to whoever connected it, not to the next account.
+      await spotify.forgetSpotify();
     }
     await sync.syncNowExclusive().catch((err) => {
       console.error("[bytune] login sync failed (account data not pulled):", err instanceof Error ? err.message : err);
@@ -749,6 +789,7 @@ function registerIpc(): void {
     await transition.changeOwner("guest", false);
     sync.resetSyncState();
     stats.reloadStore();
+    await spotify.forgetSpotify();
     mainWindow?.webContents.reload();
     return info;
   }));

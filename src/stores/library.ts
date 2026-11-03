@@ -52,7 +52,20 @@ export interface DownloadItem {
 }
 
 /** Pinnable library shortcuts — Liked Songs, Downloads, Local Music. */
-export type PinnedSingleKey = "liked" | "downloads" | "local";
+export type PinnedSingleKey = "liked" | "spotify" | "replay" | "downloads" | "local";
+/** The sidebar's shortcut rows, in their order. */
+export const SINGLE_KEYS: PinnedSingleKey[] = ["liked", "spotify", "replay", "downloads", "local"];
+const PIN_DEFAULTS: Record<PinnedSingleKey, boolean> = { liked: true, spotify: true, replay: true, downloads: false, local: false };
+/**
+ * Pins as stored. `v2` marks a set written since Spotify and Replay became pinnable (2026-11-03).
+ * An older set saved "pinned" for every row whether chosen or not, so only its unpins still count.
+ */
+export type PinnedSingles = Partial<Record<PinnedSingleKey, boolean>> & { v2?: boolean };
+
+export function isPinned(pins: PinnedSingles | null | undefined, key: PinnedSingleKey): boolean {
+  if (pins?.v2) return pins[key] ?? PIN_DEFAULTS[key];
+  return pins?.[key] === false ? false : PIN_DEFAULTS[key];
+}
 
 interface LibraryState {
   liked: Track[];
@@ -62,8 +75,8 @@ interface LibraryState {
   followedArtists: FollowedArtist[];
   history: Track[];
   downloads: Record<string, DownloadItem>;
-  /** pin state for the Liked / Downloads / Local shortcut rows — all pinned by default */
-  pinnedSingles: Record<PinnedSingleKey, boolean>;
+  /** pin state for the shortcut rows (read it with isPinned) */
+  pinnedSingles: PinnedSingles;
   /** deletion/version metadata replicated with the library (see deletion-sync.ts) */
   deletionSync?: DeletionSync;
 
@@ -123,11 +136,12 @@ export const useLibrary = create<LibraryState>()(
       followedArtists: [],
       history: [],
       downloads: {},
-      pinnedSingles: { liked: true, downloads: true, local: true },
+      pinnedSingles: { ...PIN_DEFAULTS, v2: true },
 
       togglePinSingle(key) {
-        const current = get().pinnedSingles ?? { liked: true, downloads: true, local: true };
-        set({ pinnedSingles: { ...current, [key]: !current[key] } });
+        const pins = get().pinnedSingles;
+        const now = Object.fromEntries(SINGLE_KEYS.map((k) => [k, isPinned(pins, k)])) as Record<PinnedSingleKey, boolean>;
+        set({ pinnedSingles: { ...now, [key]: !now[key], v2: true } });
       },
 
       isLiked(id) {
@@ -369,7 +383,7 @@ export const useLibrary = create<LibraryState>()(
         if (version < 1 || state.pinnedSingles == null) {
           return {
             ...state,
-            pinnedSingles: { liked: true, downloads: true, local: true },
+            pinnedSingles: { ...PIN_DEFAULTS, v2: true },
           };
         }
         return state;

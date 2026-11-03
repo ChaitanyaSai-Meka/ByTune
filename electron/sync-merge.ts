@@ -85,14 +85,12 @@ export function mergeLibrary(
       return next;
     });
 
-  // Shortcut flags retain the existing local-preference policy.
-  const pinnedSingles = {
-    liked: true,
-    downloads: true,
-    local: true,
-    ...((remote.pinnedSingles as object) ?? {}),
-    ...((local.pinnedSingles as object) ?? {}),
-  };
+  // Shortcut pins: this device's choice wins, except a set saved before the current defaults (no
+  // v2, "pinned" for every row) loses to a v2 set from the cloud. Missing keys read as the defaults
+  // (isPinned in src/stores/library.ts).
+  const localPins = (local.pinnedSingles ?? {}) as Record<string, unknown>;
+  const remotePins = (remote.pinnedSingles ?? {}) as Record<string, unknown>;
+  const pinnedSingles = remotePins.v2 && !localPins.v2 ? { ...localPins, ...remotePins } : { ...remotePins, ...localPins };
 
   const state = {
     ...remote, ...local, liked, history, playlists, folders, followedArtists, pinnedSingles,

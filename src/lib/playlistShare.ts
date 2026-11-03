@@ -3,6 +3,7 @@
  * a playlist as .m3u8 / JSON and import one back. Exports never carry local
  * file paths; imports always create a new playlist (useLibrary.importPlaylist).
  */
+import { importFromText } from "./importSongs";
 import { useLibrary } from "../stores/library";
 import { useUI } from "../stores/ui";
 import type { Track } from "../types";
@@ -145,12 +146,14 @@ export async function exportPlaylist(name: string, tracks: Track[]): Promise<voi
   }
 }
 
-/** Pick an .m3u8 / .json file and add it as a new playlist. */
+/** Pick an .m3u8 / .json file and add it as a new playlist (a .csv / .txt list is matched first). */
 export async function importPlaylistFile(): Promise<void> {
   const ui = useUI.getState();
   try {
     const file = await window.bytune?.playlistImport();
     if (!file) return;
+    // A CSV export or a list of song names goes to the import page, to be matched to YouTube Music.
+    if (file.ext === "csv" || file.ext === "txt") return importFromText(file.text, file.name);
     const { name, tracks, skipped } = parsePlaylistFile(file.text, file.name);
     if (!tracks.length) {
       ui.toast("No YouTube Music songs found in that file", "error");

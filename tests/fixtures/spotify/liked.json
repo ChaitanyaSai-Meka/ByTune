@@ -1,0 +1,115 @@
+{
+ "data": {
+  "me": {
+   "library": {
+    "tracks": {
+     "__typename": "UserLibraryTrackPage",
+     "totalCount": 2,
+     "items": [
+      {
+       "addedAt": {
+        "isoString": "2026-10-01T00:00:00Z"
+       },
+       "track": {
+        "_uri": "spotify:track:0VjIjW4GlUZAMYd2vXMi3b",
+        "data": {
+         "__typename": "Track",
+         "name": "Blinding Lights",
+         "uri": "spotify:track:0VjIjW4GlUZAMYd2vXMi3b",
+         "artists": {
+          "items": [
+           {
+            "profile": {
+             "name": "The Weeknd"
+            }
+           }
+          ]
+         },
+         "albumOfTrack": {
+          "name": "After Hours",
+          "coverArt": {
+           "sources": [
+            {
+             "height": 640,
+             "url": "https://i.scdn.co/image/ab67616d0000b273aaaaaaaaaaaaaaaaaaaaaaaa",
+             "width": 640
+            },
+            {
+             "height": 300,
+             "url": "https://i.scdn.co/image/ab67616d00001e02aaaaaaaaaaaaaaaaaaaaaaaa",
+             "width": 300
+            }
+           ]
+          }
+         },
+         "trackDuration": {
+          "totalMilliseconds": 200040
+         },
+         "contentRating": {
+          "label": "NONE"
+         },
+         "playability": {
+          "playable": true
+         }
+        }
+       }
+      },
+      {
+       "addedAt": {
+        "isoString": "2026-10-02T00:00:00Z"
+       },
+       "track": {
+        "_uri": "spotify:track:1rqqCSm0Qe4I9rUvWncaom",
+        "data": {
+         "__typename": "Track",
+         "name": "Srivalli",
+         "uri": "spotify:track:1rqqCSm0Qe4I9rUvWncaom",
+         "artists": {
+          "items": [
+           {
+            "profile": {
+             "name": "Sid Sriram"
+            }
+           },
+           {
+            "profile": {
+             "name": "Devi Sri Prasad"
+            }
+           }
+          ]
+         },
+         "albumOfTrack": {
+          "name": "Pushpa - The Rise (Telugu)",
+          "coverArt": {
+           "sources": [
+            {
+             "height": 640,
+             "url": "https://i.scdn.co/image/ab67616d0000b273aaaaaaaaaaaaaaaaaaaaaaaa",
+             "width": 640
+            },
+            {
+             "height": 300,
+             "url": "https://i.scdn.co/image/ab67616d00001e02aaaaaaaaaaaaaaaaaaaaaaaa",
+             "width": 300
+            }
+           ]
+          }
+         },
+         "trackDuration": {
+          "totalMilliseconds": 224000
+         },
+         "contentRating": {
+          "label": "NONE"
+         },
+         "playability": {
+          "playable": true
+         }
+        }
+       }
+      }
+     ]
+    }
+   }
+  }
+ }
+}

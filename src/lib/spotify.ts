@@ -1,0 +1,84 @@
+/**
+ * Connect Spotify as the page sees it: connected or not, the account's name, and its playlists
+ * for the sidebar. The session itself never leaves main (electron/spotify.ts).
+ */
+import { create } from "zustand";
+import { hasBridge, requireBridge } from "./bridge";
+import { useUI } from "../stores/ui";
+import type { SpotifyPlaylistInfo, SpotifyStatus } from "../types";
+
+/** An IPC error's own message, without Electron's "Error invoking remote method" prefix. */
+export function ipcMessage(err: unknown, fallback: string): string {
+  const text = err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "") : "";
+  return text || fallback;
+}
+
+interface SpotifyState {
+  status: SpotifyStatus;
+  playlists: SpotifyPlaylistInfo[];
+  /** the sign-in window is open */
+  connecting: boolean;
+  refresh(): Promise<void>;
+  connect(): Promise<void>;
+  disconnect(): Promise<void>;
+}
+
+export const useSpotify = create<SpotifyState>((set, get) => ({
+  status: { connected: false },
+  playlists: [],
+  connecting: false,
+  refresh: async () => {
+    if (!hasBridge()) return;
+    const bridge = requireBridge();
+    const status = await bridge.spotifyStatus();
+    set({ status, ...(status.connected ? {} : { playlists: [] }) });
+    if (!status.connected) return;
+    try {
+      set({ playlists: await bridge.spotifyPlaylists() });
+    } catch {
+      // the failure is in the status now ("session has ended", "Spotify changed something")
+    }
+    set({ status: await bridge.spotifyStatus() });
+  },
+  connect: async () => {
+    if (get().connecting) return;
+    set({ connecting: true });
+    try {
+      set({ status: await requireBridge().spotifyConnect() });
+      await get().refresh();
+    } finally {
+      set({ connecting: false });
+    }
+  },
+  disconnect: async () => {
+    set({ status: await requireBridge().spotifyDisconnect(), playlists: [] });
+  },
+}));
+
+/** Opens Spotify's sign-in and says how it went; true once connected. */
+export async function connectSpotify(): Promise<boolean> {
+  const ui = useUI.getState();
+  try {
+    await useSpotify.getState().connect();
+  } catch (err) {
+    ui.toast(ipcMessage(err, "Couldn't connect Spotify."), "error");
+    return false;
+  }
+  const { status } = useSpotify.getState();
+  if (status.problem) ui.toast(status.problem, "error");
+  else if (status.connected) ui.toast(`Connected Spotify${status.name ? ` as ${status.name}` : ""}`, "success");
+  return status.connected && !status.problem;
+}
+
+/** The Spotify row while nothing is connected: asks first, then shows the playlists once connected. */
+export function askToConnectSpotify(): void {
+  useUI.getState().openDialog({
+    title: "Connect Spotify",
+    body: "Sign in to Spotify in a window of its own, and your playlists and Liked Songs show up here, played from YouTube Music. ByTune reads them the way Spotify's web player does, which isn't an official Spotify feature, so it may stop working.",
+    confirmLabel: "Connect",
+    onConfirm: () =>
+      void connectSpotify().then((ok) => {
+        if (ok) useUI.getState().navigate({ name: "spotify" });
+      }),
+  });
+}

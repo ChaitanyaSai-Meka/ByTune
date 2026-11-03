@@ -2,6 +2,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { storage } from "../lib/persist";
+import type { MatchLanguage } from "../../electron/track-match";
 
 export type StreamQuality = "low" | "medium" | "high" | "lossless";
 export type DownloadQuality = "standard" | "high" | "lossless";
@@ -62,6 +63,10 @@ interface SettingsState {
   /** volume leveling target (lib/audio LOUDNESS_TARGETS) */
   loudnessLevel: LoudnessLevel;
 
+  /* Importing */
+  /** which language's version of a song an import or Spotify playlist prefers ("" = any) */
+  matchLanguage: MatchLanguage | "";
+
   /* Appearance */
   reduceAnimation: boolean;
   reduceDynamicBlur: boolean;
@@ -102,6 +107,7 @@ interface SettingsState {
   deleteEqPreset(name: string): void;
   setEqAutoHeadroom(v: boolean): void;
   setLoudnessLevel(level: LoudnessLevel): void;
+  setMatchLanguage(language: MatchLanguage | ""): void;
   setReduceAnimation(v: boolean): void;
   setReduceDynamicBlur(v: boolean): void;
   setLiquidGlass(v: boolean): void;
@@ -139,6 +145,7 @@ export const useSettings = create<SettingsState>()(
       eqPresets: [],
       eqAutoHeadroom: true,
       loudnessLevel: "normal",
+      matchLanguage: "",
 
       reduceAnimation: false,
       reduceDynamicBlur: false,
@@ -180,6 +187,7 @@ export const useSettings = create<SettingsState>()(
       deleteEqPreset: (name) => set((s) => ({ eqPresets: s.eqPresets.filter((p) => p.name !== name) })),
       setEqAutoHeadroom: (eqAutoHeadroom) => set({ eqAutoHeadroom }),
       setLoudnessLevel: (loudnessLevel) => set({ loudnessLevel }),
+      setMatchLanguage: (matchLanguage) => set({ matchLanguage }),
       setReduceAnimation: (reduceAnimation) => set({ reduceAnimation }),
       setReduceDynamicBlur: (reduceDynamicBlur) => set({ reduceDynamicBlur }),
       setLiquidGlass: (liquidGlass) => set({ liquidGlass }),

@@ -93,6 +93,11 @@ async function loadIpcHandlers() {
         setDownloadedFileLookup() {},
       };
       if (name === "./downloaded-files") return { noteLibrary() {}, noteDownloaded() {}, downloadedFilePath: () => null };
+      if (name === "./spotify") return {
+        LIKED_ID: "liked", spotifyStatus: () => ({ connected: false }), connectSpotify: async () => ({ connected: false }),
+        forgetSpotify: async () => {}, spotifyPlaylists: async () => [], spotifyPlaylist: async () => ({ name: "", songs: [], total: 0 }),
+        publicPlaylist: async () => ({ name: "", songs: [], total: 0 }), matchSong: async () => null,
+      };
       if (name === "./supabase") return {
         getClient: () => null, registerProtocol() {}, initInstallMarker() {}, initAuth: async () => {},
         sessionInfo: () => ({ mode: null, userId: null, username: null, freshInstall: false }),

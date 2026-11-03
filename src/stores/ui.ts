@@ -19,7 +19,11 @@ export type ViewName =
   | "podcast"
   | "podcasts"
   | "mood"
-  | "settings";
+  | "settings"
+  /** a playlist being imported (lib/importSongs) */
+  | "import"
+  /** the connected Spotify account's playlists; with a param, one of them (its id, or "liked") */
+  | "spotify";
 
 export interface View {
   name: ViewName;
@@ -82,6 +86,8 @@ export interface DialogRequest {
   danger?: boolean;
   /** only tells the user something: one button, no Cancel */
   notice?: boolean;
+  /** a multi-line text field (Enter adds a line, Ctrl/Cmd+Enter confirms) */
+  multiline?: boolean;
   onConfirm: (value: string) => void;
 }
 

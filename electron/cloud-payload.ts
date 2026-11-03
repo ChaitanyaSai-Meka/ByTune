@@ -1,6 +1,6 @@
 import { SYNCED_STORES } from "../src/lib/config";
 import { artworkUrlOk } from "../src/lib/artwork";
-import { eqGainsOk, eqPresetsOk } from "./backup-transfer";
+import { eqGainsOk, eqPresetsOk, matchLanguageOk } from "./backup-transfer";
 import { DEVICE_SETTINGS_FIELDS } from "./sync-merge";
 
 export const MAX_CLOUD_PAYLOAD_BYTES = 8 * 1024 * 1024;
@@ -199,6 +199,8 @@ export function validateCloudPayload(name: string, payload: unknown): boolean {
       }
       if (key === "loudnessLevel") {
         if (typeof v !== "string" || !["off", "quiet", "normal", "loud"].includes(v)) { delete state[key]; sanitized = true; }
+      } else if (key === "matchLanguage") {
+        if (!matchLanguageOk(v)) { delete state[key]; sanitized = true; }
       } else if (["downloadQuality", "streamingQuality"].includes(key)) {
         const allowed = key === "downloadQuality" ? ["standard", "high", "lossless"] : ["low", "medium", "high", "lossless"];
         if (typeof v !== "string" || !allowed.includes(v)) { delete state[key]; sanitized = true; }
