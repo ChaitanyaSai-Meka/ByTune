@@ -11,7 +11,8 @@ import { trackMenuItems } from "../lib/trackActions";
 import { downloadAll } from "../lib/downloads";
 import { copyLink, youtubePlaylistLink } from "../lib/playlistShare";
 import { useDrag } from "../lib/dnd";
-import { fmtTime } from "../lib/format";
+import { fmtTime, PAGE_TITLE_SIZE, shortTitle, titleStep } from "../lib/format";
+import { FitText } from "../components/FitText";
 import { useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
 import { usePlayer, useTrackPlayback } from "../stores/player";
@@ -45,7 +46,7 @@ function PlaylistTrackRow({
         e.preventDefault();
         openMenu(e.clientX, e.clientY);
       }}
-      className={`group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
+      className={`fit-host group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
         currentId === song.id ? "bg-ink-hi/[0.14]" : "hover:bg-ink-hi/[0.05]"
       } ${drag.dragging ? "opacity-40" : ""}`}
     >
@@ -73,9 +74,9 @@ function PlaylistTrackRow({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 text-[16px] font-semibold tracking-[-0.2px] text-ink-hi">
           {song.explicit && <ExplicitBadge />}
-          <span className="truncate">{song.title}</span>
+          <FitText text={shortTitle(song.title)} full={song.title} />
         </div>
-        <div className="text-[14px] truncate text-ink-dim mt-0.5">{song.artist}</div>
+        <FitText text={song.artist} className="text-[14px] text-ink-dim mt-0.5" />
       </div>
       <div className="shrink-0 text-[13px] text-ink-faint tabular-nums">
         {song.duration > 0 ? fmtTime(song.duration) : ""}
@@ -176,12 +177,14 @@ export function RemotePlaylistView({ playlistId }: { playlistId: string }) {
         </div>
 
         <div className="relative flex flex-col items-center text-center px-8 pt-[244px] pb-5">
-          <h1 className="font-display text-[34px] leading-[1.35] font-extrabold tracking-[-0.03em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)] break-words max-w-3xl line-clamp-2">
+          <h1
+            className={`font-display ${PAGE_TITLE_SIZE[titleStep(page.title)]} leading-[1.2] font-extrabold tracking-[-0.03em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)] break-words max-w-3xl`}
+          >
             {page.title}
           </h1>
           {page.credit && (
-            <div className="text-[15px] font-medium text-accent mt-2 drop-shadow-[0_1px_6px_rgba(0,0,0,0.5)] line-clamp-1">
-              {page.credit}
+            <div className="text-[15px] font-medium text-accent mt-2 drop-shadow-[0_1px_6px_rgba(0,0,0,0.5)] min-w-0 max-w-full">
+              <FitText text={page.credit} />
             </div>
           )}
           {page.meta && (

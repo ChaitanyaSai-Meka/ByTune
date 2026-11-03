@@ -50,6 +50,8 @@ import { useSettings } from "../stores/settings";
 import { useUI, type MenuItem } from "../stores/ui";
 import { upgradeArtwork } from "../lib/artwork";
 import { useDrag } from "../lib/dnd";
+import { shortTitle } from "../lib/format";
+import { FitText } from "./FitText";
 import { SLEEP_MAX_MINUTES, formatSleepLeft, parseSleepMinutes, useSleepTimer } from "../lib/sleepTimer";
 
 /* Transport button — 32×32, 16px glyph, colour-only hover (Spotify). */
@@ -263,7 +265,7 @@ export function PlayerBar() {
               const suggested = `Playlist ${useLibrary.getState().playlists.length + 1}`;
               useUI.getState().openDialog({
                 title: "New playlist",
-                body: `Add "${track.title}" to a new playlist.`,
+                body: `Add "${shortTitle(track.title)}" to a new playlist.`,
                 initialValue: suggested,
                 placeholder: "Playlist name",
                 confirmLabel: "Create",
@@ -342,11 +344,11 @@ export function PlayerBar() {
           </button>
           <div className="ml-2.5 min-w-0">
             <button onClick={toggleNowPlaying} className="block w-full text-left animate-meta-in" key={track ? `meta-${track.id}` : "meta-none"}>
-              <span className="block truncate px-1.5 -mx-1.5 text-[14px] leading-[19px] text-white hover:underline">
-                {track ? track.title : "Nothing playing"}
+              <span className="block min-w-0 px-1.5 -mx-1.5 text-[14px] leading-[19px] text-white hover:underline">
+                <FitText mode="auto" text={track ? shortTitle(track.title) : "Nothing playing"} full={track?.title} />
               </span>
-              <span className="block truncate px-1.5 -mx-1.5 text-[12px] leading-[17px] text-[#b3b3b3] hover:underline">
-                {track ? track.artist : "Search for something to play"}
+              <span className="block min-w-0 px-1.5 -mx-1.5 text-[12px] leading-[17px] text-[#b3b3b3] hover:underline">
+                <FitText mode="auto" text={track ? track.artist : "Search for something to play"} />
               </span>
             </button>
           </div>

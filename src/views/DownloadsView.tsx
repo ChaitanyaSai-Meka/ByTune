@@ -5,8 +5,9 @@ import { useLibrary } from "../stores/library";
 import { useSettings } from "../stores/settings";
 import { tintHoverHandlers, useUI } from "../stores/ui";
 import { cancelDownload, startDownload } from "../lib/downloads";
-import { plural } from "../lib/format";
+import { plural, shortTitle } from "../lib/format";
 import { Artwork, Btn, EmptyState, IconBtn } from "../components/primitives";
+import { FitText } from "../components/FitText";
 import type { DownloadItem } from "../stores/library";
 
 function StatusCell({ item }: { item: DownloadItem }) {
@@ -68,7 +69,7 @@ function DownloadRow({
       key={item.track.id}
       {...tintHoverHandlers(item.track.thumb)}
       {...drag.props}
-      className={`group flex items-center gap-3 h-[58px] px-3 rounded-xl hover:bg-ink-hi/[0.045] ${
+      className={`fit-host group flex items-center gap-3 h-[58px] px-3 rounded-xl hover:bg-ink-hi/[0.045] ${
         drag.dragging ? "opacity-40" : ""
       }`}
       onContextMenu={(e) => {
@@ -79,8 +80,8 @@ function DownloadRow({
     >
       <Artwork src={item.track.thumb} className="w-10 h-10 rounded-lg shrink-0" iconClassName="w-4 h-4" alt="" />
       <div className="flex-1 min-w-0">
-        <div className="text-[13.5px] truncate text-ink">{item.track.title}</div>
-        <div className="text-xs truncate text-ink-faint mt-px">{item.track.artist}</div>
+        <FitText text={shortTitle(item.track.title)} full={item.track.title} className="text-[13.5px] text-ink" />
+        <FitText text={item.track.artist} className="text-xs text-ink-faint mt-px" />
       </div>
       <StatusCell item={item} />
       <div className="w-20 shrink-0 flex items-center justify-end gap-0.5">

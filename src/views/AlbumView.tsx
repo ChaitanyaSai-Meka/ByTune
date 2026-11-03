@@ -12,7 +12,8 @@ import { trackMenuItems } from "../lib/trackActions";
 import { downloadAll } from "../lib/downloads";
 import { copyLink, youtubeAlbumLink } from "../lib/playlistShare";
 import { useDrag } from "../lib/dnd";
-import { fmtTime } from "../lib/format";
+import { fmtTime, PAGE_TITLE_SIZE, shortTitle, titleSource, titleStep } from "../lib/format";
+import { FitText } from "../components/FitText";
 import { useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
 import { queueAlbum } from "../lib/album";
@@ -123,9 +124,15 @@ export function AlbumView({ albumId }: { albumId: string }) {
         </div>
 
         <div className="relative flex flex-col items-center text-center px-8 pt-[240px] pb-2">
-          <h1 className="font-display text-[34px] leading-[1.35] font-extrabold tracking-[-0.03em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)] break-words max-w-3xl line-clamp-2">
-            {album.title}
+          <h1
+            className={`font-display ${PAGE_TITLE_SIZE[titleStep(shortTitle(album.title))]} leading-[1.2] font-extrabold tracking-[-0.03em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)] break-words max-w-3xl`}
+            title={shortTitle(album.title) !== album.title ? album.title : undefined}
+          >
+            {shortTitle(album.title)}
           </h1>
+          {titleSource(album.title) && (
+            <div className="text-[13px] text-white/60 mt-1 drop-shadow-[0_1px_6px_rgba(0,0,0,0.5)]">From {titleSource(album.title)}</div>
+          )}
           {album.artistId ? (
             <button
               onClick={() => navigate({ name: "artist", param: album.artistId! })}
@@ -259,7 +266,7 @@ function AlbumTrackRow({ song, index, tracks }: { song: Track; index: number; tr
         e.preventDefault();
         openMenu(e.clientX, e.clientY);
       }}
-      className={`group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
+      className={`fit-host group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
         currentId === song.id ? "bg-ink-hi/[0.14]" : "hover:bg-ink-hi/[0.05]"
       } ${drag.dragging ? "opacity-40" : ""}`}
     >
@@ -287,9 +294,9 @@ function AlbumTrackRow({ song, index, tracks }: { song: Track; index: number; tr
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 text-[16px] font-semibold tracking-[-0.2px] text-ink-hi">
           {song.explicit && <ExplicitBadge />}
-          <span className="truncate">{song.title}</span>
+          <FitText text={shortTitle(song.title)} full={song.title} />
         </div>
-        <div className="text-[14px] truncate text-ink-dim mt-0.5">{song.artist}</div>
+        <FitText text={song.artist} className="text-[14px] text-ink-dim mt-0.5" />
       </div>
       <div className="shrink-0 text-[13px] text-ink-faint tabular-nums">
         {song.duration > 0 ? fmtTime(song.duration) : ""}

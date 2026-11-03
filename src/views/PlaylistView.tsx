@@ -13,7 +13,8 @@ import { Artwork, EmptyState, EqBars, ExplicitBadge } from "../components/primit
 import { playlistHeaderItems, playlistMenuItems } from "../lib/trackActions";
 import { useDrag } from "../lib/dnd";
 import { useSortable, type SortableDragProps } from "../lib/useSortable";
-import { fmtTime, fmtTotal, plural } from "../lib/format";
+import { fmtTime, fmtTotal, PAGE_TITLE_SIZE, plural, shortTitle, titleStep } from "../lib/format";
+import { FitText } from "../components/FitText";
 import { useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
 import { useLibrary, type Playlist } from "../stores/library";
@@ -157,9 +158,10 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
         </div>
 
         <div className="relative flex flex-col items-center text-center px-8 pt-[244px] pb-5">
-          {/* leading-[1.35]: Segoe UI's ascent+descent needs ~1.33em — any
-              tighter and line-clamp's overflow:hidden slices the descenders. */}
-          <h1 className="font-display text-[34px] leading-[1.35] font-extrabold tracking-[-0.03em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)] break-words max-w-3xl line-clamp-2">
+          {/* The whole name, a size smaller as it grows — never cut. */}
+          <h1
+            className={`font-display ${PAGE_TITLE_SIZE[titleStep(playlist.name)]} leading-[1.2] font-extrabold tracking-[-0.03em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)] break-words max-w-3xl`}
+          >
             {playlist.name}
           </h1>
           <div className="text-[12px] font-semibold uppercase tracking-[0.14em] text-white/70 mt-1.5 drop-shadow-[0_1px_6px_rgba(0,0,0,0.5)]">
@@ -286,7 +288,7 @@ function PlaylistTrackRow({
         e.preventDefault();
         openMenu(e.clientX, e.clientY);
       }}
-      className={`group relative flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
+      className={`fit-host group relative flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
         isCurrent ? "bg-ink-hi/[0.14]" : "hover:bg-ink-hi/[0.05]"
       } ${drag.dragging ? "opacity-40" : ""}`}
     >
@@ -316,9 +318,9 @@ function PlaylistTrackRow({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 text-[16px] font-semibold tracking-[-0.2px] text-ink-hi">
           {track.explicit && <ExplicitBadge />}
-          <span className="truncate">{track.title}</span>
+          <FitText text={shortTitle(track.title)} full={track.title} />
         </div>
-        <div className="text-[14px] truncate text-ink-dim mt-0.5">{track.artist}</div>
+        <FitText text={track.artist} className="text-[14px] text-ink-dim mt-0.5" />
       </div>
       <div
         data-ghost-hide

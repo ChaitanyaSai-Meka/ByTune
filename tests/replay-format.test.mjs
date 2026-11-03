@@ -112,3 +112,24 @@ test("a shared credit counts for every artist on it; a band the catalogue knows 
   const week = journalReplay([{ track: song, at: now - 60_000, heard: 200, out: "done" }], now);
   assert.equal(week.counts.artists, 2, "the week counts artists the way the list shows them");
 });
+
+test("a streak lives through today until a day passes without music; the longest run keeps its dates", async () => {
+  const { streakNow, shiftDay } = await import("../.test-build/replay-format.mjs");
+  const day = (date, ms = 60_000) => ({ date, ms });
+  const today = new Date(2026, 10, 3, 15, 0); // Tue 3 Nov 2026
+  const october = Array.from({ length: 12 }, (_, i) => day(`2026-10-${String(10 + i).padStart(2, "0")}`));
+
+  const waiting = streakNow([...october, day("2026-11-01"), day("2026-11-02")], today);
+  assert.deepEqual(waiting, { current: 2, today: false, best: 12, bestFrom: "2026-10-10", bestTo: "2026-10-21" }, "yesterday's streak is still alive today");
+  assert.equal(streakNow([day("2026-11-01"), day("2026-11-02"), day("2026-11-03")], today).current, 3, "today's listening adds to it");
+  assert.equal(streakNow([day("2026-11-01")], today).current, 0, "a whole quiet day ends it");
+  assert.equal(streakNow([day("2026-11-02"), day("2026-11-03", 0)], today).current, 1, "a zero-minute day isn't a listening day");
+
+  const tie = streakNow([day("2026-10-01"), day("2026-10-02"), day("2026-11-02"), day("2026-11-03")], today);
+  assert.deepEqual([tie.best, tie.bestFrom, tie.bestTo], [2, "2026-11-02", "2026-11-03"], "on a tie, the latest run is the one to beat");
+  assert.deepEqual(streakNow([], today), { current: 0, today: false, best: 0, bestFrom: null, bestTo: null });
+
+  assert.equal(shiftDay("2026-03-08", 1), "2026-03-09", "across a daylight-saving change");
+  assert.equal(shiftDay("2026-03-01", -1), "2026-02-28");
+  assert.equal(streakNow([day("2026-10-31"), day("2026-11-01"), day("2026-11-02")], today).current, 3, "across a month end");
+});

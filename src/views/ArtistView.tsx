@@ -10,7 +10,8 @@ import { Heart, ListPlus, MoreHorizontal, MoreVertical, Play, Shuffle, User } fr
 import { Artwork, EqBars, ErrorState, ExplicitBadge, HeroSkeleton, ListSkeleton, ShelfScroller } from "../components/primitives";
 import { trackMenuItems } from "../lib/trackActions";
 import { useDrag } from "../lib/dnd";
-import { fmtTime } from "../lib/format";
+import { fmtTime, shortTitle, titleStep } from "../lib/format";
+import { FitText } from "../components/FitText";
 import { useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
 import { useLibrary } from "../stores/library";
@@ -42,15 +43,15 @@ function SectionCard({ item }: { item: HomeItem }) {
   };
 
   return (
-    <button onClick={onOpen} className="group w-[172px] shrink-0 text-left cursor-pointer">
+    <button onClick={onOpen} className="fit-host group w-[172px] shrink-0 text-left cursor-pointer">
       <Artwork
         src={thumb}
         className={round ? "w-[172px] h-[172px] rounded-full" : "w-[172px] h-[172px] rounded-[10px]"}
         iconClassName="w-7 h-7"
         alt=""
       />
-      <div className="mt-2 text-[14px] font-semibold text-ink-hi truncate leading-snug">{title}</div>
-      <div className="text-[12.5px] text-ink-dim truncate mt-0.5">{subtitle}</div>
+      <FitText lines={2} text={shortTitle(title)} full={title} className="mt-2 text-[14px] font-semibold text-ink-hi leading-snug" />
+      <FitText text={subtitle} className="text-[12.5px] text-ink-dim mt-0.5" />
     </button>
   );
 }
@@ -71,7 +72,7 @@ function SongRow({ song, songs, index, from }: { song: Track; songs: Track[]; in
         e.preventDefault();
         openMenu(e.clientX, e.clientY);
       }}
-      className={`group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
+      className={`fit-host group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
         state ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.05]"
       } ${drag.dragging ? "opacity-40" : ""}`}
     >
@@ -86,9 +87,9 @@ function SongRow({ song, songs, index, from }: { song: Track; songs: Track[]; in
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 text-[16px] font-semibold tracking-[-0.2px] text-ink-hi">
           {song.explicit && <ExplicitBadge />}
-          <span className="truncate">{song.title}</span>
+          <FitText text={shortTitle(song.title)} full={song.title} />
         </div>
-        <div className="text-[14px] truncate text-ink-dim mt-0.5">{song.artist}</div>
+        <FitText text={song.artist} className="text-[14px] text-ink-dim mt-0.5" />
       </div>
       <div className="shrink-0 text-[13px] text-ink-faint tabular-nums">
         {song.duration > 0 ? fmtTime(song.duration) : ""}
@@ -264,7 +265,9 @@ export function ArtistView({ artistId }: { artistId: string }) {
         </div>
 
         <div className="relative flex flex-col items-center text-center px-8 pt-[300px] pb-2">
-          <h1 className="font-display text-[40px] leading-[1.05] font-extrabold tracking-[-0.03em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)] break-words max-w-3xl line-clamp-2">
+          <h1
+            className={`font-display ${["text-[40px]", "text-[32px]", "text-[26px]"][titleStep(artist.name)]} leading-[1.1] font-extrabold tracking-[-0.03em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)] break-words max-w-3xl`}
+          >
             {artist.name}
           </h1>
 

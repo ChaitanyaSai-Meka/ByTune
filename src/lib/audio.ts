@@ -50,6 +50,7 @@ import { requireBridge } from "./bridge";
 import { emitPlayEvent } from "./playEvents";
 import { analyseTrack, peekAnalysis, type TrackAnalysis } from "./analysis";
 import { upgradeArtwork } from "./artwork";
+import { shortTitle } from "./format";
 import { createMediaKeyTap } from "./media-key-tap";
 import { useSleepTimer } from "./sleepTimer";
 import {
@@ -1564,7 +1565,7 @@ function handleFailure(track: Track, err?: unknown): void {
         useUI.getState().toast(localGoneMsg, "warning", 7000);
       }
     } else {
-      useUI.getState().toast(`Couldn't play "${track.title}" — skipping`, "error");
+      useUI.getState().toast(`Couldn't play "${shortTitle(track.title)}" — skipping`, "error");
     }
     state.next(false);
   } else {
@@ -1573,7 +1574,7 @@ function handleFailure(track: Track, err?: unknown): void {
       localMissingToasted = false;
       useUI.getState().toast(localGoneMsg, "warning", 7000);
     } else {
-      useUI.getState().toast(`Couldn't play "${track.title}"`, "error");
+      useUI.getState().toast(`Couldn't play "${shortTitle(track.title)}"`, "error");
     }
   }
 }

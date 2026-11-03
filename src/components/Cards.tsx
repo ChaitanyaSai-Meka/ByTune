@@ -5,6 +5,8 @@ import { usePlayer } from "../stores/player";
 import { tintHoverHandlers, useUI, type MenuItem } from "../stores/ui";
 import { trackMenuItems } from "../lib/trackActions";
 import { Artwork, PlayOverlay, ShelfScroller } from "./primitives";
+import { FitText } from "./FitText";
+import { shortTitle } from "../lib/format";
 import type { Album, Artist, HomeItem, HomeShelf, PlaylistCard, Track } from "../types";
 import type { KeyboardEvent } from "react";
 
@@ -23,10 +25,10 @@ function activateOnKey(open: () => void) {
    it. 8px inset keeps Spotify's proportion at this size; width grows to
    keep the cover at its tuned 168px. */
 const CARD =
-  "group w-[184px] shrink-0 text-left cursor-pointer active:scale-[0.98] rounded-xl p-2 transition-colors duration-200 hover:bg-ink-hi/[0.08]";
+  "fit-host group w-[184px] shrink-0 text-left cursor-pointer active:scale-[0.98] rounded-xl p-2 transition-colors duration-200 hover:bg-ink-hi/[0.08]";
 
-const CARD_TITLE = "text-[15px] font-semibold text-ink-hi truncate leading-snug";
-const CARD_SUB = "text-[13px] text-ink-dim truncate mt-0.5";
+const CARD_TITLE = "text-[15px] font-semibold text-ink-hi leading-snug";
+const CARD_SUB = "text-[13px] text-ink-dim mt-0.5";
 
 export function TrackCard({ track, menu = () => trackMenuItems(track) }: { track: Track; menu?: () => MenuItem[] }) {
   const playTrack = usePlayer((s) => s.playTrack);
@@ -51,8 +53,8 @@ export function TrackCard({ track, menu = () => trackMenuItems(track) }: { track
         <PlayOverlay onClick={() => playTrack(track)} />
       </div>
       <div className="mt-2.5">
-        <div className={CARD_TITLE}>{track.title}</div>
-        <div className={CARD_SUB}>{track.artist}</div>
+        <FitText lines={2} text={shortTitle(track.title)} full={track.title} className={CARD_TITLE} />
+        <FitText text={track.artist} className={CARD_SUB} />
       </div>
     </div>
   );
@@ -78,11 +80,8 @@ export function AlbumCard({ album }: { album: Album }) {
         <PlayOverlay onClick={() => void playAlbum(album.id)} />
       </div>
       <div className="mt-2.5">
-        <div className={CARD_TITLE}>{album.title}</div>
-        <div className={CARD_SUB}>
-          {album.artist}
-          {album.year ? ` · ${album.year}` : ""}
-        </div>
+        <FitText lines={2} text={shortTitle(album.title)} full={album.title} className={CARD_TITLE} />
+        <FitText text={`${album.artist}${album.year ? ` · ${album.year}` : ""}`} className={CARD_SUB} />
       </div>
     </div>
   );
@@ -107,8 +106,8 @@ export function ArtistCard({ artist }: { artist: Artist }) {
         <Artwork src={artist.thumb} className="w-full aspect-square rounded-full transition-transform duration-300 ease-out origin-top group-hover:scale-[1.05]" iconClassName="w-8 h-8" />
       </div>
       <div className="mt-2.5">
-        <div className={CARD_TITLE}>{artist.name}</div>
-        <div className={CARD_SUB}>{artist.subtitle ?? "Artist"}</div>
+        <FitText lines={2} text={artist.name} className={CARD_TITLE} />
+        <FitText text={artist.subtitle ?? "Artist"} className={CARD_SUB} />
       </div>
     </div>
   );
@@ -134,8 +133,8 @@ export function PlaylistCardView({ playlist }: { playlist: PlaylistCard }) {
         <PlayOverlay onClick={() => void playPlaylist(playlist.id)} />
       </div>
       <div className="mt-2.5">
-        <div className={CARD_TITLE}>{playlist.title}</div>
-        <div className={CARD_SUB}>{playlist.subtitle || "Playlist"}</div>
+        <FitText lines={2} text={playlist.title} className={CARD_TITLE} />
+        <FitText text={playlist.subtitle || "Playlist"} className={CARD_SUB} />
       </div>
     </div>
   );

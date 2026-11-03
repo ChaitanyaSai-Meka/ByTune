@@ -32,7 +32,8 @@ import { useUI } from "../stores/ui";
 import { dragHasAlbum, dragHasPlaylist, readAlbum, readPlaylist, useDrag } from "../lib/dnd";
 import { requireBridge } from "../lib/bridge";
 import { playlistFolderItems, playlistHeaderItems } from "../lib/trackActions";
-import { plural } from "../lib/format";
+import { plural, shortTitle } from "../lib/format";
+import { FitText } from "../components/FitText";
 import { upgradeArtwork } from "../lib/artwork";
 import type { Track } from "../types";
 
@@ -148,7 +149,7 @@ function LibraryPlaylistCard({ playlist }: { playlist: Playlist }) {
 
         <div className="mt-3 flex items-start justify-between gap-1">
           <div className="min-w-0">
-            <div className="text-sm font-medium text-ink truncate">{playlist.name}</div>
+            <FitText lines={2} text={playlist.name} className="text-sm font-medium text-ink leading-snug" />
             <div className="text-[13px] text-ink-faint mt-0.5">{plural(playlist.tracks.length, "track", "tracks")}</div>
           </div>
           <button
@@ -237,7 +238,7 @@ function FolderSection({
     }
     const al = readAlbum(e);
     if (!al) return;
-    ui.toast(`Importing “${al.title}”…`);
+    ui.toast(`Importing “${shortTitle(al.title)}”…`);
     void requireBridge()
       .getAlbum(al.id)
       .then((page) => {
@@ -250,7 +251,7 @@ function FolderSection({
         const created = lib.importPlaylist(name, tracks, folder.id);
         ui.toast(`“${created.name}” · ${tracks.length} songs added to “${folder.name}”`, "success");
       })
-      .catch(() => ui.toast(`Couldn't import “${al.title}”`, "error"));
+      .catch(() => ui.toast(`Couldn't import “${shortTitle(al.title)}”`, "error"));
   };
 
   return (
@@ -282,7 +283,7 @@ function FolderSection({
           ]);
         }}
         title="Right-click to rename or delete — or drop a playlist here to file it"
-        className={`group flex items-center gap-3 py-1 pr-3 rounded-lg text-left hover:bg-ink-hi/[0.04] transition-colors w-full ${
+        className={`fit-host group flex items-center gap-3 py-1 pr-3 rounded-lg text-left hover:bg-ink-hi/[0.04] transition-colors w-full ${
           dropHover ? "ring-2 ring-inset ring-accent/60 bg-ink-hi/[0.08]" : ""
         }`}
       >
@@ -295,7 +296,7 @@ function FolderSection({
           <Folder className="w-5 h-5 text-ink-hi/55" />
         </span>
         <span className="min-w-0">
-          <span className="block text-[15px] font-semibold text-ink-hi truncate">{folder.name}</span>
+          <FitText text={folder.name} className="text-[15px] font-semibold text-ink-hi" />
           <span className="block text-[12.5px] text-ink-hi/55">
             {plural(playlists.length, "playlist", "playlists")}
           </span>
@@ -373,7 +374,7 @@ function ShortcutTile({
             {art}
           </div>
           <div className="mt-3">
-            <div className="text-sm font-medium text-ink truncate">{title}</div>
+            <FitText lines={2} text={title} className="text-sm font-medium text-ink leading-snug" />
             <div className="text-[13px] text-ink-faint mt-0.5">{subtitle}</div>
           </div>
         </button>

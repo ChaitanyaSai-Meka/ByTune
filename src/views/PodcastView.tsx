@@ -6,6 +6,8 @@
 import { useEffect, useState } from "react";
 import { Mic, MoreHorizontal, Play } from "lucide-react";
 import { Artwork, EqBars, ErrorState, HeroSkeleton, ListSkeleton } from "../components/primitives";
+import { FitText } from "../components/FitText";
+import { PAGE_TITLE_SIZE, titleStep } from "../lib/format";
 import { trackMenuItems } from "../lib/trackActions";
 import { usePlayer, useTrackPlayback } from "../stores/player";
 import { useUI } from "../stores/ui";
@@ -40,7 +42,7 @@ function EpisodeRow({ episode }: { episode: PodcastEpisode }) {
         )}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="text-[15px] font-semibold text-ink-hi line-clamp-2">{episode.title}</div>
+        <FitText lines={2} text={episode.title} className="text-[15px] font-semibold text-ink-hi leading-snug" />
         {episode.published && <div className="text-[12.5px] text-ink-dim mt-1">{episode.published}</div>}
         {episode.description && <p className="text-[13px] text-ink-hi/60 mt-1.5 line-clamp-2">{episode.description}</p>}
       </div>
@@ -96,7 +98,9 @@ export function PodcastView({ id }: { id: string }) {
           <div className="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-[0.14em] text-ink-dim">
             <Mic className="w-3.5 h-3.5" /> Podcast
           </div>
-          <h1 className="font-display text-[34px] leading-[1.2] font-extrabold tracking-[-0.03em] text-ink-hi mt-1 line-clamp-2">{page.title}</h1>
+          <h1 className={`font-display ${PAGE_TITLE_SIZE[titleStep(page.title)]} leading-[1.2] font-extrabold tracking-[-0.03em] text-ink-hi mt-1 break-words`}>
+            {page.title}
+          </h1>
           {page.author && <div className="text-[14px] text-ink-hi/75 mt-1">{page.author}</div>}
           {page.description && <p className="text-[13px] text-ink-dim mt-3 line-clamp-3 max-w-2xl">{page.description}</p>}
           {latest && (

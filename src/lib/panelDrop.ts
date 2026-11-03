@@ -17,6 +17,7 @@ import type { LocalFolderEntry } from "../../electron/local-library";
 import type { Track } from "../types";
 import { getDownload, startDownload } from "./downloads";
 import { draggingFromPlaylist, useTrackDrop } from "./dnd";
+import { shortTitle } from "./format";
 
 function addToOpenPlaylist(playlistId: string, track: Track): void {
   const lib = useLibrary.getState();
@@ -61,7 +62,7 @@ function downloadIntoLocalFolder(track: Track, target?: string | null): void {
     if (getDownload(track.id)?.status !== "queued") {
       return;
     }
-    useUI.getState().toast(`Downloading "${track.title}" into the folder`, "success");
+    useUI.getState().toast(`Downloading "${shortTitle(track.title)}" into the folder`, "success");
     // Rescan when the file lands, then tell the open view to refresh. Cancel
     // counts as terminal too — the listener must not outlive its download.
     const off = window.bytune?.onDownloadEvent?.((e) => {

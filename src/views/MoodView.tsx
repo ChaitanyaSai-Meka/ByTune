@@ -5,7 +5,8 @@ import { Crate } from "../components/Crate";
 import { Artwork, Btn, EqBars, ShelfScroller, ShelfSkeleton } from "../components/primitives";
 import { requireBridge } from "../lib/bridge";
 import { useExploreCovers } from "../lib/exploreCovers";
-import { fmtTime } from "../lib/format";
+import { fmtTime, shortTitle } from "../lib/format";
+import { FitText } from "../components/FitText";
 import { buildMix } from "../lib/moodMix";
 import { browseMenuItems, trackMenuItems } from "../lib/trackActions";
 import { usePlayer } from "../stores/player";
@@ -129,12 +130,12 @@ function UpFirst({ mix }: { mix: Track[] }) {
       <ol className="uf">
         {mix.slice(0, UP_FIRST).map((t, i) => (
           <li key={t.id}>
-            <button className="uf-row" onClick={() => playQueue(mix, i)} onContextMenu={(e) => menuAt(e, trackMenuItems(t))}>
+            <button className="uf-row fit-host" onClick={() => playQueue(mix, i)} onContextMenu={(e) => menuAt(e, trackMenuItems(t))}>
               <span className="uf-n text-ink-faint">{playingId === t.id ? <EqBars /> : String(i + 1).padStart(2, "0")}</span>
               <Artwork src={t.thumb} className="uf-art" iconClassName="w-4 h-4" />
               <span className="uf-t">
-                <span className="text-[14px] font-semibold text-ink-hi truncate">{t.title}</span>
-                <span className="text-[13px] text-ink-dim truncate">{t.artist}</span>
+                <FitText text={shortTitle(t.title)} full={t.title} className="text-[14px] font-semibold text-ink-hi" />
+                <FitText text={t.artist} className="text-[13px] text-ink-dim" />
               </span>
               <span className="uf-d text-ink-faint">{t.duration ? fmtTime(t.duration) : ""}</span>
             </button>
@@ -158,7 +159,7 @@ function RecordWall({ albums }: { albums: Album[] }) {
         {(all ? albums : albums.slice(0, WALL_FIRST)).map((a) => (
           <button
             key={a.id}
-            className="rw-item"
+            className="rw-item fit-host"
             onClick={() => navigate({ name: "album", param: a.id })}
             onContextMenu={(e) => menuAt(e, browseMenuItems({ browseId: a.id, title: a.title, subtitle: a.artist, thumb: a.thumb, type: "album" }))}
           >
@@ -170,8 +171,8 @@ function RecordWall({ albums }: { albums: Album[] }) {
               </span>
               <img className="rw-sleeve" src={a.thumb} alt="" draggable={false} />
             </span>
-            <span className="mt-3 block text-[14px] font-semibold text-ink-hi truncate">{a.title}</span>
-            <span className="block text-[13px] text-ink-dim truncate">{a.artist}</span>
+            <FitText lines={2} text={shortTitle(a.title)} full={a.title} className="mt-3 text-[14px] font-semibold text-ink-hi leading-snug" />
+            <FitText text={a.artist} className="text-[13px] text-ink-dim" />
           </button>
         ))}
       </div>

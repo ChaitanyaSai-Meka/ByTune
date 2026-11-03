@@ -154,12 +154,12 @@ export function ExploreView() {
       <PodcastsCard />
 
       {sections.map(([title, list]) => (
-        <section key={title} className="mt-9">
+        <section key={title} className="tile-host mt-9">
           <h2 className="section-title text-[21px] mb-4 flex items-baseline gap-2">
             {title}
             <span className="text-[14px] font-medium text-ink-faint tabular-nums">{list.length}</span>
           </h2>
-          <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="mood-grid">
             {list.map((m) => (
               <MoodCard key={`${m.title}-${m.params ?? ""}`} mood={m} />
             ))}

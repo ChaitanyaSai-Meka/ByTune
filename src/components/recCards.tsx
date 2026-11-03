@@ -19,14 +19,16 @@ import { usePlayer, useTrackPlayback } from "../stores/player";
 import { tintHoverHandlers, useUI, type MenuItem } from "../stores/ui";
 import type { Track } from "../types";
 import { Artwork, EqBars, PlayOverlay, ShelfScroller } from "./primitives";
+import { FitText } from "./FitText";
+import { shortTitle } from "../lib/format";
 
 /* Same hover-only tile as the Cards.tsx shelf cards (keep the two in sync):
    transparent at rest, translucent box fades in on hover, 8px inset —
    artwork keeps 168px. */
 const CARD =
-  "group w-[184px] shrink-0 text-left cursor-pointer active:scale-[0.98] rounded-xl p-2 transition-colors duration-200 hover:bg-ink-hi/[0.08]";
-const CARD_TITLE = "text-[15px] font-semibold text-ink-hi truncate leading-snug";
-const CARD_SUB = "text-[13px] text-ink-dim truncate mt-0.5";
+  "fit-host group w-[184px] shrink-0 text-left cursor-pointer active:scale-[0.98] rounded-xl p-2 transition-colors duration-200 hover:bg-ink-hi/[0.08]";
+const CARD_TITLE = "text-[15px] font-semibold text-ink-hi leading-snug";
+const CARD_SUB = "text-[13px] text-ink-dim mt-0.5";
 
 type MixItem = Extract<HomeSection["items"][number], { style: "mix" }>;
 type RadioItem = Extract<HomeSection["items"][number], { style: "radio" }>;
@@ -43,7 +45,7 @@ export function homeTrackMenu(track: Track): MenuItem[] {
       separatorBefore: true,
       action: () => {
         useHomeEngagement.getState().hide(track);
-        useUI.getState().toast(`Hidden from Home: ${track.title}`);
+        useUI.getState().toast(`Hidden from Home: ${shortTitle(track.title)}`);
       },
     },
   ];
@@ -74,8 +76,8 @@ export function SideCard({ item }: { item: SideItem }) {
         <PlayOverlay onClick={play} title={`Play Side ${item.letter}`} />
       </div>
       <div className="mt-2.5">
-        <div className={CARD_TITLE}>Side {item.letter}</div>
-        <div className={CARD_SUB}>{item.caption}</div>
+        <FitText lines={2} text={`Side ${item.letter}`} className={CARD_TITLE} />
+        <FitText text={item.caption} className={CARD_SUB} />
         <div className="text-[12px] text-ink-faint mt-0.5 tabular-nums">
           {item.count} songs{item.fresh ? ` · ${item.fresh} new` : ""}
         </div>
@@ -105,7 +107,7 @@ function ListRow({ track, note, onPlay }: { track: Track; note?: string; onPlay:
       }}
       {...tintHoverHandlers(track.thumb)}
       {...drag.props}
-      className={`group flex h-[60px] items-center gap-3 rounded-lg px-2 text-left cursor-pointer select-none transition-colors duration-150 hover:bg-ink-hi/[0.06] ${
+      className={`fit-host group flex h-[60px] items-center gap-3 rounded-lg px-2 text-left cursor-pointer select-none transition-colors duration-150 hover:bg-ink-hi/[0.06] ${
         drag.dragging ? "opacity-40" : ""
       }`}
     >
@@ -118,8 +120,8 @@ function ListRow({ track, note, onPlay }: { track: Track; note?: string; onPlay:
         )}
       </span>
       <span className="min-w-0 flex-1">
-        <span className={`block truncate text-[14px] font-semibold leading-snug ${state ? "text-accent" : "text-ink-hi"}`}>{track.title}</span>
-        <span className="block truncate text-[13px] text-ink-dim">{track.artist}</span>
+        <FitText text={shortTitle(track.title)} full={track.title} className={`text-[14px] font-semibold leading-snug ${state ? "text-accent" : "text-ink-hi"}`} />
+        <FitText text={track.artist} className="text-[13px] text-ink-dim" />
       </span>
       {note && <span className="shrink-0 text-[12px] text-ink-faint tabular-nums">{note}</span>}
     </div>
@@ -161,13 +163,13 @@ export function MixCard({ item }: { item: MixItem }) {
           className="absolute left-0 right-0 bottom-[13%] flex h-[21%] items-center px-2.5"
           style={{ background: `linear-gradient(90deg, ${c1}, ${c2})` }}
         >
-          <span className="truncate text-[14px] font-extrabold tracking-[-0.01em] text-black/[0.82]">{item.name}</span>
+          <FitText text={item.name} className="text-[14px] font-extrabold tracking-[-0.01em] text-black/[0.82]" />
         </div>
         <PlayOverlay onClick={() => void playSource(item.source)} title={`Play ${item.name}`} />
       </div>
       <div className="mt-2.5">
-        <div className={CARD_TITLE}>{item.name}</div>
-        <div className={CARD_SUB}>{item.caption}</div>
+        <FitText lines={2} text={item.name} className={CARD_TITLE} />
+        <FitText text={item.caption} className={CARD_SUB} />
       </div>
     </button>
   );
@@ -195,12 +197,12 @@ export function RadioCard({ item }: { item: RadioItem }) {
           iconClassName="w-8 h-8"
         />
         <div className="absolute bottom-0 left-0 right-0 px-3 pb-2.5">
-          <span className="block truncate text-[15.5px] font-extrabold tracking-[-0.01em] text-black/[0.82]">{item.name}</span>
+          <FitText text={item.name} className="text-[15.5px] font-extrabold tracking-[-0.01em] text-black/[0.82]" />
         </div>
         <PlayOverlay onClick={() => void playSource(item.source)} title={`Play the ${item.name} radio`} />
       </div>
       <div className="mt-2.5">
-        <div className={CARD_SUB}>{item.caption}</div>
+        <FitText text={item.caption} className={CARD_SUB} />
       </div>
     </button>
   );
@@ -224,9 +226,9 @@ export function EyebrowHeader({
           <div className="text-[13px] text-ink-faint leading-tight">{eyebrow.label}</div>
           <button
             onClick={onOpen}
-            className="block max-w-full cursor-pointer truncate font-display text-[24px] font-extrabold tracking-[-0.02em] text-ink-hi leading-tight hover:text-ink-hi/85 transition-colors"
+            className="fit-host block max-w-full cursor-pointer font-display text-[24px] font-extrabold tracking-[-0.02em] text-ink-hi leading-tight hover:text-ink-hi/85 transition-colors"
           >
-            {eyebrow.name}
+            <FitText text={eyebrow.name} />
           </button>
         </div>
       </div>

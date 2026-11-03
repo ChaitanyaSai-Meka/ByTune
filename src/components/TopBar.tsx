@@ -37,6 +37,7 @@ import { useRecents } from "../stores/recents";
 import { useRecentItems } from "../stores/recentItems";
 import type { SearchSuggestion } from "../types";
 import { Artwork } from "./primitives";
+import { FitText } from "./FitText";
 import brandLogo from "../assets/brand/bytune-logo.svg";
 import brandText from "../assets/brand/bytune-Text.svg";
 
@@ -476,14 +477,12 @@ export function TopBar() {
                 data-active={activeIdx === 0}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => submitSearch(query)}
-                className={`w-full flex items-center gap-3 px-2.5 h-11 rounded-lg text-left transition-colors ${
+                className={`fit-host w-full flex items-center gap-3 px-2.5 h-11 rounded-lg text-left transition-colors ${
                   activeIdx === 0 ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.06]"
                 }`}
               >
                 <Search className="w-4 h-4 text-ink-hi/55 shrink-0" />
-                <span className="text-[14px] font-medium text-ink-hi truncate">
-                  Search “{query.trim()}”
-                </span>
+                <FitText text={`Search “${query.trim()}”`} className="text-[14px] font-medium text-ink-hi" />
               </button>
               {suggests.map((s, i) =>
                 s.kind ? (
@@ -493,7 +492,7 @@ export function TopBar() {
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => openSuggestion(s)}
                     onContextMenu={(e) => openSuggestionMenu(e, s)}
-                    className={`w-full flex items-center gap-3 px-2.5 h-14 rounded-lg text-left transition-colors ${
+                    className={`fit-host w-full flex items-center gap-3 px-2.5 h-14 rounded-lg text-left transition-colors ${
                       activeIdx === i + 1 ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.06]"
                     }`}
                   >
@@ -505,8 +504,8 @@ export function TopBar() {
                       alt=""
                     />
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[14px] font-semibold truncate text-ink-hi">{s.text}</span>
-                      <span className="block text-[12px] truncate text-ink-hi/55 mt-0.5">{s.subtitle}</span>
+                      <FitText text={s.text} className="text-[14px] font-semibold text-ink-hi" />
+                      <FitText text={s.subtitle ?? ""} className="text-[12px] text-ink-hi/55 mt-0.5" />
                     </span>
                   </button>
                 ) : (
@@ -516,7 +515,7 @@ export function TopBar() {
                     /* Whole row is the click target, as in Recent searches. */
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => submitSearch(s.text)}
-                    className={`w-full flex cursor-pointer items-center gap-3 pl-2.5 pr-1.5 h-11 rounded-lg transition-colors ${
+                    className={`fit-host w-full flex cursor-pointer items-center gap-3 pl-2.5 pr-1.5 h-11 rounded-lg transition-colors ${
                       activeIdx === i + 1 ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.06]"
                     }`}
                   >
@@ -529,7 +528,7 @@ export function TopBar() {
                       className="min-w-0 flex-1 flex items-center gap-3 text-left cursor-pointer"
                     >
                       <Search className="w-4 h-4 text-ink-hi/55 shrink-0" />
-                      <span className="text-[14px] text-ink-hi truncate">{s.text}</span>
+                      <FitText text={s.text} className="text-[14px] text-ink-hi" />
                     </button>
                     <button
                       onMouseDown={(e) => e.preventDefault()}
@@ -588,7 +587,7 @@ export function TopBar() {
                       { label: "Remove from recent searches", icon: X, separatorBefore: true, action: () => removeSearch(q) },
                     ]);
                   }}
-                  className="group w-full flex cursor-pointer items-center gap-3 pl-2.5 pr-1.5 h-11 rounded-lg hover:bg-ink-hi/[0.06] transition-colors"
+                  className="fit-host group w-full flex cursor-pointer items-center gap-3 pl-2.5 pr-1.5 h-11 rounded-lg hover:bg-ink-hi/[0.06] transition-colors"
                 >
                   <button
                     onMouseDown={(e) => e.preventDefault()}
@@ -599,7 +598,7 @@ export function TopBar() {
                     className="min-w-0 flex-1 flex items-center gap-3 text-left cursor-pointer"
                   >
                     <History className="w-4 h-4 text-ink-hi/55 shrink-0" />
-                    <span className="text-[14px] text-ink-hi truncate">{q}</span>
+                    <FitText text={q} className="text-[14px] text-ink-hi" />
                   </button>
                   <button
                     onMouseDown={(e) => e.preventDefault()}

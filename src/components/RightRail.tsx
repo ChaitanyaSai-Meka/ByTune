@@ -20,7 +20,8 @@ import { Artwork, EqBars, IconBtn, Switch } from "./primitives";
 import { upgradeArtwork, wideArtwork } from "../lib/artwork";
 import { useDrag, useTrackDrop } from "../lib/dnd";
 import { useSortable, type SortableRowProps } from "../lib/useSortable";
-import { fmtTime } from "../lib/format";
+import { fmtTime, shortTitle, titleSource } from "../lib/format";
+import { FitText } from "./FitText";
 import { useArtistImage } from "../lib/artistImage";
 import { monthlyListenersLabel, useArtistAbout } from "../lib/artistAbout";
 import { useLibrary } from "../stores/library";
@@ -38,17 +39,17 @@ function QueueCurrentRow({ track }: { track: Track }) {
         e.preventDefault();
         useUI.getState().openContextMenu(e.clientX, e.clientY, trackMenuItems(track));
       }}
-      className={`flex items-center gap-3 h-14 px-2 rounded-lg bg-ink-hi/[0.14] ${
+      className={`fit-host flex items-center gap-3 h-14 px-2 rounded-lg bg-ink-hi/[0.14] ${
         drag.dragging ? "opacity-40" : ""
       }`}
     >
       <Artwork src={track.thumb} className="w-11 h-11 rounded-md shrink-0" iconClassName="w-4 h-4" alt="" />
       <div className="flex-1 min-w-0">
-        <div className="text-[14px] font-semibold truncate text-ink-hi flex items-center gap-2">
-          <span className="truncate">{track.title}</span>
+        <div className="text-[14px] font-semibold text-ink-hi flex items-center gap-2">
+          <FitText text={shortTitle(track.title)} full={track.title} />
           {playing && <EqBars />}
         </div>
-        <div className="text-[12px] truncate text-ink-hi/55 mt-0.5">{track.artist}</div>
+        <FitText text={track.artist} className="text-[12px] text-ink-hi/55 mt-0.5" />
       </div>
     </div>
   );
@@ -99,7 +100,7 @@ function TrackRow({
         e.preventDefault();
         useUI.getState().openContextMenu(e.clientX, e.clientY, menu());
       }}
-      className={`group relative flex items-center gap-3 h-12 px-2 rounded-lg cursor-pointer select-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${
+      className={`fit-host group relative flex items-center gap-3 h-12 px-2 rounded-lg cursor-pointer select-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${
         isCurrent ? "bg-ink-hi/[0.14]" : "hover:bg-ink-hi/[0.05]"
       } ${drag.dragging ? "opacity-40" : ""} ${
         // Long queues: off-screen rows skip layout and paint. 3rem is the row's own height (h-12),
@@ -109,10 +110,8 @@ function TrackRow({
     >
       <Artwork src={track.thumb} className="w-9 h-9 rounded-md shrink-0" iconClassName="w-3.5 h-3.5" alt="" />
       <div className="flex-1 min-w-0">
-        <div className={`text-[13px] truncate font-semibold ${isCurrent ? "text-ink-hi" : "text-ink-hi"}`}>
-          {track.title}
-        </div>
-        <div className="text-[11.5px] truncate text-ink-hi/55 mt-0.5">{track.artist}</div>
+        <FitText text={shortTitle(track.title)} full={track.title} className="text-[13px] font-semibold text-ink-hi" />
+        <FitText text={track.artist} className="text-[11.5px] text-ink-hi/55 mt-0.5" />
       </div>
       {isCurrent && isPlaying && <EqBars />}
       {/* Hover buttons sit before the duration on every row, so durations line up. */}
@@ -168,7 +167,8 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
     const s = usePlayer.getState();
     if (track.id === s.queue[s.index]?.id) return; // e.g. the Now playing row dropped back on its own panel
     const added = s.addToQueue([track]);
-    useUI.getState().toast(added ? `Added "${track.title}" to the queue` : `"${track.title}" is already in your queue`);
+    const name = shortTitle(track.title);
+    useUI.getState().toast(added ? `Added "${name}" to the queue` : `"${name}" is already in your queue`);
   });
 
   const current = queue[index] ?? null;
@@ -450,10 +450,11 @@ function DetailsBody() {
 
         {/* Title + artist directly under the art. */}
         <div className="px-0.5 mt-2.5 animate-meta-in" key={`rrmeta-${track.id}`}>
-          <div className="text-[24px] font-extrabold tracking-[-0.5px] text-ink-hi leading-tight" title={track.title}>
-            {track.title}
+          <div className="text-[24px] font-extrabold tracking-[-0.5px] text-ink-hi leading-tight [overflow-wrap:anywhere]" title={track.title}>
+            {shortTitle(track.title)}
           </div>
-          <div className="text-[14px] text-ink-hi/70 mt-1">{track.artist}</div>
+          <div className="text-[14px] text-ink-hi/70 mt-1 [overflow-wrap:anywhere]">{track.artist}</div>
+          {titleSource(track.title) && <div className="text-[12.5px] text-ink-hi/45 mt-1">From {titleSource(track.title)}</div>}
         </div>
       </div>
 
@@ -496,7 +497,7 @@ function AboutArtistCard({
       title={`Open ${about.name} — or drag into Your Library`}
       aria-label={`About the artist — open ${about.name}`}
       {...drag.props}
-      className={`group rounded-xl bg-ink-hi/[0.04] overflow-hidden text-left cursor-pointer hover:bg-ink-hi/[0.06] transition-colors animate-fade-in ${
+      className={`fit-host group rounded-xl bg-ink-hi/[0.04] overflow-hidden text-left cursor-pointer hover:bg-ink-hi/[0.06] transition-colors animate-fade-in ${
         drag.dragging ? "opacity-40" : ""
       }`}
     >
@@ -514,14 +515,12 @@ function AboutArtistCard({
 
       <div className="p-3.5 pt-3">
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className="text-[15px] font-bold text-ink-hi truncate">{about.name}</span>
+          <FitText text={about.name} className="text-[15px] font-bold text-ink-hi" />
           <BadgeCheck className="w-[18px] h-[18px] shrink-0 text-[#4cb3ff]" fill="#4cb3ff" stroke="#0a0a0a" />
         </div>
 
         <div className="flex items-center justify-between gap-3 mt-2.5">
-          <span className="text-[13px] text-ink-hi/70 truncate">
-            {listeners ?? about.subscriberCount ?? "Artist"}
-          </span>
+          <FitText text={listeners ?? about.subscriberCount ?? "Artist"} className="text-[13px] text-ink-hi/70" />
           <button
             onClick={(e) => {
               e.stopPropagation();

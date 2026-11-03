@@ -23,6 +23,8 @@ import {
 } from "lucide-react";
 import { TrackList } from "../components/TrackList";
 import { Artwork, EmptyState, Pills } from "../components/primitives";
+import { FitText } from "../components/FitText";
+import { shortTitle, titleStep } from "../lib/format";
 import { isUnderPath } from "../../electron/local-paths";
 import { useSettings } from "../stores/settings";
 import { useUI } from "../stores/ui";
@@ -315,16 +317,17 @@ export function LocalMusicView() {
         <div className="space-y-1.5">
           <button
             onClick={() => navigate({ name: "local", param: ALL })}
-            className="w-full flex items-center gap-3.5 p-3 rounded-xl hover:bg-ink-hi/[0.05] transition-colors text-left group"
+            className="fit-host w-full flex items-center gap-3.5 p-3 rounded-xl hover:bg-ink-hi/[0.05] transition-colors text-left group"
           >
             <span className="w-11 h-11 rounded-md bg-accent/15 grid place-items-center shrink-0">
               <ListMusic className="w-5 h-5 text-accent" />
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block text-[14.5px] font-semibold text-ink-hi truncate">All songs</span>
-              <span className="block text-[12.5px] text-ink-dim truncate">
-                Everything imported · {lib.tracks.length} song{lib.tracks.length === 1 ? "" : "s"}
-              </span>
+              <FitText text="All songs" className="text-[14.5px] font-semibold text-ink-hi" />
+              <FitText
+                text={`Everything imported · ${lib.tracks.length} song${lib.tracks.length === 1 ? "" : "s"}`}
+                className="text-[12.5px] text-ink-dim"
+              />
             </span>
           </button>
 
@@ -334,7 +337,7 @@ export function LocalMusicView() {
             return (
               <div
                 key={f.path}
-                className="w-full flex items-center gap-3.5 p-3 rounded-xl hover:bg-ink-hi/[0.05] transition-colors text-left group cursor-pointer"
+                className="fit-host w-full flex items-center gap-3.5 p-3 rounded-xl hover:bg-ink-hi/[0.05] transition-colors text-left group cursor-pointer"
                 onClick={() => navigate({ name: "local", param: f.path })}
               >
                 <span
@@ -349,7 +352,7 @@ export function LocalMusicView() {
                   )}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[14.5px] font-semibold text-ink-hi truncate">{folderTitle(f)}</span>
+                  <FitText text={folderTitle(f)} className="text-[14.5px] font-semibold text-ink-hi" />
                   <span
                     className={`block text-[12.5px] truncate mt-0.5 ${gone ? "text-amber-400/90" : "text-ink-dim"}`}
                     title={f.path}
@@ -414,7 +417,9 @@ export function LocalMusicView() {
             <ArrowLeft className="w-4 h-4" />
           </button>
           <div className="min-w-0">
-            <h1 className="font-display text-[30px] font-bold tracking-[-0.03em] text-ink-hi truncate">
+            <h1
+              className={`font-display ${["text-[30px]", "text-[26px]", "text-[22px]"][titleStep(collectionTitle)]} leading-[1.2] font-bold tracking-[-0.03em] text-ink-hi break-words`}
+            >
               {collectionTitle}
             </h1>
             {collectionPath && (
@@ -532,14 +537,12 @@ export function LocalMusicView() {
                 setAlbumFilter(a.name);
                 setTab("songs");
               }}
-              className="group w-[168px] text-left cursor-pointer"
+              className="fit-host group w-[168px] text-left cursor-pointer"
             >
               <Artwork src={a.art ?? ""} className="w-full aspect-square rounded-xl" iconClassName="w-7 h-7" alt="" />
               <div className="mt-2.5">
-                <div className="text-[15px] font-semibold text-ink-hi truncate leading-snug">{a.name}</div>
-                <div className="text-[13px] text-ink-dim truncate mt-0.5">
-                  {a.artist} · {a.count} song{a.count === 1 ? "" : "s"}
-                </div>
+                <FitText lines={2} text={shortTitle(a.name)} full={a.name} className="text-[15px] font-semibold text-ink-hi leading-snug" />
+                <FitText text={`${a.artist} · ${a.count} song${a.count === 1 ? "" : "s"}`} className="text-[13px] text-ink-dim mt-0.5" />
               </div>
             </button>
           ))}
@@ -555,7 +558,7 @@ export function LocalMusicView() {
                 setArtistFilter(a.name);
                 setTab("songs");
               }}
-              className="flex items-center gap-3 p-3 rounded-xl hover:bg-ink-hi/[0.05] transition-colors text-left"
+              className="fit-host flex items-center gap-3 p-3 rounded-xl hover:bg-ink-hi/[0.05] transition-colors text-left"
             >
               {a.art ? (
                 <Artwork src={a.art} className="w-11 h-11 rounded-full shrink-0" iconClassName="w-4 h-4" alt="" />
@@ -565,7 +568,7 @@ export function LocalMusicView() {
                 </span>
               )}
               <span className="min-w-0 flex-1">
-                <span className="block text-[14px] font-semibold text-ink-hi truncate">{a.name}</span>
+                <FitText text={a.name} className="text-[14px] font-semibold text-ink-hi" />
                 <span className="block text-[12.5px] text-ink-dim">
                   {a.count} song{a.count === 1 ? "" : "s"}
                 </span>

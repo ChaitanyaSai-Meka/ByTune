@@ -53,7 +53,8 @@ import {
   SpVolumeHigh,
   SpVolumeOff,
 } from "../components/SpotifyIcons";
-import { fmtTime } from "../lib/format";
+import { fmtTime, shortTitle } from "../lib/format";
+import { FitText } from "../components/FitText";
 import { upgradeArtwork } from "../lib/artwork";
 import { isWindows } from "../lib/platform";
 import type { PipCommand, PipSnapshot } from "./types";
@@ -595,11 +596,11 @@ export function PipApp() {
           title="Open ByTune"
           className="min-w-0 flex-1 cursor-pointer text-left"
         >
-          <div key={trackId ?? "t"} className="animate-meta-in truncate text-[15px] font-semibold leading-[1.35] text-white">
-            {track ? track.title : "Nothing playing"}
+          <div key={trackId ?? "t"} className="animate-meta-in min-w-0 text-[15px] font-semibold leading-[1.35] text-white">
+            <FitText mode="auto" text={track ? shortTitle(track.title) : "Nothing playing"} full={track?.title} />
           </div>
-          <div key={trackId ? `${trackId}-a` : "a"} className="animate-meta-in truncate text-[12px] leading-[1.4] text-white/60">
-            {track ? track.artist : ""}
+          <div key={trackId ? `${trackId}-a` : "a"} className="animate-meta-in min-w-0 text-[12px] leading-[1.4] text-white/60">
+            <FitText mode="auto" text={track ? track.artist : ""} />
           </div>
         </button>
 

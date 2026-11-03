@@ -15,7 +15,8 @@ import { browseMenuItems, trackMenuItems } from "../lib/trackActions";
 import { playAlbum } from "../lib/album";
 import { playPlaylist } from "../lib/playlist";
 import { useDrag } from "../lib/dnd";
-import { fmtTime } from "../lib/format";
+import { fmtTime, shortTitle } from "../lib/format";
+import { FitText } from "../components/FitText";
 import { isMac } from "../lib/platform";
 import { usePlayer, useTrackPlayback } from "../stores/player";
 import { useRecents } from "../stores/recents";
@@ -78,7 +79,7 @@ function SongSearchRow({ song, onPlay }: { song: Track; onPlay: () => void }) {
         e.preventDefault();
         openMenu(e.clientX, e.clientY);
       }}
-      className={`group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
+      className={`fit-host group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
         state ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.05]"
       } ${drag.dragging ? "opacity-40" : ""}`}
     >
@@ -90,12 +91,13 @@ function SongSearchRow({ song, onPlay }: { song: Track; onPlay: () => void }) {
           </span>
         )}
       </span>
+      {/* Search keeps full titles, so you can see why a song matched. */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 text-[16px] font-semibold tracking-[-0.2px] text-ink-hi">
           {song.explicit && <ExplicitBadge />}
-          <span className="truncate">{song.title}</span>
+          <FitText text={song.title} />
         </div>
-        <div className="text-[14px] truncate text-ink-dim mt-0.5">{song.artist}</div>
+        <FitText text={song.artist} className="text-[14px] text-ink-dim mt-0.5" />
       </div>
       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">
         <IconBtn
@@ -105,7 +107,7 @@ function SongSearchRow({ song, onPlay }: { song: Track; onPlay: () => void }) {
           onClick={(e) => {
             e.stopPropagation();
             usePlayer.getState().addToQueue([song], true);
-            useUI.getState().toast(`"${song.title}" plays next`);
+            useUI.getState().toast(`"${shortTitle(song.title)}" plays next`);
           }}
         />
         <IconBtn
@@ -191,7 +193,7 @@ function BrowseSearchRow({ item, onOpened }: { item: BrowseItem; onOpened?: () =
       }}
       {...(draggableItem ? drag.props : {})}
       title={isPlaylist ? "Drag into Your Library to import this playlist" : isArtist ? "Drag into Your Library to import this artist's top songs" : isAlbum ? "Drag into Your Library to import this album" : undefined}
-      className={`flex items-center gap-3.5 h-[68px] px-3 rounded-lg cursor-pointer select-none hover:bg-ink-hi/[0.05] ${
+      className={`fit-host flex items-center gap-3.5 h-[68px] px-3 rounded-lg cursor-pointer select-none hover:bg-ink-hi/[0.05] ${
         drag.dragging ? "opacity-40" : ""
       }`}
     >
@@ -202,10 +204,8 @@ function BrowseSearchRow({ item, onOpened }: { item: BrowseItem; onOpened?: () =
         alt=""
       />
       <div className="flex-1 min-w-0">
-        <div className="text-[16px] font-semibold tracking-[-0.2px] text-ink-hi truncate">{item.title}</div>
-        <div className="text-[14px] truncate text-ink-dim mt-0.5">
-          {item.subtitle || TYPE_LABEL[item.type]}
-        </div>
+        <FitText text={item.title} className="text-[16px] font-semibold tracking-[-0.2px] text-ink-hi" />
+        <FitText text={item.subtitle || TYPE_LABEL[item.type]} className="text-[14px] text-ink-dim mt-0.5" />
       </div>
     </div>
   );
@@ -244,7 +244,7 @@ function TopBrowseCard({ item, onOpened }: { item: BrowseItem; onOpened: () => v
           e.preventDefault();
           useUI.getState().openContextMenu(e.clientX, e.clientY, items);
         }}
-        className="group flex items-center gap-4 p-4 rounded-xl bg-ink-hi/[0.04] hover:bg-ink-hi/[0.07] transition-colors cursor-pointer select-none"
+        className="fit-host group flex items-center gap-4 p-4 rounded-xl bg-ink-hi/[0.04] hover:bg-ink-hi/[0.07] transition-colors cursor-pointer select-none"
       >
         <Artwork
           src={item.thumb}
@@ -253,8 +253,8 @@ function TopBrowseCard({ item, onOpened }: { item: BrowseItem; onOpened: () => v
           alt=""
         />
         <div className="min-w-0 flex-1">
-          <div className="font-display text-[20px] font-bold tracking-[-0.02em] text-ink-hi line-clamp-2">{item.title}</div>
-          <div className="text-[13px] text-ink-dim mt-0.5 truncate">{item.subtitle || TYPE_LABEL[item.type]}</div>
+          <FitText lines={2} text={item.title} className="font-display text-[20px] font-bold tracking-[-0.02em] text-ink-hi leading-tight" />
+          <FitText text={item.subtitle || TYPE_LABEL[item.type]} className="text-[13px] text-ink-dim mt-0.5" />
         </div>
         {!artist && item.type !== "podcast" && (
           <button
@@ -289,17 +289,17 @@ function TopResultCard({ song, onPlay }: { song: Track; onPlay: () => void }) {
           e.preventDefault();
           openContextMenu(e.clientX, e.clientY, trackMenuItems(song));
         }}
-        className={`group flex items-center gap-4 p-4 rounded-xl bg-ink-hi/[0.04] hover:bg-ink-hi/[0.07] transition-colors cursor-pointer select-none ${
+        className={`fit-host group flex items-center gap-4 p-4 rounded-xl bg-ink-hi/[0.04] hover:bg-ink-hi/[0.07] transition-colors cursor-pointer select-none ${
           drag.dragging ? "opacity-40" : ""
         }`}
       >
         <Artwork src={song.thumb} className="w-[72px] h-[72px] rounded-[10px] shrink-0" iconClassName="w-6 h-6" alt="" />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 font-display text-[20px] font-bold tracking-[-0.02em] text-ink-hi line-clamp-2">
+          <div className="flex items-center gap-1.5 font-display text-[20px] font-bold tracking-[-0.02em] text-ink-hi">
             {song.explicit && <ExplicitBadge />}
-            {song.title}
+            <FitText lines={2} text={song.title} className="min-w-0 leading-tight" />
           </div>
-          <div className="text-[13.5px] text-ink-dim truncate mt-1">{song.artist}</div>
+          <FitText text={song.artist} className="text-[13.5px] text-ink-dim mt-1" />
         </div>
         <button
           title="More options"
@@ -359,14 +359,14 @@ function RecentlyOpened() {
     { label: "Remove from recently opened", icon: X, separatorBefore: true, action: () => remove(item.kind, item.id) },
   ];
   return (
-    <section className="animate-slide-up">
+    <section className="tile-host animate-slide-up">
       <div className="flex items-center justify-between mb-3">
         <h2 className="section-title text-[21px]">Recently opened</h2>
         <button onClick={clear} className="text-xs text-ink-faint hover:text-ink transition-colors">
           Clear all
         </button>
       </div>
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-2.5">
+      <div className="tile-grid">
         {items.map((item) => (
           <div
             key={`${item.kind}:${item.id}`}
@@ -383,7 +383,7 @@ function RecentlyOpened() {
                 open(item);
               }
             }}
-            className="group relative flex items-center gap-3 h-16 pr-9 rounded-lg bg-ink-hi/[0.03] hover:bg-ink-hi/[0.08] transition-colors overflow-hidden cursor-pointer select-none"
+            className="fit-host group relative flex items-center gap-3 h-16 pr-9 rounded-lg bg-ink-hi/[0.03] hover:bg-ink-hi/[0.08] transition-colors overflow-hidden cursor-pointer select-none"
           >
             <Artwork
               src={item.thumb}
@@ -392,12 +392,12 @@ function RecentlyOpened() {
               alt=""
             />
             <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-medium text-ink-hi truncate">{item.title}</div>
-              <div className="text-xs text-ink-faint truncate mt-0.5">
-                {KIND_LABEL[item.kind]}
-                {/* YouTube subtitles often start with the type word already ("Artist • …"). */}
-                {item.subtitle ? ` · ${item.subtitle.replace(/^(artist|album|single|ep|playlist|song)\s*•\s*/i, "")}` : ""}
-              </div>
+              <FitText lines={2} text={item.title} className="text-[13px] font-medium text-ink-hi leading-[1.3]" />
+              <FitText
+                // YouTube subtitles often start with the type word already ("Artist • …").
+                text={`${KIND_LABEL[item.kind]}${item.subtitle ? ` · ${item.subtitle.replace(/^(artist|album|single|ep|playlist|song)\s*•\s*/i, "")}` : ""}`}
+                className="text-xs text-ink-faint mt-0.5"
+              />
             </div>
             <button
               onClick={(e) => {

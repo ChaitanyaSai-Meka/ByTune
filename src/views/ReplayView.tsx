@@ -5,17 +5,21 @@
  *
  * The page: a hero washed in your top song's cover — your minutes counting
  * up, your top song's record sliding out of your top album's sleeve (it
- * spins while your Replay plays) — then liner notes (your top artist, your
- * hour on the curve of your day), your top songs with the share of listening
- * each took, your top artists (each artist on a shared credit counts), your
- * top albums as a record wall, and your listening waveform with your biggest
- * day. Share draws a story-sized card (lib/replayCard).
+ * spins while your Replay plays), your live streak along its floor — then
+ * liner notes (your top artist, your hour on the curve of your day), your
+ * top songs with the share of listening each took, your top artists (each
+ * artist on a shared credit counts), your top albums as a record wall, and
+ * your listening waveform with your biggest day. Share draws a story-sized
+ * card (lib/replayCard).
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Check, Clock3, Copy, Download, Play, Share2, X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Check, Clock3, Copy, Download, Flame, Play, Share2, X } from "lucide-react";
 import { Artwork, Btn, EmptyState, ErrorState } from "../components/primitives";
 import { extractPalette } from "../lib/ambient";
 import { upgradeArtwork } from "../lib/artwork";
+import { shortTitle } from "../lib/format";
+import { FitText } from "../components/FitText";
 import { renderReplayCard } from "../lib/replayCard";
 import {
   activityDays,
@@ -26,6 +30,8 @@ import {
   journalReplay,
   isoDay,
   peakHour,
+  shiftDay,
+  streakNow,
   streaks,
   vividRgb,
   type ReplayData,
@@ -225,6 +231,26 @@ export function ReplayView() {
     };
   }, [period, nonce]);
 
+  // Your streak runs across every month on record, whichever period is open;
+  // read again when music starts or stops, so today shows the moment it counts.
+  const [allDays, setAllDays] = useState<ReplayData["days"] | null>(() => summaryCache.get("all")?.days ?? null);
+  const listeningNow = usePlayer((s) => s.playing && !s.queue[s.index]?.episode);
+  useEffect(() => {
+    let alive = true;
+    window.bytune
+      ?.statsSummary("all")
+      .then((res) => {
+        summaryCache.set("all", res as ReplayData);
+        if (alive) setAllDays((res as ReplayData).days);
+      })
+      .catch(() => {
+        /* no streak band without the record; the rest of Replay still shows */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [nonce, listeningNow]);
+
   // The week comes from the journal, so it's always current.
   const data = useMemo(() => (period === "week" ? journalReplay(journal, Date.now()) : stats), [period, journal, stats]);
   const artists = useCreditedArtists(data?.artists);
@@ -383,6 +409,7 @@ export function ReplayView() {
             colors={colors}
             sleeve={topAlbum ? albumThumb(topAlbum) || null : null}
             label={topSong?.thumb || null}
+            streakDays={allDays}
             onPlay={() => playReplay(0)}
             onShare={() => setSharing(true)}
           />
@@ -408,7 +435,7 @@ export function ReplayView() {
               plays: data.plays,
               activeDays: run.active,
               streak: run.longest,
-              songs: data.tracks.slice(0, 5).map((t) => ({ title: t.title, artist: t.artist, thumb: t.thumb })),
+              songs: data.tracks.slice(0, 5).map((t) => ({ title: shortTitle(t.title), artist: t.artist, thumb: t.thumb })),
               artists: artists.slice(0, 5).map((a) => ({ name: a.name, thumb: artistThumb(a), detail: fmtHours(a.ms) })),
               sleeve: topAlbum ? albumThumb(topAlbum) || null : null,
               label: topSong?.thumb || null,
@@ -458,6 +485,7 @@ function Hero({
   colors,
   sleeve,
   label,
+  streakDays,
   onPlay,
   onShare,
 }: {
@@ -465,6 +493,7 @@ function Hero({
   colors: [string, string];
   sleeve: string | null;
   label: string | null;
+  streakDays: ReplayData["days"] | null;
   onPlay: () => void;
   onShare: () => void;
 }) {
@@ -474,50 +503,149 @@ function Hero({
   const style = { "--rp-a": colors[0], "--rp-b": colors[1] } as CSSProperties;
   return (
     <section className="rp-hero animate-slide-up" style={style}>
-      <div className="rp-words">
-        <div className="rp-eyebrow">Minutes listened</div>
-        <div className="rp-minutes font-display">{minutes.toLocaleString()}</div>
-        <p className="mt-4 text-[15px] text-white/85">
-          {data.plays.toLocaleString()} {data.plays === 1 ? "play" : "plays"} · {run.active} {run.active === 1 ? "day" : "days"} of listening
-          {run.longest > 1 ? ` · ${run.longest}-day streak` : ""}
-        </p>
-        <div className="mt-7 flex gap-2.5">
-          <Btn variant="white" icon={Play} onClick={onPlay}>
-            Play your Replay
-          </Btn>
-          <Btn variant="glass" icon={Share2} onClick={onShare}>
-            Share
-          </Btn>
+      <div className="rp-hero-main">
+        <div className="rp-words">
+          <div className="rp-eyebrow">Minutes listened</div>
+          <div className="rp-minutes font-display">{minutes.toLocaleString()}</div>
+          <p className="mt-4 text-[15px] text-white/85">
+            {data.plays.toLocaleString()} {data.plays === 1 ? "play" : "plays"} · {run.active} {run.active === 1 ? "day" : "days"} of listening
+          </p>
+          <div className="mt-7 flex gap-2.5">
+            <Btn variant="white" icon={Play} onClick={onPlay}>
+              Play your Replay
+            </Btn>
+            <Btn variant="glass" icon={Share2} onClick={onShare}>
+              Share
+            </Btn>
+          </div>
+        </div>
+        <div className={`rp-art ${sleeve ? "" : "is-alone"} ${spinning ? "is-spinning" : ""}`} aria-hidden>
+          {label && (
+            <img
+              className="rp-wash"
+              src={upgradeArtwork(label)}
+              alt=""
+              draggable={false}
+              onError={(e) => {
+                e.currentTarget.style.display = "none";
+              }}
+            />
+          )}
+          {sleeve && (
+            <span className="rp-sleeve">
+              <img src={sleeve} alt="" draggable={false} />
+            </span>
+          )}
+          <span className="rp-record">
+            <span className="rp-disc">
+              {label && (
+                <span className="rp-label">
+                  <img src={upgradeArtwork(label)} alt="" draggable={false} />
+                </span>
+              )}
+            </span>
+          </span>
         </div>
       </div>
-      <div className={`rp-art ${sleeve ? "" : "is-alone"} ${spinning ? "is-spinning" : ""}`} aria-hidden>
-        {label && (
-          <img
-            className="rp-wash"
-            src={upgradeArtwork(label)}
-            alt=""
-            draggable={false}
-            onError={(e) => {
-              e.currentTarget.style.display = "none";
-            }}
-          />
-        )}
-        {sleeve && (
-          <span className="rp-sleeve">
-            <img src={sleeve} alt="" draggable={false} />
-          </span>
-        )}
-        <span className="rp-record">
-          <span className="rp-disc">
-            {label && (
-              <span className="rp-label">
-                <img src={upgradeArtwork(label)} alt="" draggable={false} />
-              </span>
-            )}
-          </span>
-        </span>
-      </div>
+      {streakDays && streakDays.length > 0 && <StreakBand days={streakDays} onPlay={onPlay} />}
     </section>
+  );
+}
+
+/** "Sep 3 – 14", "Dec 28, 2025 – Jan 4, 2026": a run of days, the year only when it isn't this one. */
+function dayRange(from: string, to: string, now: Date): string {
+  const [a, b] = [new Date(`${from}T12:00:00`), new Date(`${to}T12:00:00`)];
+  const year = a.getFullYear() === now.getFullYear() && b.getFullYear() === now.getFullYear() ? {} : { year: "numeric" as const };
+  const f = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", ...year });
+  return from === to ? f.format(a) : f.formatRange(a, b);
+}
+
+/**
+ * Your streak, live, along the hero's floor: the last seven days as a chain
+ * with your current streak lit day by day (each day tells its minutes on
+ * hover); today waits in a dashed ring until music plays — click it to play
+ * and keep the streak — then lights at once. Underneath: your longest streak.
+ */
+function StreakBand({ days, onPlay }: { days: ReplayData["days"]; onPlay: () => void }) {
+  const listeningNow = usePlayer((s) => s.playing && !s.queue[s.index]?.episode);
+  const now = new Date();
+  const todayKey = isoDay(now);
+  // Music playing now counts today straight away; the stats catch up as it plays.
+  const all = listeningNow ? [...days, { date: todayKey, ms: 1 }] : days;
+  const s = streakNow(all, now);
+  const heard = new Map<string, number>();
+  for (const d of all) heard.set(d.date, (heard.get(d.date) ?? 0) + d.ms);
+  const on = (date: string): boolean => (heard.get(date) ?? 0) > 0;
+  const runEnd = s.today ? todayKey : shiftDay(todayKey, -1);
+  const runStart = shiftDay(runEnd, 1 - s.current);
+  const week = Array.from({ length: 7 }, (_, i) => shiftDay(todayKey, i - 6));
+  let lit = 0;
+  return (
+    <div className="rp-streak">
+      <svg width="0" height="0" className="absolute" aria-hidden>
+        <defs>
+          <linearGradient id="rp-flame-fill" x1="0" y1="1" x2="0" y2="0">
+            <stop offset="0" stopColor="#ff5f1f" />
+            <stop offset="1" stopColor="#ffd35c" />
+          </linearGradient>
+        </defs>
+      </svg>
+      <div className="rp-streak-row">
+        <div className="rp-streak-title">
+          <Flame className={`rp-flame ${s.current ? "is-lit" : ""}`} aria-hidden />
+          {s.current ? (
+            <span>
+              <span key={s.current} className="rp-streak-n">
+                {s.current}
+              </span>{" "}
+              day streak
+            </span>
+          ) : (
+            <span>Start a streak today</span>
+          )}
+        </div>
+        <ol className="rp-week" aria-label="Your last seven days">
+          {week.map((date, i) => {
+            const isOn = on(date);
+            const hot = isOn && s.current > 0 && date >= runStart && date <= runEnd;
+            const waiting = i === 6 && !isOn;
+            const ms = heard.get(date) ?? 0;
+            const when = i === 6 ? "Today" : dayLabel(date, { weekday: "short", month: "short", day: "numeric" });
+            const tip = waiting
+              ? `Today · play something to ${s.current ? `make it ${s.current + 1}` : "start a streak"}`
+              : i === 6 && listeningNow
+                ? "Today · listening now"
+                : `${when} · ${!ms ? "no music" : ms < 60_000 ? "under a minute" : fmtHours(ms)}`;
+            const cls = [
+              "rp-day",
+              hot ? "is-hot" : isOn ? "is-on" : "",
+              isOn && !on(shiftDay(date, -1)) ? "run-start" : "",
+              isOn && (i === 6 || !on(shiftDay(date, 1))) ? "run-end" : "",
+              i === 0 && isOn && on(shiftDay(date, -1)) ? "runs-on" : "",
+              waiting ? "is-waiting" : "",
+            ].join(" ");
+            return (
+              <li key={date} className={cls} data-tip={tip} style={{ "--d": `${i * 45}ms`, "--h": `${520 + (hot ? lit++ : 0) * 90}ms` } as CSSProperties}>
+                <i className="rp-day-bg" aria-hidden />
+                <span aria-hidden>{new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: "narrow" })}</span>
+                {waiting ? (
+                  <button onClick={onPlay} aria-label={tip} />
+                ) : (
+                  <span className="sr-only">{tip}</span>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+      {s.best > 0 && s.bestFrom && s.bestTo && (
+        <p className={`rp-streak-best ${s.current >= 2 && s.current === s.best ? "is-record" : ""}`}>
+          {s.current >= 2 && s.current === s.best
+            ? "Your longest streak yet — keep it going"
+            : `Longest streak · ${s.best} ${s.best === 1 ? "day" : "days"}, ${dayRange(s.bestFrom, s.bestTo, now)}`}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -556,9 +684,7 @@ function LinerNotes({
           <div className="mt-auto flex items-center gap-4 pt-5">
             <Artwork src={photo} className="w-[108px] h-[108px] shrink-0 shadow-float" rounded="rounded-full" iconClassName="w-6 h-6" alt="" />
             <div className="min-w-0">
-              <div className="font-display text-[24px] font-extrabold tracking-[-0.02em] text-white leading-[1.2] line-clamp-2 text-balance break-words">
-                {artist.name}
-              </div>
+              <FitText lines={2} text={artist.name} className="font-display text-[24px] font-extrabold tracking-[-0.02em] text-white leading-[1.2]" />
               <div className="text-[13.5px] text-white/75 mt-1.5">
                 {fmtHours(artist.ms)} · {artist.plays.toLocaleString()} {artist.plays === 1 ? "play" : "plays"}
               </div>
@@ -663,15 +789,19 @@ function TopSongs({
           <li key={t.id}>
             <button
               onClick={() => onPlay(i)}
-              className="group w-full grid grid-cols-[40px_52px_minmax(0,1fr)_auto] items-center gap-3.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-ink-hi/[0.05]"
+              className="fit-host group w-full grid grid-cols-[40px_52px_minmax(0,1fr)_auto] items-center gap-3.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-ink-hi/[0.05]"
             >
               <span className={`font-display text-[22px] font-extrabold tabular-nums text-right ${i === 0 ? "text-ink-hi" : "text-ink-faint"}`}>
                 {String(i + 1).padStart(2, "0")}
               </span>
               <Artwork src={tracks[i]?.thumb ?? t.thumb} className="w-[52px] h-[52px] rounded-lg" iconClassName="w-4 h-4" alt="" />
               <span className="min-w-0">
-                <span className={`block truncate text-[14.5px] font-semibold ${playingId === t.id ? "text-accent" : "text-ink-hi"}`}>{t.title}</span>
-                <span className="block truncate text-[13px] text-ink-dim">{t.artist}</span>
+                <FitText
+                  text={shortTitle(t.title)}
+                  full={t.title}
+                  className={`text-[14.5px] font-semibold ${playingId === t.id ? "text-accent" : "text-ink-hi"}`}
+                />
+                <FitText text={t.artist} className="text-[13px] text-ink-dim" />
                 <span className="rp-meter mt-2 block" aria-hidden>
                   <i style={{ width: `${Math.max(4, (t.ms / top) * 100)}%`, animationDelay: `${150 + i * 50}ms` }} />
                 </span>
@@ -726,7 +856,7 @@ function TopArtists({
                   {i + 1}
                 </span>
               </span>
-              <span className="mt-3 w-full line-clamp-2 text-balance break-words text-[14.5px] font-semibold leading-snug text-ink-hi">{a.name}</span>
+              <FitText lines={2} text={a.name} className="mt-3 w-full text-[14.5px] font-semibold leading-snug text-ink-hi" />
               <span className="mt-0.5 text-[12.5px] text-ink-faint">{fmtHours(a.ms)}</span>
             </button>
           </li>
@@ -754,21 +884,18 @@ function TopAlbums({
         {data.albums.slice(0, 8).map((al, i) => {
           const thumb = albumThumb(al);
           return (
-            <button key={`${al.name}-${i}`} className="rw-item" onClick={() => onOpen(al)}>
+            <button key={`${al.name}-${i}`} className="rw-item fit-host" onClick={() => onOpen(al)}>
               <span className="rw-art" aria-hidden>
                 <span className="rw-disc">
                   <span className="rw-label">{thumb && <img src={thumb} alt="" draggable={false} />}</span>
                 </span>
                 {thumb ? <img className="rw-sleeve" src={thumb} alt="" draggable={false} /> : <span className="rw-sleeve bg-ink-hi/[0.06]" />}
               </span>
-              <span className="mt-3 block text-[14px] font-semibold text-ink-hi truncate">
-                <span className="text-ink-faint tabular-nums mr-1.5">{i + 1}</span>
-                {al.name}
+              <span className="mt-3 flex gap-1.5 text-[14px] font-semibold leading-snug text-ink-hi">
+                <span className="shrink-0 text-ink-faint tabular-nums">{i + 1}</span>
+                <FitText lines={2} text={shortTitle(al.name)} full={al.name} className="min-w-0" />
               </span>
-              <span className="block text-[13px] text-ink-dim truncate">
-                {al.artist ? `${al.artist} · ` : ""}
-                {fmtHours(al.ms)}
-              </span>
+              <FitText text={`${al.artist ? `${al.artist} · ` : ""}${fmtHours(al.ms)}`} className="text-[13px] text-ink-dim" />
             </button>
           );
         })}
@@ -897,7 +1024,8 @@ function ShareSheet({ make, fileName, onClose }: { make: () => Promise<Blob>; fi
     }
   };
 
-  return (
+  // On the page root, like the app's other overlays: inside the page, the window frame would offset it.
+  return createPortal(
     <div className="rp-share-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()} role="dialog" aria-modal="true" aria-label="Share your Replay">
       <div className="rp-share">
         <div className="rp-share-preview">
@@ -927,6 +1055,7 @@ function ShareSheet({ make, fileName, onClose }: { make: () => Promise<Blob>; fi
           </p>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Mic } from "lucide-react";
 import { Artwork, PlayOverlay, ShelfScroller, ShelfSkeleton } from "../components/primitives";
+import { FitText } from "../components/FitText";
 import { requireBridge } from "../lib/bridge";
 import { trackMenuItems } from "../lib/trackActions";
 import { usePlayer } from "../stores/player";
@@ -60,15 +61,15 @@ function PodcastCard({
         useUI.getState().openContextMenu(e.clientX, e.clientY, trackMenuItems(episode));
       }}
       {...tintHoverHandlers(thumb)}
-      className="group w-[184px] shrink-0 text-left cursor-pointer select-none active:scale-[0.98] rounded-xl p-2 transition-colors duration-200 hover:bg-ink-hi/[0.08]"
+      className="fit-host group w-[184px] shrink-0 text-left cursor-pointer select-none active:scale-[0.98] rounded-xl p-2 transition-colors duration-200 hover:bg-ink-hi/[0.08]"
     >
       <div className="relative overflow-hidden rounded-xl">
         <Artwork src={thumb} className="w-full aspect-square rounded-xl transition-transform duration-300 ease-out origin-top group-hover:scale-[1.05]" iconClassName="w-7 h-7" />
         {episode && <PlayOverlay onClick={open} />}
       </div>
       <div className="mt-2.5">
-        <div className="text-[15px] font-semibold text-ink-hi truncate leading-snug">{title}</div>
-        <div className="text-[13px] text-ink-dim truncate mt-0.5">{subtitle}</div>
+        <FitText lines={2} text={title} className="text-[15px] font-semibold text-ink-hi leading-snug" />
+        <FitText text={subtitle} className="text-[13px] text-ink-dim mt-0.5" />
       </div>
     </div>
   );

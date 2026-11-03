@@ -34,6 +34,8 @@ import { useUI } from "../stores/ui";
 import { useArtworkPalette, type ArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
 import { useDrag } from "../lib/dnd";
+import { shortTitle, titleSource } from "../lib/format";
+import { FitText } from "./FitText";
 import { useCanvas } from "../lib/canvas";
 import { requestLyricsAlignment, useLyricsOffset } from "../lib/lyricsOffset";
 import { LyricsTiming } from "./LyricsTiming";
@@ -492,15 +494,13 @@ export function NowPlaying() {
                 key={`fsmeta-${shown.id}`}
                 className="mt-7 flex flex-col items-center text-center max-w-full animate-meta-in"
               >
-                <div
-                  className="font-display text-[26px] xl:text-[30px] font-extrabold tracking-[-0.03em] text-white truncate max-w-full"
-                  title={shown.title}
-                >
-                  {shown.title}
+                <div className="font-display text-[26px] xl:text-[30px] font-extrabold tracking-[-0.03em] text-white min-w-0 max-w-full">
+                  <FitText mode="auto" text={shortTitle(shown.title)} full={shown.title} />
                 </div>
-                <div className="text-[14px] xl:text-[15px] text-white/55 mt-1.5 truncate max-w-full">
-                  {shown.artist}
+                <div className="text-[14px] xl:text-[15px] text-white/55 mt-1.5 min-w-0 max-w-full">
+                  <FitText mode="auto" text={shown.artist} />
                 </div>
+                {titleSource(shown.title) && <div className="text-[12.5px] text-white/40 mt-1">From {titleSource(shown.title)}</div>}
                 <button
                   onClick={() => toggleLike(shown)}
                   title={liked ? "Remove from Liked Songs" : "Add to Liked Songs"}

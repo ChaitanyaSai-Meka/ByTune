@@ -16,6 +16,8 @@ import { AlbumCard, ArtistCard, HomeShelfView, TrackCard } from "../components/C
 import { Crate } from "../components/Crate";
 import { EyebrowHeader, MixCard, RadioCard, SideCard, TrackColumns, homeTrackMenu } from "../components/recCards";
 import { Artwork, Shelf, ShelfScroller, ShelfSkeleton } from "../components/primitives";
+import { FitText } from "../components/FitText";
+import { shortTitle } from "../lib/format";
 import { useHomeFeed } from "../lib/recs/feed";
 import { useDrag } from "../lib/dnd";
 import { historyMenuItems } from "../lib/trackActions";
@@ -58,16 +60,19 @@ function QuickTile({ track }: { track: Track }) {
       }}
       {...tintHoverHandlers(track.thumb)}
       {...drag.props}
-      className={`group flex items-center gap-3 h-16 pr-3 rounded-lg bg-ink-hi/[0.03] text-left hover:bg-ink-hi/[0.08] transition-all overflow-hidden cursor-pointer select-none ${
+      className={`fit-host group flex items-center gap-3 h-16 pr-3 rounded-lg bg-ink-hi/[0.03] text-left hover:bg-ink-hi/[0.08] transition-all overflow-hidden cursor-pointer select-none ${
         drag.dragging ? "opacity-40" : ""
       }`}
     >
       <Artwork src={track.thumb} className="h-16 w-16 rounded-none shrink-0" iconClassName="w-5 h-5" alt="" />
       <div className="min-w-0 flex-1">
-        <div className="text-[13px] font-medium text-ink truncate group-hover:text-ink-hi transition-colors">
-          {track.title}
-        </div>
-        <div className="text-xs text-ink-faint truncate mt-0.5">{track.artist}</div>
+        <FitText
+          lines={2}
+          text={shortTitle(track.title)}
+          full={track.title}
+          className="text-[13px] font-medium leading-[1.3] text-ink group-hover:text-ink-hi transition-colors"
+        />
+        <FitText text={track.artist} className="text-xs text-ink-faint mt-0.5" />
       </div>
       <span className="w-9 h-9 rounded-full bg-primary text-on-primary grid place-items-center shadow-elev opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
         <Play className="w-4 h-4 fill-current ml-0.5" />
@@ -119,10 +124,12 @@ function SectionView({ section }: { section: HomeSection }) {
     if (section.layout === "tiles") {
       const tileTracks = section.items.flatMap((it) => (it.style === "track" ? [it.track] : []));
       return (
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-2.5">
-          {tileTracks.map((t) => (
-            <QuickTile key={t.id} track={t} />
-          ))}
+        <div className="tile-host">
+          <div className="tile-grid">
+            {tileTracks.map((t) => (
+              <QuickTile key={t.id} track={t} />
+            ))}
+          </div>
         </div>
       );
     }

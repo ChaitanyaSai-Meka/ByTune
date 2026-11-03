@@ -5,8 +5,9 @@ import { usePlayer } from "../stores/player";
 import { tintHoverHandlers, useUI, type MenuItem } from "../stores/ui";
 import { trackMenuItems } from "../lib/trackActions";
 import { useDrag } from "../lib/dnd";
-import { fmtTime } from "../lib/format";
+import { fmtTime, shortTitle } from "../lib/format";
 import { Artwork, EqBars, EmptyState, ExplicitBadge } from "./primitives";
+import { FitText } from "./FitText";
 import type { Track } from "../types";
 
 /** Download state glyph for a track row — spinner / green check / red fail. */
@@ -65,7 +66,7 @@ function TrackRow({ track, index, isCurrent, isPlaying, onPlay, menuFor, showAlb
         e.stopPropagation();
         openMenu(e.clientX, e.clientY);
       }}
-      className={`group flex items-center gap-3.5 h-[60px] px-3 rounded-lg cursor-pointer select-none ${
+      className={`fit-host group flex items-center gap-3.5 h-[60px] px-3 rounded-lg cursor-pointer select-none ${
         isCurrent ? "bg-ink-hi/[0.14]" : "hover:bg-ink-hi/[0.05]"
       } ${drag.dragging ? "opacity-40" : ""}`}
     >
@@ -110,27 +111,25 @@ function TrackRow({ track, index, isCurrent, isPlaying, onPlay, menuFor, showAlb
       <div className="flex-1 min-w-[120px]">
         <div className={`flex items-center gap-1.5 text-[16px] font-semibold tracking-[-0.2px] ${isCurrent ? "text-ink-hi" : "text-ink-hi"}`}>
           {track.explicit && <ExplicitBadge />}
-          <span className="truncate">{track.title}</span>
+          <FitText text={shortTitle(track.title)} full={track.title} />
         </div>
-        <div className="text-[14px] truncate text-ink-dim mt-0.5">
-          {track.artist}
-        </div>
+        <FitText text={track.artist} className="text-[14px] text-ink-dim mt-0.5" />
       </div>
 
       {showAlbum && (
-        <div className="w-52 hidden xl:block text-xs text-ink-faint truncate">
+        <div className="tl-album w-52 min-w-0 text-xs text-ink-faint">
           {track.albumId ? (
             <button
-              className="hover:text-ink hover:underline text-left transition-colors"
+              className="block max-w-full hover:text-ink hover:underline text-left transition-colors"
               onClick={(e) => {
                 e.stopPropagation();
                 navigate({ name: "album", param: track.albumId });
               }}
             >
-              {track.album ?? "Single"}
+              <FitText text={track.album ? shortTitle(track.album) : "Single"} full={track.album} />
             </button>
           ) : (
-            track.album ?? ""
+            <FitText text={track.album ? shortTitle(track.album) : ""} full={track.album} />
           )}
         </div>
       )}
@@ -202,13 +201,13 @@ export function TrackList({
   }
 
   return (
-    <div>
+    <div className="tl">
       {showHeader && (
         <div className="flex items-center gap-3 px-3 pb-2.5 mb-1 border-b border-ink-hi/[0.06] text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-ghost">
           <div className="w-7 shrink-0">#</div>
           <div className="w-[52px] shrink-0" />
           <div className="flex-1 min-w-0">Title</div>
-          {showAlbum && <div className="w-52 shrink-0 hidden xl:block">Album</div>}
+          {showAlbum && <div className="tl-album w-52 shrink-0">Album</div>}
           <div className="w-[88px] shrink-0" />
           <div className="w-11 shrink-0 text-right">Time</div>
         </div>

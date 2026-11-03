@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ShelfScroller } from "./primitives";
+import { FitText } from "./FitText";
 import { browseMenuItems } from "../lib/trackActions";
 import { useUI } from "../stores/ui";
 import type { PlaylistCard } from "../types";
@@ -56,8 +57,8 @@ export function Crate({ title, playlists, className = "" }: { title: string; pla
       <div key={shown?.id ?? "rest"} className="crate-caption">
         {shown && (
           <>
-            <span className="text-[15px] font-semibold text-ink-hi truncate">{shown.title}</span>
-            <span className="text-[13px] text-ink-dim truncate">{shown.subtitle}</span>
+            <FitText mode="auto" text={shown.title} className="text-[15px] font-semibold text-ink-hi" />
+            <FitText mode="auto" text={shown.subtitle ?? ""} className="text-[13px] text-ink-dim" />
           </>
         )}
       </div>

@@ -156,6 +156,43 @@ export function streaks(days: readonly { date: string; ms: number }[]): { active
   return { active: listened.length, longest };
 }
 
+/** The local day before / after a "YYYY-MM-DD" (noon-based, so daylight saving never skips one). */
+export function shiftDay(date: string, by: number): string {
+  const d = new Date(`${date}T12:00:00`);
+  return isoDay(new Date(d.getFullYear(), d.getMonth(), d.getDate() + by, 12));
+}
+
+/**
+ * Your streak as of `today`: the run of back-to-back listening days that
+ * ends today, or yesterday while today is still to play (a streak breaks
+ * only once a whole day passes without music), and your longest run, with
+ * its first and last day (the latest, on a tie).
+ */
+export function streakNow(
+  days: readonly { date: string; ms: number }[],
+  today = new Date(),
+): { current: number; today: boolean; best: number; bestFrom: string | null; bestTo: string | null } {
+  const listened = new Set(days.filter((d) => d.ms > 0).map((d) => d.date));
+  let best = 0;
+  let bestFrom: string | null = null;
+  let bestTo: string | null = null;
+  for (const start of [...listened].sort()) {
+    if (listened.has(shiftDay(start, -1))) continue;
+    let end = start;
+    let len = 1;
+    while (listened.has(shiftDay(end, 1))) {
+      end = shiftDay(end, 1);
+      len++;
+    }
+    if (len >= best) [best, bestFrom, bestTo] = [len, start, end];
+  }
+  const todayKey = isoDay(today);
+  const heard = listened.has(todayKey);
+  let current = 0;
+  for (let d = heard ? todayKey : shiftDay(todayKey, -1); listened.has(d); d = shiftDay(d, -1)) current++;
+  return { current, today: heard, best, bestFrom, bestTo };
+}
+
 /**
  * The last seven days (today and the six before it) from the listening
  * journal, in Replay's shape. Minutes count everything heard, skips

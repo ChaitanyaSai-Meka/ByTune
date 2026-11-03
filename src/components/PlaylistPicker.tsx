@@ -3,6 +3,8 @@ import { Check } from "lucide-react";
 import { useLibrary } from "../stores/library";
 import { useUI } from "../stores/ui";
 import { Btn } from "./primitives";
+import { FitText } from "./FitText";
+import { shortTitle } from "../lib/format";
 
 /**
  * "Add to playlists": tick any number of your playlists and add the song(s)
@@ -53,7 +55,7 @@ export function PlaylistPicker() {
     useUI.getState().toast(`Added to ${picked.size} ${picked.size === 1 ? "playlist" : "playlists"}`, "success");
     close();
   };
-  const what = tracks.length === 1 ? `"${tracks[0].title}"` : `${tracks.length} songs`;
+  const what = tracks.length === 1 ? `"${shortTitle(tracks[0].title)}"` : `${tracks.length} songs`;
 
   return (
     <div
@@ -71,7 +73,7 @@ export function PlaylistPicker() {
         className="relative w-[min(420px,calc(100vw-48px))] rounded-2xl glass-strong p-6 animate-pop-in"
       >
         <h2 className="font-display text-lg font-bold tracking-tight text-ink-hi">Add to playlists</h2>
-        <p className="text-[13px] text-ink-dim mt-1.5 truncate">Choose where {what} should go.</p>
+        <p className="text-[13px] text-ink-dim mt-1.5 [overflow-wrap:anywhere]">Choose where {what} should go.</p>
         <div className="mt-4 max-h-[50vh] overflow-y-auto -mx-2 space-y-0.5">
           {playlists.length === 0 && <p className="px-2 py-4 text-[13px] text-ink-dim">You don't have any playlists yet.</p>}
           {playlists.map((p) => {
@@ -84,7 +86,7 @@ export function PlaylistPicker() {
                 aria-checked={on}
                 disabled={already}
                 onClick={() => toggle(p.id)}
-                className="w-full flex items-center gap-3 px-2 py-2 rounded-lg text-left enabled:hover:bg-ink-hi/[0.06] transition-colors"
+                className="fit-host w-full flex items-center gap-3 px-2 py-2 rounded-lg text-left enabled:hover:bg-ink-hi/[0.06] transition-colors"
               >
                 <span
                   className={`w-5 h-5 shrink-0 grid place-items-center rounded-md border ${
@@ -94,7 +96,7 @@ export function PlaylistPicker() {
                   {on && <Check className="w-3.5 h-3.5" />}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[14px] text-ink-hi truncate">{p.name}</span>
+                  <FitText text={p.name} className="text-[14px] text-ink-hi" />
                   <span className="block text-[12px] text-ink-dim">
                     {already ? "Already added" : `${p.tracks.length} ${p.tracks.length === 1 ? "song" : "songs"}`}
                   </span>

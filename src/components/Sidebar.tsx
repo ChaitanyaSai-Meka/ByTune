@@ -26,6 +26,8 @@ import { useLibrary } from "../stores/library";
 import { playingFromRow, usePlayer } from "../stores/player";
 import { useUI } from "../stores/ui";
 import { EqBars } from "./primitives";
+import { FitText } from "./FitText";
+import { shortTitle } from "../lib/format";
 import { upgradeArtwork } from "../lib/artwork";
 import { CreateMenu } from "./CreateMenu";
 import { playlistFolderItems, playlistHeaderItems } from "../lib/trackActions";
@@ -221,7 +223,7 @@ function LibraryPill() {
   /** Import a YouTube album as a real library playlist (same name). */
   const importAlbum = async (al: AlbumPayload, folderId?: string): Promise<void> => {
     const ui = useUI.getState();
-    ui.toast(`Importing “${al.title}”…`);
+    ui.toast(`Importing “${shortTitle(al.title)}”…`);
     try {
       const page = await requireBridge().getAlbum(al.id);
       const name = (page.album?.title || al.title).trim() || "Imported album";
@@ -234,7 +236,7 @@ function LibraryPill() {
       const created = useLibrary.getState().importPlaylist(name, tracks, folderId);
       ui.toast(`“${created.name}” · ${n} ${n === 1 ? "song" : "songs"} added to your library`, "success");
     } catch {
-      ui.toast(`Couldn't import “${al.title}”`, "error");
+      ui.toast(`Couldn't import “${shortTitle(al.title)}”`, "error");
     }
   };
 
@@ -261,10 +263,10 @@ function LibraryPill() {
     const toast = useUI.getState().toast;
     if (r.id === "__liked__") {
       if (lib.isLiked(track.id)) {
-        toast(`“${track.title}” is already in your Liked Songs`);
+        toast(`“${shortTitle(track.title)}” is already in your Liked Songs`);
       } else {
         lib.toggleLike(track);
-        toast(`Added “${track.title}” to Liked Songs`, "success");
+        toast(`Added “${shortTitle(track.title)}” to Liked Songs`, "success");
       }
     } else {
       const p = lib.playlists.find((pl) => pl.id === r.id);
@@ -272,8 +274,8 @@ function LibraryPill() {
       const added = lib.addToPlaylist(r.id, track);
       toast(
         added
-          ? `Added “${track.title}” to “${p.name}”`
-          : `“${track.title}” is already in “${p.name}”`
+          ? `Added “${shortTitle(track.title)}” to “${p.name}”`
+          : `“${shortTitle(track.title)}” is already in “${p.name}”`
       );
     }
     setPulse(r.id);
@@ -325,7 +327,7 @@ function LibraryPill() {
         );
       }
     } catch {
-      toast(`Couldn't add “${al.title}” here`, "error");
+      toast(`Couldn't add “${shortTitle(al.title)}” here`, "error");
     }
     setPulse(r.id);
     window.setTimeout(() => setPulse((cur) => (cur === r.id ? null : cur)), 650);
@@ -669,7 +671,7 @@ function LibraryPill() {
                 onDragOver={(e) => onRowDragOver(e, r)}
                 onDragLeave={(e) => onRowDragLeave(e, r)}
                 onDrop={(e) => onRowDrop(e, r)}
-                className={`group w-full flex items-center gap-3 p-2 rounded-lg text-left hover:bg-ink-hi/[0.05] active:bg-ink-hi/[0.09] transition-all duration-150 ${
+                className={`fit-host group w-full flex items-center gap-3 p-2 rounded-lg text-left hover:bg-ink-hi/[0.05] active:bg-ink-hi/[0.09] transition-all duration-150 ${
                   r.kind === "playlist" && r.folderId ? "pl-6" : ""
                 } ${dropHover === r.id ? "ring-2 ring-inset ring-accent/60 bg-ink-hi/[0.08] scale-[1.02]" : ""} ${
                   pulse === r.id ? "animate-drop-pulse" : ""
@@ -713,14 +715,8 @@ function LibraryPill() {
                   </div>
                 )}
                 <div className="min-w-0 flex-1">
-                  <div
-                    className={`text-[14px] font-semibold truncate ${
-                      isCurrent ? "text-ink-hi" : "text-ink-hi"
-                    }`}
-                  >
-                    {r.title}
-                  </div>
-                  <div className="text-[12.5px] text-ink-hi/55 truncate mt-0.5">{r.subtitle}</div>
+                  <FitText text={r.title} className="text-[14px] font-semibold text-ink-hi" />
+                  <FitText text={r.subtitle} className="text-[12.5px] text-ink-hi/55 mt-0.5" />
                 </div>
                 {isCurrent && <EqBars />}
                 {((r.singleKey && r.pinned) ||
