@@ -3,7 +3,8 @@ import * as persist from "./persist";
 import { SYNCED_STORES } from "../src/lib/config";
 import { DEVICE_SETTINGS_FIELDS } from "./sync-merge";
 
-const accountStores = new Set<string>([...SYNCED_STORES, "player", "artist-meta-cache"]);
+// The listening journal and Home engagement are personal but device-only: they switch with the account, never sync.
+const accountStores = new Set<string>([...SYNCED_STORES, "player", "artist-meta-cache", "listen-journal", "home-engagement"]);
 let owner = "guest";
 let generation = randomUUID();
 const documents = new Map<string, string>();

@@ -1369,6 +1369,33 @@ html.platform-mac .ob-headline {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
 }
 
+/* ---------- Home: side cards ----------
+   A record label peeking from the cover collage's corner names the side —
+   static: the crate is Home's one moving piece. */
+.side-disc {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: repeating-radial-gradient(circle, #111113 0 1.2px, #1d1d20 1.2px 2.4px);
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.55), inset 0 0 0 1px rgb(255 255 255 / 0.08);
+}
+.side-disc-label {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1;
+  color: rgb(0 0 0 / 0.82);
+}
+
 /* ---------- Explore cards ----------
    A category's card: a deep, dark take on its own colour, lit from the top
    left, with its first playlist cover as a record sleeve and the record

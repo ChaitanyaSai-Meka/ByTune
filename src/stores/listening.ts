@@ -69,15 +69,5 @@ export const useListening = create<ListeningState>()(
   )
 );
 
-/**
- * Did the listener walk away from this track? Called by the audio engine at
- * the moment a track is replaced. Conservative on purpose: a track needs a
- * known duration, at least a few seconds heard, and an early exit — anything
- * ambiguous (buffering, unknown length, near-complete plays) stays neutral.
- */
-export function isEarlyExit(playedSec: number, durationSec: number): boolean {
-  if (playedSec < 4) return false; // micro-gaps and instant double-clicks
-  if (!(durationSec > 30)) return false;
-  const exitWindow = Math.min(durationSec * 0.4, 120);
-  return playedSec < exitWindow && playedSec < durationSec * 0.9;
-}
+/** The audio engine's skip rule, shared with the listening journal (lib/recs/taste). */
+export { isEarlyExit } from "../lib/recs/taste";

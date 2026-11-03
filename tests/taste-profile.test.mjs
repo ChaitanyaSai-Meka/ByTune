@@ -123,3 +123,33 @@ test("followed artists join the taste profile with their own page id", async () 
   assert.equal(anirudh.artistId, "UCanirudh");
   assert.ok(anirudh.score > 0, "and is scored onto the feed");
 });
+
+test("the journal moves who you're into lately; old skips fade; 'Not interested' pushes an artist back", async () => {
+  const { computeTasteProfile } = await loadProfile();
+  const base = { all: statsSummary(0), month: statsSummary(0), ...library, searches: [], now };
+  const hour = 3_600_000;
+  const done = (id, artist, hoursAgo) => ({ track: track(id, artist), at: now - hoursAgo * hour, heard: 200, out: "done" });
+
+  // Kendrick Lamar is only a like in the library; three finished listens today put him on top.
+  const before = computeTasteProfile({ ...base, skips: {} });
+  const after = computeTasteProfile({ ...base, skips: {}, journal: [done("k1", "Kendrick Lamar", 3), done("k1", "Kendrick Lamar", 2), done("k2", "Kendrick Lamar", 1)] });
+  assert.notEqual(before.artists[0].name, "Kendrick Lamar");
+  assert.equal(after.artists[0].name, "Kendrick Lamar");
+  assert.equal(after.lately[0].name, "Kendrick Lamar");
+  assert.deepEqual(Array.from(after.heavyRotation, (r) => r.track.id), ["k1"], "played twice today: heavy rotation");
+  assert.ok(after.playedTrackIds.has("k2"), "journal listens count as played");
+
+  // Four skips of Arijit four months ago barely matter now; four this morning do.
+  const day = 86_400_000;
+  const oldSkips = computeTasteProfile({ ...base, skips: { "arijit singh": { count: 4, updatedAt: now - 120 * day } } });
+  const newSkips = computeTasteProfile({ ...base, skips: { "arijit singh": { count: 4, updatedAt: now - hour } } });
+  const score = (p) => p.artists.find((a) => a.name === "Arijit Singh").score;
+  assert.ok(score(oldSkips) - score(newSkips) > 25, `${score(oldSkips)} vs ${score(newSkips)}`);
+
+  // Two "Not interested" marks on The Weeknd's songs drop him below Lana Del Rey.
+  const order = (p) => p.artists.map((a) => a.name);
+  const plain = computeTasteProfile({ ...base, skips: {} });
+  const hidden = computeTasteProfile({ ...base, skips: {}, hiddenArtists: { "the weeknd": { n: 2, at: now } } });
+  assert.ok(order(plain).indexOf("The Weeknd") < order(plain).indexOf("Lana Del Rey"));
+  assert.ok(order(hidden).indexOf("The Weeknd") > order(hidden).indexOf("Lana Del Rey"));
+});

@@ -344,6 +344,8 @@ const RENDERER_STORES = new Set([
   "lyrics-nudges",
   "recent-items",
   "explore-covers",
+  "listen-journal",
+  "home-engagement",
 ]);
 function assertRendererStore(name: unknown): asserts name is string {
   if (typeof name !== "string" || !RENDERER_STORES.has(name)) throw new Error("Store not allowed");

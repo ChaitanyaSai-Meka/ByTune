@@ -14,12 +14,13 @@
 import { Play } from "lucide-react";
 import { AlbumCard, ArtistCard, HomeShelfView, TrackCard } from "../components/Cards";
 import { Crate } from "../components/Crate";
-import { EyebrowHeader, MixCard, RadioCard } from "../components/recCards";
+import { EyebrowHeader, MixCard, RadioCard, SideCard, TrackColumns, homeTrackMenu } from "../components/recCards";
 import { Artwork, Shelf, ShelfScroller, ShelfSkeleton } from "../components/primitives";
 import { useHomeFeed } from "../lib/recs/feed";
 import { useDrag } from "../lib/dnd";
 import { historyMenuItems } from "../lib/trackActions";
 import type { HomeSection } from "../lib/recs/sections";
+import { useHomeEngagement } from "../stores/homeEngagement";
 import { usePlayer } from "../stores/player";
 import { tintHoverHandlers, useUI } from "../stores/ui";
 import type { Track } from "../types";
@@ -128,23 +129,24 @@ function SectionView({ section }: { section: HomeSection }) {
     if (section.layout === "moods") {
       return <MoodChips moods={section.moods ?? []} />;
     }
+    if (section.layout === "list") {
+      return <TrackColumns items={section.items.flatMap((it) => (it.style === "track" ? [it] : []))} />;
+    }
     return (
       <ShelfScroller>
         {section.items.map((item, i) => {
           const key = `${section.id}-${item.style}-${i}`;
           switch (item.style) {
             case "track":
-              return section.id === "recently-played" ? (
-                <TrackCard key={key} track={item.track} menu={() => historyMenuItems(item.track)} />
-              ) : (
-                <TrackCard key={key} track={item.track} />
-              );
+              return <TrackCard key={key} track={item.track} menu={() => homeTrackMenu(item.track)} />;
             case "album":
               return <AlbumCard key={key} album={item.album} />;
             case "artist":
               return <ArtistCard key={key} artist={item.artist} />;
             case "mix":
               return <MixCard key={key} item={item} />;
+            case "side":
+              return <SideCard key={key} item={item} />;
             case "radio":
               return <RadioCard key={key} item={item} />;
             default:
@@ -177,6 +179,9 @@ export function HomeView() {
   // rest it wears the playing track's colour, and hovering any card on any
   // view borrows that card's artwork colour.
 
+  // The algorithm, said plainly: who Home is leaning on right now.
+  const lately = profile?.lately.slice(0, 2).map((a) => a.name) ?? [];
+
   return (
     <div className="relative">
       <div className="relative space-y-10">
@@ -184,11 +189,21 @@ export function HomeView() {
           <h1 className="font-display text-[34px] font-extrabold tracking-[-0.03em] text-ink-hi leading-tight">
             {greeting()}
           </h1>
-          <p className="text-[14px] text-ink-dim mt-1">What do you feel like listening to?</p>
+          <p className="text-[14px] text-ink-dim mt-1">
+            {lately.length ? `Lately you've been into ${lately.join(" and ")}` : "What do you feel like listening to?"}
+          </p>
         </div>
 
         {sections.map((section) => (
-          <SectionView key={section.id} section={section} />
+          // A press inside a row counts for its kind: the rows you play from rise on your next visit.
+          <div
+            key={section.id}
+            onClickCapture={(e) => {
+              if ((e.target as HTMLElement).closest("button, [role='button'], a")) useHomeEngagement.getState().tap(section.kind);
+            }}
+          >
+            <SectionView section={section} />
+          </div>
         ))}
 
         {/* Stats still loading on a cold app launch — hold the layout. */}

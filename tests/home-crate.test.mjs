@@ -25,6 +25,7 @@ const pl = (id) => ({ kind: "playlist", playlist: { id, title: `p-${id}`, thumb:
 const profile = (maturity, plays) => ({
   maturity, artists: [], recentlyPlayed: plays.map(track), playedTrackIds: new Set(), liked: [], topTracks: [],
   searches: [], hours: new Array(24).fill(0), hourEnergy: 0.5, daySeed: 1,
+  lately: [], heavyRotation: [], dustOff: [], pairs: new Map(),
 });
 const market = [
   { title: "Quick picks", items: ["q1", "q2", "q3"].map((id) => ({ kind: "track", track: track(id) })) },

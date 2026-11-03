@@ -44,6 +44,7 @@ import { upNext, usePlayer } from "../stores/player";
 import { useSettings } from "../stores/settings";
 import { useUI } from "../stores/ui";
 import { isEarlyExit, useListening } from "../stores/listening";
+import { useJournal } from "../stores/journal";
 import type { Track } from "../types";
 import { requireBridge } from "./bridge";
 import { emitPlayEvent } from "./playEvents";
@@ -1084,6 +1085,8 @@ function flushAccum(type: "stop" | "pause"): void {
     if (track && isEarlyExit(accum.playedMs / 1000, track.duration)) {
       useListening.getState().recordSkip(track);
     }
+    // The Home algorithm's memory: finished, part-heard or skipped (stores/journal).
+    if (track) useJournal.getState().record(track, accum.playedMs / 1000);
     accum = null;
   }
 }

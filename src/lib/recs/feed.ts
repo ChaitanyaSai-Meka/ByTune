@@ -20,11 +20,12 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { peekArtistMeta, resolveArtistMeta } from "../../stores/artistMeta";
 import { requireBridge } from "../../lib/bridge";
 import { storage } from "../persist";
+import { hiddenNow, tapsNow, useHomeEngagement } from "../../stores/homeEngagement";
 import { useUI } from "../../stores/ui";
 import type { HomeShelf } from "../../types";
 import { FALLBACK_MOODS } from "../../../electron/moods";
 import { getArtistBundle, peekBundle, pruneBundles, useBundleCacheVersion, type ArtistBundle } from "./candidates";
-import { useTasteProfile, type TasteProfile } from "./profile";
+import { useTasteProfile, type ArtistSignal, type TasteProfile } from "./profile";
 import { buildHomeSections, type HomeSection } from "./sections";
 
 /* ------------------------------------------------------- youtube feed cache */
@@ -195,14 +196,20 @@ async function loadMoodTitles(): Promise<string[] | null> {
 
 /* ------------------------------------------------------------- bundle scope */
 
+/** The artists Home leans on: the two you're into lately, then your six long-term favourites. */
+function focusArtists(profile: TasteProfile): ArtistSignal[] {
+  const out: ArtistSignal[] = [];
+  for (const a of [...profile.lately.slice(0, 2), ...profile.artists.slice(0, 6)]) {
+    if (!out.some((o) => o.key === a.key)) out.push(a);
+  }
+  return out;
+}
+
 function collectBundles(profile: TasteProfile, ids: string[] | null): Map<string, ArtistBundle> {
   const map = new Map<string, ArtistBundle>();
-  const scope =
-    ids ??
-    profile.artists
-      .filter((a) => a.artistId)
-      .slice(0, 6)
-      .map((a) => a.artistId as string);
+  const seeds = focusArtists(profile).flatMap((a) => (a.artistId ? [a.artistId] : []));
+  // Wave 0 paints from cache alone: the seeds' related artists too, wherever an earlier session fetched them.
+  const scope = ids ?? [...seeds, ...seeds.flatMap((id) => peekBundle(id)?.related.slice(0, 2).map((r) => r.id) ?? [])];
   for (const id of scope) {
     const bundle = peekBundle(id);
     if (bundle) map.set(id, bundle);
@@ -218,9 +225,9 @@ async function orchestrate(profile: TasteProfile, apply: (sections: HomeSection[
   const marketLoad = loadMarketShelves();
 
   // Wave 1 — identity. Names the meta cache knows resolve for free.
-  const topNames = profile.artists.slice(0, 6);
+  const focus = focusArtists(profile);
   await Promise.all(
-    topNames.map(async (a) => {
+    focus.map(async (a) => {
       if (a.artistId) return;
       const meta = await resolveArtistMeta(a.name);
       if (meta) {
@@ -230,14 +237,14 @@ async function orchestrate(profile: TasteProfile, apply: (sections: HomeSection[
     })
   );
 
-  // Wave 2 — seed artist pages (top songs / albums / related shelf). Six
-  // seeds so favorites/mixes/stations get real photos and captions for the
-  // whole visible affinity range, not just the podium.
-  const seeds = profile.artists.filter((a) => a.artistId).slice(0, 6);
+  // Wave 2 — seed artist pages (top songs / albums / related shelf): the
+  // artists you're into lately and your six favourites, so mixes, stations
+  // and the "more like" rows get real photos, songs and neighbours.
+  const seeds = focus.filter((a) => a.artistId);
   await Promise.all(seeds.map((a) => getArtistBundle(a.artistId as string)));
 
   const seedIds = seeds.map((a) => a.artistId as string);
-  apply(buildHomeSections({ profile, bundles: collectBundles(profile, seedIds), ytShelves: null, market: cachedMarketShelves() }));
+  apply(buildHomeSections({ profile, bundles: collectBundles(profile, seedIds), ytShelves: null, market: cachedMarketShelves(), ...yourHome() }));
 
   // Wave 3 — related artists' pages feed the discovery pools; YouTube's own
   // feed covers cold start and pads a thin feed.
@@ -257,8 +264,16 @@ async function orchestrate(profile: TasteProfile, apply: (sections: HomeSection[
       bundles: collectBundles(profile, [...seedIds, ...relatedIds]),
       ytShelves: wantYt ? market : null,
       market,
+      ...yourHome(),
     })
   );
+}
+
+/** How you use Home, read at build time: the rows you play from (they rise) and your "Not interested" songs. */
+function yourHome(): { taps: Record<string, number>; hidden: Set<string> } {
+  const s = useHomeEngagement.getState();
+  const now = Date.now();
+  return { taps: tapsNow(s.taps, now), hidden: hiddenNow(s.hiddenTracks, now) };
 }
 
 /* --------------------------------------------------------------------- hook */
@@ -285,6 +300,9 @@ export function useHomeFeed(): { sections: HomeSection[]; profile: TasteProfile 
   // the now-available covers, no network needed.
   const bundlesVersion = useBundleCacheVersion();
   const marketVersion = useMarketCacheVersion();
+  // A "Not interested" takes the song off Home at once; taps reorder rows only on the next rebuild,
+  // so a row never jumps away from under the pointer that just used it.
+  const hiddenVersion = useHomeEngagement((s) => s.hiddenVersion);
   const [sections, setSections] = useState<HomeSection[]>([]);
   const runSeq = useRef(0);
   const signature = profile?.signature ?? "";
@@ -312,6 +330,7 @@ export function useHomeFeed(): { sections: HomeSection[]; profile: TasteProfile 
         ytShelves: profile.maturity === "cold" || profile.maturity === "light" ? cachedMarketShelves() : null,
         moods: moodsCache?.titles ?? undefined,
         market: cachedMarketShelves(),
+        ...yourHome(),
       })
     );
 
@@ -331,6 +350,7 @@ export function useHomeFeed(): { sections: HomeSection[]; profile: TasteProfile 
             // country list, and only after the provider had its chance.
             moods: (moodTitles ?? FALLBACK_MOODS.map((m) => m.title)) as string[],
             market: shelves,
+            ...yourHome(),
           })
         );
       });
@@ -344,7 +364,7 @@ export function useHomeFeed(): { sections: HomeSection[]; profile: TasteProfile 
     // Re-run when the underlying signals move, when the user asks for a
     // manual refresh from the TopBar, or when a disk-backed cache lands.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature, reloadNonce, bundlesVersion, marketVersion]);
+  }, [signature, reloadNonce, bundlesVersion, marketVersion, hiddenVersion]);
 
   return { sections, profile };
 }

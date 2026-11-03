@@ -7,15 +7,22 @@
  *   - liked tracks, listening history and user playlists (renderer store)
  *   - recent search terms
  *   - skip tallies (stores/listening, fed by the audio engine)
+ *   - the listening journal (stores/journal): how each recent listen ended,
+ *     the fast-moving "lately" half of taste (lib/recs/taste)
+ *   - "Not interested" marks from Home (stores/homeEngagement)
  *
- * The output is a ranked artist-affinity list plus a maturity tier, with a
- * cheap `signature` the feed uses to decide when a rebuild is warranted.
- * Nothing is random: scores are deterministic functions of the data, and
- * the only seed is the day bucket (so the feed rotates daily, not per view).
+ * The output is a ranked artist-affinity list (plus who you're into lately,
+ * what's in heavy rotation and which old favourites to dust off) and a
+ * maturity tier, with a cheap `signature` the feed uses to decide when a
+ * rebuild is warranted. Nothing is random: scores are deterministic
+ * functions of the data, and the only seed is the day bucket (so the feed
+ * rotates daily, not per view).
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReplaySummary } from "../../../electron/stats";
 import { peekArtistMeta } from "../../stores/artistMeta";
+import { useHomeEngagement } from "../../stores/homeEngagement";
+import { useJournal } from "../../stores/journal";
 import { useLibrary, type Playlist } from "../../stores/library";
 import { useListening, type SkipEntry } from "../../stores/listening";
 import { usePlayer } from "../../stores/player";
@@ -23,6 +30,17 @@ import { useRecents } from "../../stores/recents";
 import { useUI } from "../../stores/ui";
 import type { Track } from "../../types";
 import { dayBucket } from "./seeded";
+import {
+  DAY_MS,
+  backToBack,
+  dustOff as pickDustOff,
+  fade,
+  fadedCount,
+  heavyRotation as pickHeavyRotation,
+  latelyByArtist,
+  type JournalEntry,
+  type Rotation,
+} from "./taste";
 
 /* ------------------------------------------------------------- stats i/o */
 
@@ -161,8 +179,17 @@ export interface ArtistSignal {
   likedTracks: number;
   skips: number;
   searchHits: number;
+  /** net vote from recent listens (finishes +, early skips −), fading over days */
+  lately: number;
   /** final affinity score — deterministic, higher = more present on Home */
   score: number;
+}
+
+/** An old favourite to dust off: real history, not played lately. */
+export interface DustTrack {
+  track: Track;
+  plays: number;
+  lastAt: number;
 }
 
 export interface TasteProfile {
@@ -175,6 +202,14 @@ export interface TasteProfile {
   maturity: Maturity;
   /** ranked best-signal-first */
   artists: ArtistSignal[];
+  /** the artists you're into right now (positive recent vote), strongest first */
+  lately: ArtistSignal[];
+  /** songs you keep coming back to right now */
+  heavyRotation: Rotation[];
+  /** old favourites not played in weeks, most-played first */
+  dustOff: DustTrack[];
+  /** artist pairs heard back to back (taste.ts pairKey → count) — taste sides read these */
+  pairs: Map<string, number>;
   /** most-played tracks this month, best first */
   topTracks: ReplaySummary["tracks"];
   /** ids already in heavy rotation — candidates filter against these */
@@ -187,8 +222,6 @@ export interface TasteProfile {
   /** 0..1 — how much the user listens at the current hour vs their peak */
   hourEnergy: number;
 }
-
-const DAY_MS = 86_400_000;
 
 /**
  * Listening time credited for a history entry whose duration is unknown.
@@ -217,10 +250,19 @@ interface ComputeInput {
   now: number;
   /** artists the listener follows — a standing preference, like a few likes */
   followed?: { id: string; name: string; thumb?: string }[];
+  /** how recent listens ended, oldest first (stores/journal) */
+  journal?: readonly JournalEntry[];
+  /** "Not interested" marks per artist key, faded as of `at` (stores/homeEngagement) */
+  hiddenArtists?: Readonly<Record<string, { n: number; at: number }>>;
 }
 
+/** A skip tally or a "Not interested" mark fades over a month: you can come back to an artist. */
+const NEGATIVE_HALF_LIFE = 30 * DAY_MS;
+/** Heavy rotation and old favourites both look three weeks back. */
+const RECENT_MS = 21 * DAY_MS;
+
 export function computeTasteProfile(input: ComputeInput): TasteProfile {
-  const { all, month, history, liked, playlists, searches, skips, now, followed = [] } = input;
+  const { all, month, history, liked, playlists, searches, skips, now, followed = [], journal = [], hiddenArtists = {} } = input;
 
   const lower = (s: string): string => s.trim().toLowerCase();
 
@@ -358,6 +400,10 @@ export function computeTasteProfile(input: ComputeInput): TasteProfile {
     ...[...aggs.values()].map((a) => a.msAll)
   );
 
+  // ---- lately: the journal's net vote per artist (finishes +, skips −) ----
+  const lately = latelyByArtist(journal, now);
+  const maxLately = Math.max(0, ...lately.values());
+
   const artists: ArtistSignal[] = [];
   for (const [key, agg] of aggs) {
     // Untagged local files report "Unknown artist" — a real listening entry
@@ -371,13 +417,20 @@ export function computeTasteProfile(input: ComputeInput): TasteProfile {
     const ageDays = agg.lastAt ? (now - agg.lastAt) / DAY_MS : null;
     const recency = ageDays === null ? 0.4 : Math.exp((-ageDays / 5) * Math.LN2);
 
-    const trend = (agg.msMonth / maxMsMonth) * (0.35 + 0.65 * recency);
+    // The trend half: this month's listening time, and — once the journal
+    // has something to say — an equal share of the recent net vote, so a
+    // new obsession climbs within a few songs and a run of skips sinks it.
+    const vote = lately.get(key) ?? 0;
+    const monthTrend = (agg.msMonth / maxMsMonth) * (0.35 + 0.65 * recency);
+    const trend = maxLately > 0 ? 0.5 * monthTrend + 0.5 * (Math.max(0, vote) / maxLately) : monthTrend;
     const longterm = agg.msAll / maxMsAll;
     const likedBoost = Math.min(12, (likedByKey.get(key) ?? 0) * 6);
     const searchBoost = Math.min(8, (searchByKey.get(key) ?? 0) * 4);
-    const skipPenalty = Math.min(35, (skips[key]?.count ?? 0) * 9);
+    const skipsNow = skips[key] ? skips[key].count * fade(now - skips[key].updatedAt, NEGATIVE_HALF_LIFE) : 0;
+    const skipPenalty = Math.min(35, skipsNow * 9) + (vote < 0 ? Math.min(15, -vote * 5) : 0);
+    const hidePenalty = Math.min(30, fadedCount(hiddenArtists[key], now, NEGATIVE_HALF_LIFE) * 12);
 
-    const score = 60 * trend + 30 * longterm + likedBoost + searchBoost - skipPenalty;
+    const score = 60 * trend + 30 * longterm + likedBoost + searchBoost - skipPenalty - hidePenalty;
     // Engagement is the only gate: an absolute score floor would hide an
     // artist with real plays whenever any other artist has a large listening
     // total, which is exactly what a restored-but-small library looks like.
@@ -397,15 +450,52 @@ export function computeTasteProfile(input: ComputeInput): TasteProfile {
       likedTracks: likedByKey.get(key) ?? 0,
       skips: skips[key]?.count ?? 0,
       searchHits: searchByKey.get(key) ?? 0,
+      lately: vote,
       score,
     });
   }
   artists.sort((a, b) => b.score - a.score);
+  const latelyArtists = artists.filter((a) => a.lately > 0).sort((a, b) => b.lately - a.lately);
 
   const playedTrackIds = new Set<string>();
   for (const t of month.tracks) playedTrackIds.add(t.id);
   for (const t of history) playedTrackIds.add(t.id);
   for (const t of liked) playedTrackIds.add(t.id);
+  for (const e of journal) if (e.out !== "skip") playedTrackIds.add(e.track.id);
+
+  // ---- songs: heavy rotation now, old favourites to dust off --------------
+  // Stats rows carry no length or album; the full song, wherever the library
+  // has it, plays and drags like any other.
+  const known = new Map<string, Track>();
+  for (const t of [...playlists.flatMap((p) => p.tracks), ...liked, ...history]) known.set(t.id, t);
+  for (const e of journal) known.set(e.track.id, e.track);
+  const songOf = (t: { id: string; title: string; artist: string; thumb: string }): Track =>
+    known.get(t.id) ?? { id: t.id, title: t.title, artist: t.artist, thumb: t.thumb, duration: 0 };
+
+  let heavyRotation = pickHeavyRotation(journal, now);
+  // A journal still filling up (new install, restored account): this month's repeat plays stand in.
+  if (heavyRotation.length < 4) {
+    const inJournal = new Set(heavyRotation.map((r) => r.track.id));
+    heavyRotation = [
+      ...heavyRotation,
+      ...month.tracks
+        .filter((t) => t.plays >= 3 && !inJournal.has(t.id))
+        .sort((a, b) => b.plays - a.plays)
+        .map((t) => ({ track: songOf(t), listens: t.plays, score: 0 })),
+    ].slice(0, 20);
+  }
+
+  const recentPlayed = new Set<string>();
+  const recentSkipped = new Set<string>();
+  for (const e of journal) {
+    if (now - e.at > RECENT_MS) continue;
+    (e.out === "skip" ? recentSkipped : recentPlayed).add(e.track.id);
+  }
+  const dustOff: DustTrack[] = pickDustOff(all.tracks, { played: recentPlayed, skipped: recentSkipped }, now).map((t) => ({
+    track: songOf(t),
+    plays: t.plays,
+    lastAt: t.lastAt,
+  }));
 
   const hours = month.hours.length === 24 ? month.hours : new Array(24).fill(0);
   const peakHour = Math.max(1, ...hours);
@@ -426,6 +516,9 @@ export function computeTasteProfile(input: ComputeInput): TasteProfile {
     searches[0] ?? "",
     Object.keys(skips).length,
     skips[artists[0]?.key ?? ""]?.count ?? 0,
+    journal.length,
+    journal[journal.length - 1]?.at ?? 0,
+    Object.keys(hiddenArtists).length,
     dayBucket(now),
   ].join("|");
 
@@ -436,6 +529,10 @@ export function computeTasteProfile(input: ComputeInput): TasteProfile {
     totalPlays,
     maturity: maturityOf(totalPlays),
     artists,
+    lately: latelyArtists,
+    heavyRotation,
+    dustOff,
+    pairs: backToBack(journal),
     topTracks: month.tracks,
     playedTrackIds,
     recentlyPlayed: history,
@@ -456,6 +553,8 @@ export function useTasteProfile(): TasteProfile | null {
   const searches = useRecents((s) => s.searches);
   const skips = useListening((s) => s.skips);
   const listenVersion = useListening((s) => s.version);
+  const journal = useJournal((s) => s.entries);
+  const hiddenArtists = useHomeEngagement((s) => s.hiddenArtists);
 
   return useMemo(() => {
     if (!stats) return null;
@@ -470,9 +569,11 @@ export function useTasteProfile(): TasteProfile | null {
       skips,
       now: Date.now(),
       followed,
+      journal,
+      hiddenArtists,
     });
     // listenVersion participates so a freshly recorded skip re-scores the
     // profile even when the skips object was recycled by the persistence layer.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stats, history, liked, playlists, searches, skips, listenVersion, followed]);
+  }, [stats, history, liked, playlists, searches, skips, listenVersion, followed, journal, hiddenArtists]);
 }
