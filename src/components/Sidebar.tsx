@@ -6,7 +6,7 @@
  * playlists, folders, artists and Local Music. Main navigation lives in
  * the top bar (home beside the search field).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -37,6 +37,8 @@ import { requireBridge } from "../lib/bridge";
 import { downloadAll, startDownload } from "../lib/downloads";
 import { askToConnectSpotify, useSpotify } from "../lib/spotify";
 import { useEdgeFades } from "../lib/useEdgeFades";
+import { arrange, moveKey } from "../lib/libraryOrder";
+import { useSortable, type SortableRowProps } from "../lib/useSortable";
 import { SpotifyIcon } from "./SpotifyIcon";
 import type { Track } from "../types";
 
@@ -60,6 +62,13 @@ interface LibRow {
   singleKey?: PinnedSingleKey;
 }
 
+/** One place in the list: a row, or a folder with its open playlists, moved together. */
+interface Entry {
+  /** "single:<key>", "artist:<id>", "playlist:<id>" or "folder:<id>" (lib/libraryOrder) */
+  key: string;
+  rows: LibRow[];
+}
+
 function LibraryPill() {
   const liked = useLibrary((s) => s.liked);
   const playlists = useLibrary((s) => s.playlists);
@@ -76,8 +85,11 @@ function LibraryPill() {
   const playingFrom = usePlayer(playingFromRow);
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const listRef = useRef<HTMLDivElement | null>(null);
-  useEdgeFades(listRef);
+  const libraryOrder = useLibrary((s) => s.libraryOrder);
+  /** the scrolling list, and the rows inside it that a drag reorders */
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const rowsRef = useRef<HTMLDivElement | null>(null);
+  useEdgeFades(scrollRef);
   /** the row a drag is currently hovering — drives the drop highlight */
   const [dropHover, setDropHover] = useState<string | null>(null);
   /** a playlist drag is over the library panel — import-anywhere affordance */
@@ -162,7 +174,9 @@ function LibraryPill() {
       ? "Connect your playlists"
       : spotifyProblem
         ? "Needs reconnecting"
-        : `Connected · ${spotifyLists} ${spotifyLists === 1 ? "playlist" : "playlists"}`,
+        : spotifyLists // 0 until the first read: Liked Songs is always one
+          ? `Connected · ${spotifyLists} ${spotifyLists === 1 ? "playlist" : "playlists"}`
+          : "Connected",
     kind: "spotify",
     pinned: singlePinned("spotify"),
     singleKey: "spotify",
@@ -178,42 +192,50 @@ function LibraryPill() {
   };
   const singles: LibRow[] = [likedRow, spotifyRow, replayRow, downloadsRow, localRow];
 
-  const rows: LibRow[] = [];
-  for (const r of singles.filter((r) => r.pinned)) rows.push(r);
-  for (const a of followedArtists) {
-    rows.push({ id: a.id, title: a.name, subtitle: "Artist", thumb: a.thumb, kind: "artist" });
-  }
   // A playlist of nothing but songs from this computer stays here, and says so where "Playlist" would be.
   const subtitleOf = (p: Playlist): string =>
     `${staysOnDevice(p) ? "On this device" : "Playlist"} · ${p.tracks.length} ${p.tracks.length === 1 ? "track" : "tracks"}`;
+  const playlistRow = (p: Playlist): LibRow => ({
+    id: p.id,
+    title: p.name,
+    subtitle: subtitleOf(p),
+    thumb: p.artistThumb ?? p.tracks[0]?.thumb,
+    kind: "playlist",
+    artistId: p.artistId,
+    ...(p.folderId ? { folderId: p.folderId } : {}),
+  });
   const unfiled = playlists.filter((p) => !p.folderId);
-  for (const p of [...unfiled.filter((x) => x.pinned), ...unfiled.filter((x) => !x.pinned)]) {
-    rows.push({
-      id: p.id,
-      title: p.name,
-      subtitle: subtitleOf(p),
-      thumb: p.artistThumb ?? p.tracks[0]?.thumb,
-      kind: "playlist",
-      artistId: p.artistId,
-    });
-  }
-  for (const f of folders) {
-    rows.push({ id: f.id, title: f.name, subtitle: "Folder", kind: "folder", folderId: f.id });
-    if (expanded.has(f.id)) {
-      for (const p of playlists.filter((pl) => pl.folderId === f.id)) {
-        rows.push({
-          id: p.id,
-          title: p.name,
-          subtitle: subtitleOf(p),
-          thumb: p.artistThumb ?? p.tracks[0]?.thumb,
-          kind: "playlist",
-          folderId: f.id,
-          artistId: p.artistId,
-        });
-      }
-    }
-  }
-  for (const r of singles.filter((r) => !r.pinned)) rows.push(r);
+  // Pinned rows stay on top where they are; every row below moves by drag, in the order last
+  // dragged (lib/libraryOrder), a folder together with its open playlists.
+  const fixed: Entry[] = [
+    ...singles.filter((r) => r.pinned).map((r) => ({ key: `single:${r.singleKey}`, rows: [r] })),
+    ...unfiled.filter((p) => p.pinned).map((p) => ({ key: `playlist:${p.id}`, rows: [playlistRow(p)] })),
+  ];
+  const movable: Entry[] = [
+    ...followedArtists.map((a) => ({ key: `artist:${a.id}`, rows: [{ id: a.id, title: a.name, subtitle: "Artist", thumb: a.thumb, kind: "artist" as const }] })),
+    ...unfiled.filter((p) => !p.pinned).map((p) => ({ key: `playlist:${p.id}`, rows: [playlistRow(p)] })),
+    ...folders.map((f) => ({
+      key: `folder:${f.id}`,
+      rows: [
+        { id: f.id, title: f.name, subtitle: "Folder", kind: "folder" as const, folderId: f.id },
+        ...(expanded.has(f.id) ? playlists.filter((p) => p.folderId === f.id).map(playlistRow) : []),
+      ],
+    })),
+    ...singles.filter((r) => !r.pinned).map((r) => ({ key: `single:${r.singleKey}`, rows: [r] })),
+  ];
+  const byKey = new Map(movable.map((e) => [e.key, e]));
+  const entries: Entry[] = [...fixed, ...arrange(movable.map((e) => e.key), libraryOrder ?? []).map((k) => byKey.get(k)!)];
+  const sortable = useSortable({
+    signature: entries.map((e) => `${e.key}:${e.rows.length}`).join("|"),
+    listRef: rowsRef,
+    scrollRef,
+    clamp: (_from, target) => Math.max(fixed.length, target),
+    canDrag: (i) => i >= fixed.length,
+    onCommit: (from, target) => {
+      const keys = entries.slice(fixed.length).map((e) => e.key);
+      useLibrary.getState().setLibraryOrder(moveKey(keys, from - fixed.length, target - fixed.length));
+    },
+  });
 
   const toggleFolder = (id: string): void => {
     setExpanded((prev) => {
@@ -630,6 +652,94 @@ function LibraryPill() {
     ]);
   };
 
+  function renderRow(r: LibRow, drag: SortableRowProps | undefined): ReactNode {
+    const isCurrent = playingFrom !== null && (playingFrom === r.id || playingFrom === r.artistId);
+    return (
+      <div
+        key={`${r.kind}-${r.id}`}
+        {...drag}
+        role="button"
+        tabIndex={0}
+        onClick={() => onClickRow(r)}
+        onKeyDown={(e) => {
+          if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+            e.preventDefault();
+            onClickRow(r);
+          } else drag?.onKeyDown(e);
+        }}
+        onContextMenu={(e) => onRowContextMenu(e, r)}
+        onDragOver={(e) => onRowDragOver(e, r)}
+        onDragLeave={(e) => onRowDragLeave(e, r)}
+        onDrop={(e) => onRowDrop(e, r)}
+        className={`fit-host group w-full flex items-center gap-3 p-2 rounded-lg text-left cursor-pointer select-none hover:bg-ink-hi/[0.05] active:bg-ink-hi/[0.09] transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${
+          r.kind === "playlist" && r.folderId ? "pl-6" : ""
+        } ${dropHover === r.id ? "ring-2 ring-inset ring-accent/60 bg-ink-hi/[0.08] scale-[1.02]" : ""} ${
+          pulse === r.id ? "animate-drop-pulse" : ""
+        }`}
+      >
+        {r.kind === "artist" ? (
+          r.thumb ? (
+            <img
+              src={upgradeArtwork(r.thumb)}
+              alt=""
+              draggable={false}
+              className="w-12 h-12 rounded-full object-cover art-hairline shrink-0"
+            />
+          ) : (
+            <span className="w-12 h-12 rounded-full bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
+              <User className="w-5 h-5 text-ink-hi/55" />
+            </span>
+          )
+        ) : r.kind === "folder" ? (
+          <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
+            <Folder className="w-5 h-5 text-ink-hi/55" />
+          </span>
+        ) : r.kind === "spotify" ? (
+          <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
+            <SpotifyIcon className="w-6 h-6" />
+          </span>
+        ) : r.kind === "local" || r.kind === "replay" ? (
+          <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
+            {r.kind === "local" ? (
+              <FolderOpen className="w-5 h-5 text-ink-hi/55" />
+            ) : (
+              <BarChart3 className="w-5 h-5 text-ink-hi/55" />
+            )}
+          </span>
+        ) : r.thumb ? (
+          <img src={upgradeArtwork(r.thumb)} alt="" draggable={false} className="w-12 h-12 rounded-md object-cover art-hairline shrink-0" />
+        ) : (
+          <div className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
+            {r.kind === "downloads" ? (
+              <Download className="w-4 h-4 text-ink-hi/35" />
+            ) : r.kind === "playlist" ? (
+              <Music2 className="w-4 h-4 text-ink-hi/35" />
+            ) : (
+              <Heart className="w-4 h-4 text-ink-hi/35" />
+            )}
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
+          <FitText text={r.title} className="text-[14px] font-semibold text-ink-hi" />
+          <FitText text={r.subtitle} className="text-[12.5px] text-ink-hi/55 mt-0.5" />
+        </div>
+        {isCurrent && <EqBars />}
+        {((r.singleKey && r.pinned) ||
+          (r.kind === "playlist" &&
+            !r.singleKey &&
+            playlists.find((p) => p.id === r.id)?.pinned)) && (
+          <Pin className="w-3.5 h-3.5 text-accent shrink-0 fill-accent/20" aria-label="Pinned" />
+        )}
+        {r.kind === "folder" &&
+          (expanded.has(r.id) ? (
+            <ChevronDown className="w-4 h-4 text-ink-hi/45 shrink-0" />
+          ) : (
+            <ChevronRight className="w-4 h-4 text-ink-hi/45 shrink-0" />
+          ))}
+      </div>
+    );
+  }
+
   return (
     <div
       className={`relative flex-1 min-h-0 flex flex-col glass-pill rounded-2xl overflow-hidden shadow-pill transition-shadow ${
@@ -696,89 +806,28 @@ function LibraryPill() {
 
       {/* Rows — drops bubble to the panel root, which imports playlists and
           artists anywhere they land; specific rows handle their own targets. */}
-      <div ref={listRef} className="edge-fades flex-1 min-h-0 overflow-y-auto px-2 pb-2 pt-1 space-y-0.5">
-        {rows.length === 0 ? (
+      <div ref={scrollRef} className="edge-fades flex-1 min-h-0 overflow-y-auto px-2 pb-2 pt-1">
+        {entries.length === 0 ? (
           <div className="px-3 py-8 text-center text-[13px] text-ink-hi/55">
             Nothing here yet — play a track to fill your library.
           </div>
         ) : (
-          rows.map((r) => {
-            const isCurrent = playingFrom !== null && (playingFrom === r.id || playingFrom === r.artistId);
-            return (
-              <button
-                key={`${r.kind}-${r.id}`}
-                onClick={() => onClickRow(r)}
-                onContextMenu={(e) => onRowContextMenu(e, r)}
-                onDragOver={(e) => onRowDragOver(e, r)}
-                onDragLeave={(e) => onRowDragLeave(e, r)}
-                onDrop={(e) => onRowDrop(e, r)}
-                className={`fit-host group w-full flex items-center gap-3 p-2 rounded-lg text-left hover:bg-ink-hi/[0.05] active:bg-ink-hi/[0.09] transition-all duration-150 ${
-                  r.kind === "playlist" && r.folderId ? "pl-6" : ""
-                } ${dropHover === r.id ? "ring-2 ring-inset ring-accent/60 bg-ink-hi/[0.08] scale-[1.02]" : ""} ${
-                  pulse === r.id ? "animate-drop-pulse" : ""
-                }`}
+          <div ref={rowsRef} className="space-y-0.5">
+            {entries.map((entry, i) => (
+              <div
+                key={entry.key}
+                style={sortable.styleFor(i)}
+                tabIndex={-1}
+                // Alt+↑/↓ refocuses the moved entry: hand that on to its row.
+                onFocus={(e) => {
+                  if (e.target === e.currentTarget) (e.currentTarget.firstElementChild as HTMLElement | null)?.focus();
+                }}
+                className="space-y-0.5 rounded-lg outline-none"
               >
-                {r.kind === "artist" ? (
-                  r.thumb ? (
-                    <img
-                      src={upgradeArtwork(r.thumb)}
-                      alt=""
-                      className="w-12 h-12 rounded-full object-cover art-hairline shrink-0"
-                    />
-                  ) : (
-                    <span className="w-12 h-12 rounded-full bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
-                      <User className="w-5 h-5 text-ink-hi/55" />
-                    </span>
-                  )
-                ) : r.kind === "folder" ? (
-                  <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
-                    <Folder className="w-5 h-5 text-ink-hi/55" />
-                  </span>
-                ) : r.kind === "spotify" ? (
-                  <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
-                    <SpotifyIcon className="w-6 h-6" />
-                  </span>
-                ) : r.kind === "local" || r.kind === "replay" ? (
-                  <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
-                    {r.kind === "local" ? (
-                      <FolderOpen className="w-5 h-5 text-ink-hi/55" />
-                    ) : (
-                      <BarChart3 className="w-5 h-5 text-ink-hi/55" />
-                    )}
-                  </span>
-                ) : r.thumb ? (
-                  <img src={upgradeArtwork(r.thumb)} alt="" className="w-12 h-12 rounded-md object-cover art-hairline shrink-0" />
-                ) : (
-                  <div className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
-                    {r.kind === "downloads" ? (
-                      <Download className="w-4 h-4 text-ink-hi/35" />
-                    ) : r.kind === "playlist" ? (
-                      <Music2 className="w-4 h-4 text-ink-hi/35" />
-                    ) : (
-                      <Heart className="w-4 h-4 text-ink-hi/35" />
-                    )}
-                  </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <FitText text={r.title} className="text-[14px] font-semibold text-ink-hi" />
-                  <FitText text={r.subtitle} className="text-[12.5px] text-ink-hi/55 mt-0.5" />
-                </div>
-                {isCurrent && <EqBars />}
-                {((r.singleKey && r.pinned) ||
-                  (r.kind === "playlist" &&
-                    !r.singleKey &&
-                    playlists.find((p) => p.id === r.id)?.pinned)) && (
-                  <Pin className="w-3.5 h-3.5 text-accent shrink-0 fill-accent/20" aria-label="Pinned" />
-                )}
-                {r.kind === "folder" &&
-                  (expanded.has(r.id) ? (
-                    <ChevronDown className="w-4 h-4 text-ink-hi/45 shrink-0" />
-                  ) : (
-                    <ChevronRight className="w-4 h-4 text-ink-hi/45 shrink-0" />
-                  ))}
-              </button>
-            );
-          })
+                {entry.rows.map((r, j) => renderRow(r, j === 0 && i >= fixed.length ? sortable.rowProps(i) : undefined))}
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>

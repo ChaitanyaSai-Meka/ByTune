@@ -147,6 +147,14 @@ export function validateCloudPayload(name: string, payload: unknown): boolean {
       }
       if (JSON.stringify(state.pinnedSingles ?? null) !== before) sanitized = true;
     }
+    if (state.libraryOrder !== undefined) {
+      // Your Library's row order: row keys ("playlist:<id>"), short and bounded.
+      const before = JSON.stringify(state.libraryOrder);
+      state.libraryOrder = Array.isArray(state.libraryOrder)
+        ? state.libraryOrder.filter((k: unknown) => typeof k === "string" && k.length > 0 && k.length <= 200).slice(0, 5000)
+        : [];
+      if (JSON.stringify(state.libraryOrder) !== before) sanitized = true;
+    }
   } else if (name === "recent-searches") {
     if (state.searches !== undefined) {
       const before = JSON.stringify(state.searches);

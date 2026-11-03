@@ -69,6 +69,7 @@ for (const method of ["syncNow", "restoreNow"]) {
         playlists: [{ id: "ok", name: "P", createdAt: 1, tracks: [{ id: "t", title: "S", artist: "A", thumb: "", duration: 1 }] }],
         downloads: { planted: { path: "C:\\evil" } },
         pinnedSingles: { liked: true, local: "yes" },
+        libraryOrder: ["playlist:ok", 42, "", "x".repeat(201), { key: "folder:f" }, "single:local"],
       },
       version: 1,
     };
@@ -85,6 +86,7 @@ for (const method of ["syncNow", "restoreNow"]) {
     assert.equal(Object.keys(write[1].state.downloads ?? {}).length, 0, "device-owned registry must never arrive");
     assert.equal(plain(write[1].state.pinnedSingles).liked, true);
     assert.equal(plain(write[1].state.pinnedSingles).local, undefined);
+    assert.deepEqual(plain(write[1].state.libraryOrder), ["playlist:ok", "single:local"], "only short row keys survive");
     assert.equal({}.polluted, undefined);
   });
 

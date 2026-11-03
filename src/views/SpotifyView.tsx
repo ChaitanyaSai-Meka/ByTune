@@ -85,8 +85,8 @@ export function SpotifyView() {
             <div className="min-w-0">
               <h1 className="font-display text-[28px] font-bold tracking-tight text-ink-hi">Spotify</h1>
               <p className="text-sm text-ink-dim mt-0.5 truncate">
-                {status.name ? `Connected as ${status.name}` : "Connected"} · {playlists.length}{" "}
-                {playlists.length === 1 ? "playlist" : "playlists"}
+                {status.name ? `Connected as ${status.name}` : "Connected"}
+                {playlists.length ? ` · ${playlists.length} ${playlists.length === 1 ? "playlist" : "playlists"}` : ""}
               </p>
             </div>
           </div>

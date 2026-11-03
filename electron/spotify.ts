@@ -5,14 +5,17 @@
  *    playlist query with the anonymous token that page hands out (for songs past its 100);
  *  - Connect Spotify: the listener signs in to Spotify in a locked-down window, and their own
  *    session reads their playlists and Liked Songs.
- * The session cookie is sealed (secrets.ts) in a main-only store. It never reaches the renderer,
- * sync or backups; disconnecting, ByTune sign-out, an account switch and a data reset wipe it,
- * the sign-in window's storage, the tokens and the remembered matches (forgetSpotify).
+ * The session cookie is sealed (secrets.ts) in a main-only store, one per ByTune owner (an account,
+ * or the guest): signing out and back in finds it again, another account never sees it, and a guest
+ * who creates an account brings it along. It never reaches the renderer, sync or backups.
+ * Disconnecting wipes this owner's, a data reset everyone's, with the sign-in window's storage, the
+ * tokens and the remembered matches.
  *
  * Matching a song to YouTube Music lives here too: matchSong searches, track-match.ts judges,
  * and the answer is remembered in a main-only store keyed by Spotify id (or the song's text).
  */
 import { BrowserWindow, session } from "electron";
+import { currentOwner } from "./data-transition";
 import * as music from "./music-service";
 import * as persist from "./persist";
 import { openSecret, sealSecret } from "./secrets";
@@ -45,10 +48,17 @@ interface Player {
   secret: { version: number; secret: string } | null;
   hashes: Partial<Record<Operation, string>>;
 }
-interface Saved {
+/** One ByTune owner's Spotify. */
+interface Account {
   /** sealed sp_dc */
   cookie?: string;
   name?: string;
+  /** the playlists as last read, shown at once (and while Spotify can't be reached) */
+  playlists?: SpotifyPlaylistInfo[];
+}
+interface Saved {
+  /** by ByTune owner: an account's id, or "guest" */
+  owners?: Record<string, Account>;
   player?: Player;
 }
 
@@ -58,14 +68,26 @@ const EXPIRED = "Your Spotify session has ended. Connect Spotify again.";
 
 const saved = (): Saved => (persist.readData(STORE) as Saved | null) ?? {};
 const save = (patch: Partial<Saved>): Promise<void> => persist.writeData(STORE, { ...saved(), ...patch });
+const account = (owner = currentOwner()): Account => saved().owners?.[owner] ?? {};
+/** Updates one owner's record (null removes it). */
+function saveAccount(patch: Partial<Account> | null, owner = currentOwner()): Promise<void> {
+  const owners = { ...saved().owners };
+  if (patch) owners[owner] = { ...owners[owner], ...patch };
+  else delete owners[owner];
+  return save({ owners });
+}
 
 function get(url: string, init: RequestInit = {}): Promise<Response> {
   return fetch(url, { ...init, headers: { "User-Agent": UA, ...(init.headers as Record<string, string>) }, signal: AbortSignal.timeout(TIMEOUT_MS) });
 }
 
-/** In-session state: the access token, and why the connection last failed. */
-let access: { token: string; expiresAt: number } | null = null;
-let problem: string | null = null;
+/** In-session state of the current owner's connection: its token, and why it last failed. */
+const live: { owner: string; access: { token: string; expiresAt: number } | null; problem: string | null } = { owner: "", access: null, problem: null };
+function here(): typeof live {
+  // Another ByTune owner now: nothing minted for the last one carries over.
+  if (live.owner !== currentOwner()) Object.assign(live, { owner: currentOwner(), access: null, problem: null });
+  return live;
+}
 
 /* ---------------- the web player's script ---------------- */
 
@@ -177,55 +199,69 @@ async function mint(cookie: string, fresh = false): Promise<{ token: string; exp
 }
 
 async function userToken(): Promise<string> {
-  if (access && Date.now() < access.expiresAt - 30_000) return access.token;
-  const cookie = openSecret(saved().cookie);
+  const s = here();
+  if (s.access && Date.now() < s.access.expiresAt - 30_000) return s.access.token;
+  const cookie = openSecret(account().cookie);
   if (!cookie) throw new SpotifySessionError("Connect Spotify first.");
-  access = await mint(cookie);
-  return access.token;
+  s.access = await mint(cookie);
+  return s.access.token;
 }
 
 /** Runs a signed-in read; an expired token is renewed once, and a failure is remembered for Settings. */
 async function signedIn<T>(read: (token: string) => Promise<T>): Promise<T> {
+  const s = here();
   try {
     let result: T;
     try {
       result = await read(await userToken());
     } catch (err) {
-      if (!(err instanceof SpotifySessionError) || !access) throw err;
-      access = null;
+      if (!(err instanceof SpotifySessionError) || !s.access) throw err;
+      s.access = null;
       result = await read(await userToken());
     }
-    problem = null;
+    s.problem = null;
     return result;
   } catch (err) {
-    problem = err instanceof SpotifySessionError ? err.message : CHANGED;
+    s.problem = err instanceof SpotifySessionError ? err.message : CHANGED;
     console.warn("[bytune] spotify:", err instanceof Error ? err.message : err);
-    throw new Error(problem);
+    throw new Error(s.problem);
   }
 }
 
 export function spotifyStatus(): SpotifyStatus {
-  const s = saved();
-  if (!s.cookie) return { connected: false };
-  return { connected: true, ...(s.name ? { name: s.name } : {}), ...(problem ? { problem } : {}) };
+  const a = account();
+  if (!a.cookie) return { connected: false };
+  const { problem } = here();
+  return { connected: true, ...(a.name ? { name: a.name } : {}), ...(problem ? { problem } : {}) };
 }
 
-export function spotifyPlaylists(): Promise<SpotifyPlaylistInfo[]> {
-  return signedIn(async (token) => {
-    const out: SpotifyPlaylistInfo[] = [{ id: LIKED_ID, name: "Liked Songs" }];
-    for (let offset = 0; offset < MAX_PLAYLISTS; ) {
-      const page = web.parseLibraryPage(
-        await query("libraryV3", {
-          filters: ["Playlists"], order: null, textFilter: "", features: ["LIKED_SONGS", "YOUR_EPISODES_V2", "PRERELEASES", "EVENTS"], limit: 50, offset,
-          flatten: true, expandedFolders: [], folderUri: null, includeFoldersWhenFlattening: false,
-        }, token)
-      );
-      out.push(...page.playlists);
-      offset += page.read;
-      if (!page.read || offset >= page.total) break;
-    }
-    return out;
-  });
+/** Liked Songs and the library's playlists. Kept per owner, so they show at once and while Spotify can't be reached. */
+export async function spotifyPlaylists(): Promise<SpotifyPlaylistInfo[]> {
+  const owner = currentOwner();
+  try {
+    const lists = await signedIn(async (token) => {
+      const out: SpotifyPlaylistInfo[] = [{ id: LIKED_ID, name: "Liked Songs" }];
+      for (let offset = 0; offset < MAX_PLAYLISTS; ) {
+        const page = web.parseLibraryPage(
+          await query("libraryV3", {
+            filters: ["Playlists"], order: null, textFilter: "", features: ["LIKED_SONGS", "YOUR_EPISODES_V2", "PRERELEASES", "EVENTS"], limit: 50, offset,
+            flatten: true, expandedFolders: [], folderUri: null, includeFoldersWhenFlattening: false,
+          }, token)
+        );
+        out.push(...page.playlists);
+        offset += page.read;
+        if (!page.read || offset >= page.total) break;
+      }
+      return out;
+    });
+    // Unless that owner disconnected (or signed out) meanwhile.
+    if (account(owner).cookie) await saveAccount({ playlists: lists }, owner);
+    return lists;
+  } catch (err) {
+    const kept = account(owner).playlists;
+    if (kept) return kept;
+    throw err;
+  }
 }
 
 export function spotifyPlaylist(id: string): Promise<ImportedPlaylist> {
@@ -236,17 +272,20 @@ export function spotifyPlaylist(id: string): Promise<ImportedPlaylist> {
   );
 }
 
-/** Keeps a captured session: checks it's a signed-in one, and learns the account's name. */
+/** Keeps a captured session for this ByTune owner: checks it's a signed-in one, and learns the account's name. */
 async function adopt(cookie: string): Promise<void> {
-  access = await mint(cookie);
-  await save({ cookie: sealSecret(cookie) });
+  const s = here();
+  s.access = await mint(cookie);
+  // A new Spotify account here starts afresh: no name or playlists of the one before.
+  await saveAccount(null);
+  await saveAccount({ cookie: sealSecret(cookie) });
   try {
-    const name = web.parseProfileName(await query("profileAttributes", {}, access.token));
-    await save({ name });
+    const name = web.parseProfileName(await query("profileAttributes", {}, s.access.token));
+    await saveAccount({ name });
   } catch (err) {
     console.warn("[bytune] spotify: profile:", err instanceof Error ? err.message : err);
   }
-  problem = null;
+  s.problem = null;
 }
 
 const SIGN_IN_HOST = /^(?:[a-z0-9-]+\.)*spotify\.com$|^accounts\.google\.com$|^appleid\.apple\.com$|^(?:www|m)\.facebook\.com$/i;
@@ -314,7 +353,7 @@ async function openSignIn(parent: BrowserWindow | null): Promise<SpotifyStatus> 
         try {
           await adopt(cookie);
         } catch (err) {
-          problem = err instanceof SpotifySessionError ? err.message : CHANGED;
+          here().problem = err instanceof SpotifySessionError ? err.message : CHANGED;
           console.warn("[bytune] spotify: connect:", err instanceof Error ? err.message : err);
         }
       }
@@ -335,19 +374,36 @@ async function openSignIn(parent: BrowserWindow | null): Promise<SpotifyStatus> 
   });
 }
 
-/** Disconnect: the sealed session, the sign-in window's storage, tokens and remembered matches all go. */
-export async function forgetSpotify(): Promise<void> {
+/** Disconnect: this owner's session and playlists, the sign-in window's storage, tokens and remembered matches go. */
+export async function disconnectSpotify(): Promise<void> {
+  await saveAccount(null).catch(() => undefined);
+  await forgetSessions(false);
+}
+
+/** A data reset: every owner's Spotify goes. */
+export function forgetSpotify(): Promise<void> {
+  return forgetSessions(true);
+}
+
+async function forgetSessions(everyone: boolean): Promise<void> {
   if (signInWindow && !signInWindow.isDestroyed()) signInWindow.close();
-  access = null;
-  problem = null;
+  Object.assign(live, { owner: "", access: null, problem: null });
   matches = {};
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = null;
   await Promise.all([
-    persist.writeData(STORE, {}).catch(() => undefined),
+    everyone ? persist.writeData(STORE, {}).catch(() => undefined) : null,
     persist.writeData(MATCHES, {}).catch(() => undefined),
     session.fromPartition(PARTITION).clearStorageData().catch(() => undefined),
   ]);
+}
+
+/** A guest who creates an account brings their Spotify along, as they bring their library. */
+export async function moveGuestSpotify(owner: string): Promise<void> {
+  const guest = account("guest");
+  if (!guest.cookie || account(owner).cookie) return;
+  await saveAccount(guest, owner);
+  await saveAccount(null, "guest");
 }
 
 /* ---------------- matching to YouTube Music ---------------- */

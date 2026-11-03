@@ -20,7 +20,7 @@ const row = (store_name, payload) => ({ store_name, payload, updated_at: "2026-0
 // Only Electron, the SDK transport, and unrelated main-process services are replaced.
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bytune-phase7-"));
-  const handlers = new Map(), modules = new Map(), events = [], calls = [], uploads = [];
+  const handlers = new Map(), modules = new Map(), events = [], calls = [], uploads = [], spotifyCalls = [];
   let rows = [], user = "A", expired = false, authChanged, failUpload, failWrite, statsNotify = () => {};
   const sdk = {
     auth: {
@@ -86,7 +86,10 @@ function fixture() {
           if (name === "./pip") return { registerPipIpc() {}, isTrustedSender: () => true };
           if (name === "./stream-proxy") return { setDownloadedFileLookup() {} };
           if (name === "./downloaded-files") return { noteLibrary() {}, noteDownloaded() {}, downloadedFilePath: () => null };
-          if (name === "./spotify") return { forgetSpotify: async () => {} };
+          if (name === "./spotify") return {
+            forgetSpotify: async () => { spotifyCalls.push("forget"); },
+            moveGuestSpotify: async (owner) => { spotifyCalls.push(`moveGuest:${owner}`); },
+          };
           return {};
         }
         if (name.startsWith(".")) return load(path.resolve(path.dirname(file), `${name}.ts`));
@@ -104,7 +107,7 @@ function fixture() {
   sync.bindRestoredNotifier((stores, seq) => events.push({ stores: [...stores], seq }));
   load(path.join(root, "electron", "main.ts")).registerIpc();
   return {
-    dir, disk, auth, sync, transition, events, calls, uploads,
+    dir, disk, auth, sync, transition, events, calls, uploads, spotifyCalls,
     invoke: (name, ...args) => handlers.get(name)({}, ...args),
     statsNotify: () => statsNotify?.(),
     /** The real Replay module sync.ts uses (main.ts gets a stand-in). */
@@ -276,6 +279,23 @@ test("logout and another login never migrate the previous account into the new o
     h.user("A");
     await h.invoke("auth:signIn", "alice", "password");
     assert.equal(h.disk.readData("library").state.liked[0].id, "A-only");
+  } finally { await h.close(); }
+});
+
+test("Spotify stays with the account through sign-out and back in; a guest who signs up brings theirs; only a reset forgets", async () => {
+  const h = fixture();
+  try {
+    await h.invoke("auth:continueGuest");
+    await h.invoke("auth:signUp", "alice", "valid-password-123");
+    assert.deepEqual(h.spotifyCalls, ["moveGuest:A"], "the new account takes the guest's Spotify");
+    await h.invoke("auth:signOut");
+    await h.invoke("auth:signIn", "alice", "password");
+    h.user("B");
+    await h.invoke("auth:signOut");
+    await h.invoke("auth:signIn", "bob", "password");
+    assert.deepEqual(h.spotifyCalls, ["moveGuest:A"], "signing out, back in, or into an existing account forgets and moves nothing");
+    await h.invoke("app:resetData");
+    assert.deepEqual(h.spotifyCalls, ["moveGuest:A", "forget"]);
   } finally { await h.close(); }
 });
 

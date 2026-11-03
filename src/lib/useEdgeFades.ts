@@ -19,7 +19,7 @@ export function useEdgeFades(ref: RefObject<HTMLElement | null>, size = 32): voi
     const resized = new ResizeObserver(update);
     resized.observe(el);
     const changed = new MutationObserver(update);
-    changed.observe(el, { childList: true });
+    changed.observe(el, { childList: true, subtree: true });
     return () => {
       el.removeEventListener("scroll", update);
       resized.disconnect();

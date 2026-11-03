@@ -491,7 +491,7 @@ function ConnectedServicesGroup() {
   return (
     <SettingsGroup
       header="Connected services"
-      footer="Connect Spotify signs in to Spotify in a window of its own; ByTune keeps that session on this computer, encrypted, and never uploads it. It reads your playlists the way Spotify's web player does, which isn't an official Spotify feature: it may stop working, and it isn't allowed by Spotify's terms. Songs are found on YouTube Music to play."
+      footer="Connect Spotify signs in to Spotify in a window of its own; ByTune keeps that session on this computer for this ByTune account, encrypted, and never uploads it. It reads your playlists the way Spotify's web player does, which isn't an official Spotify feature: it may stop working, and it isn't allowed by Spotify's terms. Songs are found on YouTube Music to play."
     >
       <SettingsRow
         icon={SpotifyIcon}

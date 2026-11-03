@@ -41,7 +41,7 @@ test("actual main reset IPC clears files and stops the real stats timer", async 
         if (name === "./pip") return { registerPipIpc() {}, isTrustedSender: () => true, restrictNavigation() {}, rendererUrl: () => "http://127.0.0.1:5173/" };
         if (name === "./stream-proxy") return { setDownloadedFileLookup() {} };
         if (name === "./downloaded-files") return { noteLibrary() {}, noteDownloaded() {}, downloadedFilePath: () => null };
-        if (name === "./spotify") return { forgetSpotify: async () => {} };
+        if (name === "./spotify") return { forgetSpotify: async () => {}, moveGuestSpotify: async () => {} };
         if (name.startsWith("./")) return {};
         return require(name);
       },

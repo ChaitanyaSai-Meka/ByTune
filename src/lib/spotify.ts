@@ -55,6 +55,29 @@ export const useSpotify = create<SpotifyState>((set, get) => ({
   },
 }));
 
+/**
+ * Keeps the connected account's playlists current: read at start, again whenever ByTune comes back
+ * to the front (a playlist just made in Spotify shows up), and every few minutes.
+ */
+export function watchSpotify(): () => void {
+  let last = 0;
+  const reread = (): void => {
+    if (Date.now() - last < 15_000) return;
+    last = Date.now();
+    void useSpotify.getState().refresh().catch(() => undefined);
+  };
+  const whenConnected = (): void => {
+    if (useSpotify.getState().status.connected) reread();
+  };
+  reread();
+  window.addEventListener("focus", whenConnected);
+  const timer = window.setInterval(whenConnected, 5 * 60_000);
+  return () => {
+    window.removeEventListener("focus", whenConnected);
+    window.clearInterval(timer);
+  };
+}
+
 /** Opens Spotify's sign-in and says how it went; true once connected. */
 export async function connectSpotify(): Promise<boolean> {
   const ui = useUI.getState();

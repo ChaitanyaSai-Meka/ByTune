@@ -16,7 +16,7 @@ import { initAutoplay } from "./lib/autoplay";
 import { setAmbientFromArtwork } from "./lib/ambient";
 import { listenForDownloadProgress } from "./lib/downloads";
 import { listenForOpenedFiles } from "./lib/openedFiles";
-import { useSpotify } from "./lib/spotify";
+import { watchSpotify } from "./lib/spotify";
 import { FileDropOverlay } from "./components/FileDropOverlay";
 import { LYRICS_NUDGE_STEP, useLyricsNudge } from "./lib/lyricsOffset";
 import { watchMenuCommands } from "./lib/menuCommands";
@@ -340,9 +340,7 @@ export default function App() {
 
   // Audio files opened with ByTune or dropped on the window play at once.
   useEffect(() => listenForOpenedFiles(), []);
-  useEffect(() => {
-    void useSpotify.getState().refresh().catch(() => undefined);
-  }, []);
+  useEffect(() => watchSpotify(), []);
 
   // Native miniplayer bridge: push playback snapshots to the PiP window and
   // execute transport commands coming back from it.

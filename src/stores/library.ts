@@ -77,12 +77,15 @@ interface LibraryState {
   downloads: Record<string, DownloadItem>;
   /** pin state for the shortcut rows (read it with isPinned) */
   pinnedSingles: PinnedSingles;
+  /** the order of Your Library's movable rows, as last dragged (lib/libraryOrder; [] = default) */
+  libraryOrder?: string[];
   /** deletion/version metadata replicated with the library (see deletion-sync.ts) */
   deletionSync?: DeletionSync;
 
   isLiked(id: string): boolean;
   toggleLike(track: Track): void;
   togglePinSingle(key: PinnedSingleKey): void;
+  setLibraryOrder(keys: string[]): void;
   createPlaylist(name: string): Playlist;
   /** A new playlist holding imported songs — never overwrites an existing one. */
   importPlaylist(name: string, tracks: Track[], folderId?: string): Playlist;
@@ -137,6 +140,11 @@ export const useLibrary = create<LibraryState>()(
       history: [],
       downloads: {},
       pinnedSingles: { ...PIN_DEFAULTS, v2: true },
+      libraryOrder: [],
+
+      setLibraryOrder(keys) {
+        set({ libraryOrder: keys });
+      },
 
       togglePinSingle(key) {
         const pins = get().pinnedSingles;

@@ -486,7 +486,7 @@ function registerIpc(): void {
   ipc.handle("spotify:status", () => spotify.spotifyStatus());
   ipc.handle("spotify:connect", () => spotify.connectSpotify(mainWindow));
   ipc.handle("spotify:disconnect", async () => {
-    await spotify.forgetSpotify();
+    await spotify.disconnectSpotify();
     return spotify.spotifyStatus();
   });
   ipc.handle("spotify:playlists", () => spotify.spotifyPlaylists());
@@ -741,9 +741,9 @@ function registerIpc(): void {
     if (previous !== info.userId) {
       sync.resetSyncState(info.userId ?? undefined);
       stats.reloadStore();
-      // A connected Spotify belongs to whoever connected it, not to the next account.
-      await spotify.forgetSpotify();
     }
+    // Spotify is kept per owner (electron/spotify.ts); a guest's goes along with their library.
+    if (migrateGuest && info.userId) await spotify.moveGuestSpotify(info.userId);
     await sync.syncNowExclusive().catch((err) => {
       console.error("[bytune] login sync failed (account data not pulled):", err instanceof Error ? err.message : err);
       sync.noteSyncFailure(err);
@@ -789,7 +789,6 @@ function registerIpc(): void {
     await transition.changeOwner("guest", false);
     sync.resetSyncState();
     stats.reloadStore();
-    await spotify.forgetSpotify();
     mainWindow?.webContents.reload();
     return info;
   }));
