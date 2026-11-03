@@ -1986,170 +1986,12 @@ html.reduce-motion .crate-sleeve {
   min-width: 0;
   max-width: 520px;
 }
-/* Your streak along the hero's floor: a band of its own, edge to edge, dark
-   enough that the record's glow never washes it out. */
-.rp-streak {
-  position: relative;
-  margin: 0 -40px;
-  padding: 16px 40px 18px;
-  background: rgb(9 9 11 / 0.6);
-  border-top: 1px solid rgb(255 255 255 / 0.07);
-}
-.rp-streak-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px 24px;
-}
-.rp-streak-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 15px;
-  font-weight: 600;
-  color: #fff;
-}
-.rp-streak-n {
-  display: inline-block;
-  font-size: 22px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-  animation: rp-streak-n 0.45s cubic-bezier(0.34, 1.45, 0.64, 1) both;
-}
-@keyframes rp-streak-n {
-  from {
-    opacity: 0;
-    transform: scale(0.6);
-  }
-}
-.rp-flame {
-  flex: none;
-  width: 24px;
-  height: 24px;
-  fill: rgb(255 255 255 / 0.22);
-  stroke: none;
-  transform-origin: 50% 90%;
-}
-/* Lit: it catches as the chain finishes lighting, then flickers gently. */
-.rp-flame.is-lit {
-  fill: url(#rp-flame-fill);
-  filter: drop-shadow(0 0 8px rgb(255 120 40 / 0.5));
-  animation:
-    rp-flame-in 0.55s cubic-bezier(0.34, 1.45, 0.64, 1) 0.45s both,
-    rp-flicker 2.4s ease-in-out 1s infinite;
-}
-@keyframes rp-flame-in {
-  from {
-    opacity: 0;
-    transform: scale(0.3);
-  }
-}
-@keyframes rp-flicker {
-  0%,
-  100% {
-    transform: scale(1) rotate(-2deg);
-  }
-  50% {
-    transform: scale(1.05, 1.1) rotate(2deg);
-  }
-}
-/* The week as a chain: listening days join into one capsule, your current
-   streak's in amber, lighting day by day once the cells are in. */
-.rp-week {
-  display: flex;
-}
-.rp-day {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 28px;
-  font-size: 11.5px;
-  font-weight: 700;
-  color: rgb(255 255 255 / 0.38);
-  animation: rp-day-in 0.35s ease-out var(--d) both;
-}
-.rp-day > span {
+/* Replay's hover tips (timeline nodes, calendar days): above the item; near
+   an edge (data-side) they open inwards, clear of the card's rim. */
+.rp-tip {
   position: relative;
 }
-.rp-day-bg {
-  position: absolute;
-  inset: 0;
-}
-.rp-day.is-on {
-  color: rgb(255 255 255 / 0.85);
-}
-.rp-day.is-on .rp-day-bg {
-  background: rgb(255 255 255 / 0.16);
-}
-.rp-day.is-hot {
-  color: #2e1700;
-  animation:
-    rp-day-in 0.35s ease-out var(--d) both,
-    rp-ignite-text 0.4s ease-out var(--h) both;
-}
-.rp-day.is-hot .rp-day-bg {
-  background: #ffb547;
-  animation: rp-ignite 0.4s ease-out var(--h) both;
-}
-.rp-day.run-start .rp-day-bg {
-  border-top-left-radius: 999px;
-  border-bottom-left-radius: 999px;
-}
-.rp-day.run-end .rp-day-bg {
-  border-top-right-radius: 999px;
-  border-bottom-right-radius: 999px;
-}
-/* A streak that began before this week runs in from the edge. */
-.rp-day.runs-on .rp-day-bg {
-  -webkit-mask-image: linear-gradient(90deg, transparent, #000 80%);
-  mask-image: linear-gradient(90deg, transparent, #000 80%);
-}
-/* Today, still to play: a dashed ring that warms on hover — it plays your Replay. */
-.rp-day.is-waiting {
-  color: rgb(255 255 255 / 0.75);
-}
-.rp-day.is-waiting .rp-day-bg {
-  inset: 1px 2px;
-  border: 1.5px dashed rgb(255 255 255 / 0.45);
-  border-radius: 999px;
-  transition: border-color 0.2s ease;
-}
-.rp-day.is-waiting:hover {
-  color: #ffc46b;
-}
-.rp-day.is-waiting:hover .rp-day-bg {
-  border-color: #ffb547;
-}
-.rp-day > button {
-  position: absolute;
-  inset: 0;
-  border-radius: 999px;
-}
-.rp-day > button:focus-visible {
-  outline: 2px solid rgb(var(--accent));
-  outline-offset: 1px;
-}
-@keyframes rp-day-in {
-  from {
-    opacity: 0;
-    transform: translateY(5px);
-  }
-}
-@keyframes rp-ignite {
-  from {
-    background: rgb(255 255 255 / 0.16);
-  }
-}
-@keyframes rp-ignite-text {
-  from {
-    color: rgb(255 255 255 / 0.85);
-  }
-}
-/* Each day's minutes on hover; near either end the tip opens inwards, clear of the hero's edge. */
-.rp-day::after {
+.rp-tip::after {
   content: attr(data-tip);
   position: absolute;
   bottom: calc(100% + 8px);
@@ -2161,6 +2003,7 @@ html.reduce-motion .crate-sleeve {
   color: #111;
   font-size: 12px;
   font-weight: 600;
+  line-height: 1.3;
   white-space: nowrap;
   box-shadow: 0 10px 24px rgb(0 0 0 / 0.45);
   opacity: 0;
@@ -2170,33 +2013,21 @@ html.reduce-motion .crate-sleeve {
     transform 0.15s ease;
   pointer-events: none;
 }
-.rp-day:nth-child(-n + 3)::after {
+.rp-tip[data-side="start"]::after {
   left: 0;
   transform: translate(0, 4px);
 }
-.rp-day:nth-last-child(-n + 3)::after {
+.rp-tip[data-side="end"]::after {
   left: auto;
   right: 0;
   transform: translate(0, 4px);
 }
-.rp-day:hover::after,
-.rp-day:focus-within::after {
+.rp-tip:is(:hover, :focus-within)::after {
   opacity: 1;
   transform: translate(-50%, 0);
 }
-.rp-day:nth-child(-n + 3):hover::after,
-.rp-day:nth-child(-n + 3):focus-within::after,
-.rp-day:nth-last-child(-n + 3):hover::after,
-.rp-day:nth-last-child(-n + 3):focus-within::after {
+.rp-tip[data-side]:is(:hover, :focus-within)::after {
   transform: none;
-}
-.rp-streak-best {
-  margin-top: 10px;
-  font-size: 12.5px;
-  color: rgb(255 255 255 / 0.55);
-}
-.rp-streak-best.is-record {
-  color: #ffc46b;
 }
 .rp-eyebrow {
   font-size: 13.5px;
@@ -2529,25 +2360,222 @@ html.reduce-motion .crate-sleeve {
     transform: scaleX(0);
   }
 }
-/* The waveform: each day a slim mirrored bar, rising from the centre line. */
-.rp-wave {
+/* Your listening: the counts in one card, each over a pile of its own art. */
+.rp-counts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-radius: 20px;
+  background: #141416;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.05);
+}
+.rp-count {
+  min-width: 0;
+  padding: 22px 24px 20px;
+}
+.rp-count + .rp-count {
+  border-left: 1px solid rgb(255 255 255 / 0.06);
+}
+@container (max-width: 520px) {
+  .rp-counts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .rp-count + .rp-count {
+    border-left: 0;
+    border-top: 1px solid rgb(255 255 255 / 0.06);
+  }
+}
+.rp-pile {
+  display: flex;
+  padding-left: 9px;
+}
+.rp-pile-item {
+  width: 34px;
+  height: 34px;
+  margin-left: -9px;
+  box-shadow: 0 0 0 2.5px #141416;
+  animation: rp-pile-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.rp-pile-item:nth-child(2) {
+  animation-delay: 60ms;
+}
+.rp-pile-item:nth-child(3) {
+  animation-delay: 120ms;
+}
+.rp-pile-item:nth-child(4) {
+  animation-delay: 180ms;
+}
+.rp-pile-item:nth-child(5) {
+  animation-delay: 240ms;
+}
+@keyframes rp-pile-in {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+}
+/* Its days as a calendar: brighter where you listened more, your biggest day
+   ringed in amber, today outlined, the days still to come left open. */
+.rp-days {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px 36px;
+  margin-top: 16px;
+  padding: 24px;
+  border-radius: 20px;
+  background: #141416;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.05);
+}
+.rp-days.is-wide {
+  flex-direction: column;
+  align-items: stretch;
+}
+.rp-days-text {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.rp-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 11px;
+  color: rgb(var(--ink-faint) / 0.55);
+}
+.rp-legend > i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+.rp-legend > i:first-of-type {
+  margin-left: 4px;
+}
+.rp-legend > i:last-of-type {
+  margin-right: 4px;
+}
+.rp-lv0 {
+  background: rgb(255 255 255 / 0.05);
+  color: rgb(255 255 255 / 0.45);
+}
+.rp-lv1 {
+  background: rgb(255 255 255 / 0.16);
+  color: rgb(255 255 255 / 0.85);
+}
+.rp-lv2 {
+  background: rgb(255 255 255 / 0.32);
+  color: #fff;
+}
+.rp-lv3 {
+  background: rgb(255 255 255 / 0.6);
+  color: #101012;
+}
+.rp-lv4 {
+  background: rgb(255 255 255 / 0.92);
+  color: #101012;
+}
+.rp-lvx {
+  background: transparent;
+  color: rgb(255 255 255 / 0.22);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+}
+.rp-cal-wrap {
+  display: grid;
+  gap: 10px;
+}
+.rp-cal-nav {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 4px;
-  height: 120px;
+  gap: 8px;
 }
-.rp-wave > span {
-  flex: 1 1 0;
-  max-width: 12px;
-  min-height: 4px;
+.rp-cal-nav > span {
+  font-size: 14px;
+  font-weight: 700;
+  color: rgb(var(--ink-hi));
+}
+.rp-cal-nav > button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
   border-radius: 999px;
-  transform-origin: center;
-  animation: rp-rise 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  color: rgb(var(--ink-hi) / 0.75);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
-@keyframes rp-rise {
+.rp-cal-nav > button:hover:not(:disabled) {
+  background: rgb(var(--ink-hi) / 0.08);
+  color: rgb(var(--ink-hi));
+}
+.rp-cal-nav > button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.rp-cal-nav > button:focus-visible {
+  outline: 2px solid rgb(var(--accent));
+}
+.rp-cal {
+  display: grid;
+  grid-template-columns: repeat(7, 34px);
+  gap: 6px;
+}
+.rp-cal-head {
+  padding-bottom: 2px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: rgb(var(--ink-faint) / 0.55);
+}
+.rp-cal-day {
+  display: grid;
+  place-items: center;
+  height: 34px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  animation: rp-cal-in 0.4s ease-out both;
+  animation-delay: calc(var(--i) * 12ms);
+}
+.rp-cal-day.is-best {
+  box-shadow: 0 0 0 2px #141416, 0 0 0 3.5px #ffb547;
+}
+.rp-yr {
+  width: 100%;
+}
+.rp-yr-months,
+.rp-yr-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--weeks), minmax(0, 1fr));
+  column-gap: 3px;
+}
+.rp-yr-months {
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: rgb(var(--ink-faint) / 0.55);
+}
+.rp-yr-months > span {
+  white-space: nowrap;
+}
+.rp-yr-grid {
+  grid-template-rows: repeat(7, auto);
+  row-gap: 3px;
+}
+.rp-yr-day {
+  aspect-ratio: 1;
+  border-radius: 3px;
+  animation: rp-cal-in 0.4s ease-out both;
+  animation-delay: calc(var(--i) * 14ms);
+}
+.rp-yr-day.is-best {
+  box-shadow: 0 0 0 1.5px #ffb547;
+}
+@keyframes rp-cal-in {
   from {
-    transform: scaleY(0);
+    opacity: 0;
+    transform: scale(0.6);
   }
 }
 /* Share sheet. */
@@ -2699,5 +2727,209 @@ html.reduce-motion .fit-text {
   .tile-grid,
   .mood-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* ---------- Listening streak (components/Streak) ----------
+   The top bar's streak: a cartoon flame and the days in a row. The flame is
+   flat chunky shapes; it pops alight (squash and stretch, a burst ring),
+   then dances — its outlines swap between three hand-drawn frames like
+   animation cels, it rocks on its base, star sparkles pop off the top.
+   No streak: a flat grey flame and "0 days". */
+.streak-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 13px 0 9px;
+  border-radius: 999px;
+  color: rgb(var(--ink-hi));
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: background-color 0.15s ease;
+}
+.streak-chip:hover {
+  background: rgb(var(--ink-hi) / 0.08);
+}
+.streak-chip:focus-visible {
+  outline: 2px solid rgb(var(--accent));
+  outline-offset: 2px;
+}
+.streak-chip.is-cold {
+  color: rgb(var(--ink-hi) / 0.6);
+}
+.streak-n {
+  font-variant-numeric: tabular-nums;
+  animation: streak-n-in 0.45s cubic-bezier(0.34, 1.45, 0.64, 1) both;
+}
+@keyframes streak-n-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.8);
+  }
+}
+.fire {
+  --fire-at: 0.4s;
+  position: relative;
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 27px;
+}
+.fire svg {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.fire-body,
+.fire svg path,
+.fire svg circle {
+  transform-box: fill-box;
+}
+.fire-body,
+.fire-core {
+  transform-origin: 50% 100%;
+}
+.fire-outer {
+  fill: #ff7a1a;
+}
+.fire-inner {
+  fill: #ffc53d;
+}
+.fire-core {
+  fill: #fff1a8;
+}
+.fire-shine {
+  fill: #fff;
+  opacity: 0.75;
+}
+.fire-spark {
+  fill: #ffd34d;
+  opacity: 0;
+  transform-origin: center;
+}
+.fire:not(.is-lit) .fire-outer {
+  fill: rgb(255 255 255 / 0.24);
+}
+.fire:not(.is-lit) :is(.fire-inner, .fire-core, .fire-shine, .fire-spark),
+.fire:not(.is-lit) .fire-burst {
+  display: none;
+}
+.fire-burst {
+  position: absolute;
+  left: 50%;
+  top: 62%;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border-radius: 50%;
+  border: 2px solid #ffa431;
+  opacity: 0;
+}
+.fire.is-lit .fire-burst {
+  animation: fire-burst 0.6s ease-out calc(var(--fire-at) + 0.15s) both;
+}
+.fire.is-lit .fire-body {
+  animation:
+    fire-pop 0.7s cubic-bezier(0.3, 1.4, 0.5, 1) var(--fire-at) both,
+    fire-rock 1.3s ease-in-out calc(var(--fire-at) + 0.7s) infinite;
+}
+.fire.is-lit .fire-outer {
+  animation: fire-boil-outer 0.48s steps(1, end) calc(var(--fire-at) + 0.7s) infinite;
+}
+.fire.is-lit .fire-inner {
+  animation: fire-boil-inner 0.48s steps(1, end) calc(var(--fire-at) + 0.86s) infinite;
+}
+.fire.is-lit .fire-core {
+  animation: fire-bob 0.32s ease-in-out calc(var(--fire-at) + 0.7s) infinite alternate;
+}
+.fire.is-lit .fire-spark {
+  animation: fire-spark 2.4s ease-out infinite;
+}
+@keyframes fire-pop {
+  0% {
+    transform: scale(0);
+  }
+  40% {
+    transform: scale(1.25, 0.78);
+  }
+  62% {
+    transform: scale(0.86, 1.2);
+  }
+  80% {
+    transform: scale(1.06, 0.95);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes fire-rock {
+  0%,
+  100% {
+    transform: rotate(0deg) scale(1, 1);
+  }
+  25% {
+    transform: rotate(-6deg) scale(1.03, 0.97);
+  }
+  75% {
+    transform: rotate(6deg) scale(0.97, 1.04);
+  }
+}
+/* Three hand-drawn frames per shape; steps() cuts between them like cels. */
+@keyframes fire-boil-outer {
+  0%,
+  100% {
+    d: path("M20 46C10 46 5 39 5 31C5 24 9 20 12 15C12.5 19 14 21 15.5 21.5C15 14 17 8 21 2C22 9 26 12 27.5 17C28.5 15 30 13.5 31 11C34 18 35 25 35 31C35 39 30 46 20 46Z");
+  }
+  33% {
+    d: path("M20 46C10 46 5 39 5 31C5 24 8.5 20.5 10.5 16C11.5 19.5 13.5 21.5 15 22C14 14.5 16 8.5 19 3C21 9.5 25.5 12.5 27 17.5C28.5 15.5 30.5 14 32.5 12C35 19 35 25.5 35 31C35 39 30 46 20 46Z");
+  }
+  66% {
+    d: path("M20 46C10 46 5 39 5 31C5 24.5 9.5 19.5 13 14C13.5 18.5 15 20.5 16.5 21C16.5 13.5 19 7.5 23 3C23.5 9.5 26.5 12.5 28 16.5C29 14.5 29.5 12.5 30 10C33.5 17.5 35 24.5 35 31C35 39 30 46 20 46Z");
+  }
+}
+@keyframes fire-boil-inner {
+  0%,
+  100% {
+    d: path("M20 44C13.5 44 10.5 39.5 10.5 34C10.5 28 15 25 18 19C18.5 23 20 25 21.5 25.5C22.5 22 24 20.5 25 19C28 24 29.5 28.5 29.5 33.5C29.5 39.5 26 44 20 44Z");
+  }
+  33% {
+    d: path("M20 44C13.5 44 10.5 39.5 10.5 34C10.5 28.5 14 25.5 16.5 20C17.5 23.5 19 25.5 20.5 26C22 22.5 24 21 26 19.5C28.5 24.5 29.5 29 29.5 33.5C29.5 39.5 26 44 20 44Z");
+  }
+  66% {
+    d: path("M20 44C13.5 44 10.5 39.5 10.5 34C10.5 27.5 15.5 24.5 19 18C19.5 22.5 21 24.5 22.5 25C23.5 21.5 24.5 20 24.5 18.5C27.5 23.5 29.5 28 29.5 33.5C29.5 39.5 26 44 20 44Z");
+  }
+}
+@keyframes fire-bob {
+  to {
+    transform: scale(0.92, 1.12);
+  }
+}
+@keyframes fire-spark {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.2) rotate(0deg);
+  }
+  12% {
+    opacity: 1;
+    transform: translate(calc(var(--sx) * 0.3), -3px) scale(1.1) rotate(30deg);
+  }
+  45%,
+  100% {
+    opacity: 0;
+    transform: translate(var(--sx), -12px) scale(0.3) rotate(110deg);
+  }
+}
+@keyframes fire-burst {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.3);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.7);
   }
 }

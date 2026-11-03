@@ -38,6 +38,7 @@ import { useRecentItems } from "../stores/recentItems";
 import type { SearchSuggestion } from "../types";
 import { Artwork } from "./primitives";
 import { FitText } from "./FitText";
+import { StreakChip } from "./Streak";
 import brandLogo from "../assets/brand/bytune-logo.svg";
 import brandText from "../assets/brand/bytune-Text.svg";
 
@@ -661,6 +662,9 @@ export function TopBar() {
           caption buttons flush to the window edge. macOS uses the native
           traffic lights, so nothing is drawn here. */}
       <div className="ml-auto h-full flex items-center gap-1 shrink-0">
+        <div className="app-no-drag flex items-center">
+          <StreakChip />
+        </div>
         <div className="app-no-drag ml-1 mr-2 flex items-center">
           <Avatar onClick={() => navigate({ name: "settings" })} active={view.name === "settings"} />
         </div>

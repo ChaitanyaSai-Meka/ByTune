@@ -162,6 +162,46 @@ export function shiftDay(date: string, by: number): string {
   return isoDay(new Date(d.getFullYear(), d.getMonth(), d.getDate() + by, 12));
 }
 
+/** The days a period's calendar shows: this week's seven, a whole month, a whole year, or the last 365 for all time. */
+export function periodRange(period: ReplayPeriod, now = new Date()): { from: string; to: string } {
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const day = (yy: number, mm: number, dd: number): string => isoDay(new Date(yy, mm, dd, 12));
+  const today = isoDay(now);
+  if (period === "week") return { from: shiftDay(today, -6), to: today };
+  if (period === "month") return { from: day(y, m, 1), to: day(y, m + 1, 0) };
+  if (period === "lastMonth") return { from: day(y, m - 1, 1), to: day(y, m, 0) };
+  if (period === "year") return { from: day(y, 0, 1), to: day(y, 11, 31) };
+  return { from: shiftDay(today, -364), to: today };
+}
+
+/** One calendar slot: a day of the period (`ahead` while it's still to come), or null outside it. */
+export type CalendarDay = { date: string; ms: number; ahead: boolean } | null;
+
+/**
+ * The days from `from` to `to` as whole calendar weeks starting on
+ * `firstDay` (0 Sunday … 6 Saturday). Days outside the range are null, so
+ * every week has seven slots and the weekdays line up.
+ */
+export function calendarWeeks(
+  from: string,
+  to: string,
+  days: readonly { date: string; ms: number }[],
+  today: string,
+  firstDay: number,
+): CalendarDay[][] {
+  const byDate = new Map(days.map((d) => [d.date, d.ms]));
+  let start = from;
+  while (new Date(`${start}T12:00:00`).getDay() !== firstDay) start = shiftDay(start, -1);
+  const weeks: CalendarDay[][] = [];
+  for (let d = start; d <= to; ) {
+    const week: CalendarDay[] = [];
+    for (let i = 0; i < 7; i++, d = shiftDay(d, 1)) week.push(d < from || d > to ? null : { date: d, ms: byDate.get(d) ?? 0, ahead: d > today });
+    weeks.push(week);
+  }
+  return weeks;
+}
+
 /**
  * Your streak as of `today`: the run of back-to-back listening days that
  * ends today, or yesterday while today is still to play (a streak breaks

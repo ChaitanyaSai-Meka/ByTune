@@ -5,7 +5,7 @@
  *
  * The page: a hero washed in your top song's cover — your minutes counting
  * up, your top song's record sliding out of your top album's sleeve (it
- * spins while your Replay plays), your live streak along its floor — then
+ * spins while your Replay plays) — then
  * liner notes (your top artist, your hour on the curve of your day), your
  * top songs with the share of listening each took, your top artists (each
  * artist on a shared credit counts), your top albums as a record wall, and
@@ -14,7 +14,7 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { Check, Clock3, Copy, Download, Flame, Play, Share2, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Clock3, Copy, Download, Play, Share2, X } from "lucide-react";
 import { Artwork, Btn, EmptyState, ErrorState } from "../components/primitives";
 import { extractPalette } from "../lib/ambient";
 import { upgradeArtwork } from "../lib/artwork";
@@ -24,16 +24,17 @@ import { renderReplayCard } from "../lib/replayCard";
 import {
   activityDays,
   biggestDay,
+  calendarWeeks,
   creditArtists,
   creditNames,
   fmtHours,
   journalReplay,
   isoDay,
   peakHour,
-  shiftDay,
-  streakNow,
+  periodRange,
   streaks,
   vividRgb,
+  type CalendarDay,
   type ReplayData,
   type ReplayPeriod,
 } from "../lib/replayFormat";
@@ -70,22 +71,6 @@ function periodLabel(period: ReplayPeriod, data: ReplayData | null, now = new Da
   if (period === "year") return String(now.getFullYear());
   const first = data?.months[0];
   return first ? `Since ${new Date(`${first}-01T12:00:00`).toLocaleDateString(undefined, { month: "short", year: "numeric" })}` : "All time";
-}
-
-/**
- * The period's days for its charts. This month shows every day of it — the
- * ones still to come marked `ahead` — so a chart keeps its shape on the 3rd
- * as on the 30th.
- */
-function chartDays(period: ReplayPeriod, days: ReplayData["days"]): { date: string; ms: number; ahead?: boolean }[] {
-  const out: { date: string; ms: number; ahead?: boolean }[] = activityDays(period, days);
-  if (period === "month" && out.length) {
-    const last = new Date(`${out[out.length - 1].date}T12:00:00`);
-    for (let d = new Date(last.getFullYear(), last.getMonth(), last.getDate() + 1, 12); d.getMonth() === last.getMonth(); d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 12)) {
-      out.push({ date: isoDay(d), ms: 0, ahead: true });
-    }
-  }
-  return out;
 }
 
 function reducedMotion(): boolean {
@@ -231,7 +216,7 @@ export function ReplayView() {
     };
   }, [period, nonce]);
 
-  // Your streak runs across every month on record, whichever period is open;
+  // Every month on record, for the calendar to step through whichever period is open;
   // read again when music starts or stops, so today shows the moment it counts.
   const [allDays, setAllDays] = useState<ReplayData["days"] | null>(() => summaryCache.get("all")?.days ?? null);
   const listeningNow = usePlayer((s) => s.playing && !s.queue[s.index]?.episode);
@@ -409,7 +394,6 @@ export function ReplayView() {
             colors={colors}
             sleeve={topAlbum ? albumThumb(topAlbum) || null : null}
             label={topSong?.thumb || null}
-            streakDays={allDays}
             onPlay={() => playReplay(0)}
             onShare={() => setSharing(true)}
           />
@@ -417,7 +401,7 @@ export function ReplayView() {
           <TopSongs data={data} tracks={topTracks} colors={colors} onPlay={playReplay} />
           <TopArtists artists={artists} artistThumb={artistThumb} onOpen={(n) => void openArtist(n)} />
           {data.albums.length > 0 && <TopAlbums data={data} albumThumb={albumThumb} onOpen={openAlbum} />}
-          <Pattern data={data} period={period} />
+          <Pattern data={data} period={period} allDays={allDays} artists={artists} artistThumb={artistThumb} albumThumb={albumThumb} />
           <p className="text-[12.5px] text-ink-faint">Counted by ByTune on this device — nothing estimated.</p>
         </div>
       )}
@@ -485,7 +469,6 @@ function Hero({
   colors,
   sleeve,
   label,
-  streakDays,
   onPlay,
   onShare,
 }: {
@@ -493,7 +476,6 @@ function Hero({
   colors: [string, string];
   sleeve: string | null;
   label: string | null;
-  streakDays: ReplayData["days"] | null;
   onPlay: () => void;
   onShare: () => void;
 }) {
@@ -547,105 +529,7 @@ function Hero({
           </span>
         </div>
       </div>
-      {streakDays && streakDays.length > 0 && <StreakBand days={streakDays} onPlay={onPlay} />}
     </section>
-  );
-}
-
-/** "Sep 3 – 14", "Dec 28, 2025 – Jan 4, 2026": a run of days, the year only when it isn't this one. */
-function dayRange(from: string, to: string, now: Date): string {
-  const [a, b] = [new Date(`${from}T12:00:00`), new Date(`${to}T12:00:00`)];
-  const year = a.getFullYear() === now.getFullYear() && b.getFullYear() === now.getFullYear() ? {} : { year: "numeric" as const };
-  const f = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", ...year });
-  return from === to ? f.format(a) : f.formatRange(a, b);
-}
-
-/**
- * Your streak, live, along the hero's floor: the last seven days as a chain
- * with your current streak lit day by day (each day tells its minutes on
- * hover); today waits in a dashed ring until music plays — click it to play
- * and keep the streak — then lights at once. Underneath: your longest streak.
- */
-function StreakBand({ days, onPlay }: { days: ReplayData["days"]; onPlay: () => void }) {
-  const listeningNow = usePlayer((s) => s.playing && !s.queue[s.index]?.episode);
-  const now = new Date();
-  const todayKey = isoDay(now);
-  // Music playing now counts today straight away; the stats catch up as it plays.
-  const all = listeningNow ? [...days, { date: todayKey, ms: 1 }] : days;
-  const s = streakNow(all, now);
-  const heard = new Map<string, number>();
-  for (const d of all) heard.set(d.date, (heard.get(d.date) ?? 0) + d.ms);
-  const on = (date: string): boolean => (heard.get(date) ?? 0) > 0;
-  const runEnd = s.today ? todayKey : shiftDay(todayKey, -1);
-  const runStart = shiftDay(runEnd, 1 - s.current);
-  const week = Array.from({ length: 7 }, (_, i) => shiftDay(todayKey, i - 6));
-  let lit = 0;
-  return (
-    <div className="rp-streak">
-      <svg width="0" height="0" className="absolute" aria-hidden>
-        <defs>
-          <linearGradient id="rp-flame-fill" x1="0" y1="1" x2="0" y2="0">
-            <stop offset="0" stopColor="#ff5f1f" />
-            <stop offset="1" stopColor="#ffd35c" />
-          </linearGradient>
-        </defs>
-      </svg>
-      <div className="rp-streak-row">
-        <div className="rp-streak-title">
-          <Flame className={`rp-flame ${s.current ? "is-lit" : ""}`} aria-hidden />
-          {s.current ? (
-            <span>
-              <span key={s.current} className="rp-streak-n">
-                {s.current}
-              </span>{" "}
-              day streak
-            </span>
-          ) : (
-            <span>Start a streak today</span>
-          )}
-        </div>
-        <ol className="rp-week" aria-label="Your last seven days">
-          {week.map((date, i) => {
-            const isOn = on(date);
-            const hot = isOn && s.current > 0 && date >= runStart && date <= runEnd;
-            const waiting = i === 6 && !isOn;
-            const ms = heard.get(date) ?? 0;
-            const when = i === 6 ? "Today" : dayLabel(date, { weekday: "short", month: "short", day: "numeric" });
-            const tip = waiting
-              ? `Today · play something to ${s.current ? `make it ${s.current + 1}` : "start a streak"}`
-              : i === 6 && listeningNow
-                ? "Today · listening now"
-                : `${when} · ${!ms ? "no music" : ms < 60_000 ? "under a minute" : fmtHours(ms)}`;
-            const cls = [
-              "rp-day",
-              hot ? "is-hot" : isOn ? "is-on" : "",
-              isOn && !on(shiftDay(date, -1)) ? "run-start" : "",
-              isOn && (i === 6 || !on(shiftDay(date, 1))) ? "run-end" : "",
-              i === 0 && isOn && on(shiftDay(date, -1)) ? "runs-on" : "",
-              waiting ? "is-waiting" : "",
-            ].join(" ");
-            return (
-              <li key={date} className={cls} data-tip={tip} style={{ "--d": `${i * 45}ms`, "--h": `${520 + (hot ? lit++ : 0) * 90}ms` } as CSSProperties}>
-                <i className="rp-day-bg" aria-hidden />
-                <span aria-hidden>{new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: "narrow" })}</span>
-                {waiting ? (
-                  <button onClick={onPlay} aria-label={tip} />
-                ) : (
-                  <span className="sr-only">{tip}</span>
-                )}
-              </li>
-            );
-          })}
-        </ol>
-      </div>
-      {s.best > 0 && s.bestFrom && s.bestTo && (
-        <p className={`rp-streak-best ${s.current >= 2 && s.current === s.best ? "is-record" : ""}`}>
-          {s.current >= 2 && s.current === s.best
-            ? "Your longest streak yet — keep it going"
-            : `Longest streak · ${s.best} ${s.best === 1 ? "day" : "days"}, ${dayRange(s.bestFrom, s.bestTo, now)}`}
-        </p>
-      )}
-    </div>
   );
 }
 
@@ -906,60 +790,191 @@ function TopAlbums({
 
 /* ----------------------------------------------------------------- pattern */
 
-function Pattern({ data, period }: { data: ReplayData; period: ReplayPeriod }) {
-  const days = chartDays(period, data.days);
-  const max = Math.max(1, ...days.map((d) => d.ms));
-  // The year and all time chart only their last four weeks; their biggest day is still the whole period's.
-  const longPeriod = period === "year" || period === "all";
-  const best = biggestDay(longPeriod ? data.days : days);
-  const songs = useCountUp(data.counts?.tracks ?? data.tracks.length);
-  const artists = useCountUp(data.counts?.artists ?? data.artists.length);
-  const albums = useCountUp(data.counts?.albums ?? data.albums.length);
+/** This computer's first day of the week (0 Sunday … 6 Saturday); Monday when it can't say. */
+function firstWeekday(): number {
+  try {
+    const loc = new Intl.Locale(navigator.language) as Intl.Locale & {
+      getWeekInfo?: () => { firstDay: number };
+      weekInfo?: { firstDay: number };
+    };
+    return (loc.getWeekInfo?.().firstDay ?? loc.weekInfo?.firstDay ?? 1) % 7;
+  } catch {
+    return 1;
+  }
+}
+
+/** A count over a small pile of what it counts: covers, faces, sleeves. */
+function CountTile({ value, label, pile, round }: { value: number; label: string; pile: string[]; round?: boolean }) {
+  const n = useCountUp(value);
+  return (
+    <div className="rp-count">
+      {pile.length > 0 && (
+        <span className="rp-pile" aria-hidden>
+          {pile.map((src, i) => (
+            <Artwork key={`${i}-${src}`} src={src} className="rp-pile-item" rounded={round ? "rounded-full" : "rounded-[7px]"} iconClassName="w-3 h-3" alt="" />
+          ))}
+        </span>
+      )}
+      <div className="mt-4 font-display text-[36px] font-extrabold leading-none tracking-[-0.03em] text-ink-hi tabular-nums">{n.toLocaleString()}</div>
+      <div className="mt-1.5 text-[13px] text-ink-dim">{label}</div>
+    </div>
+  );
+}
+
+/** "Mon, Nov 2 · 41 min" — a calendar day's hover tip. */
+const dayTip = (d: { date: string; ms: number }): string =>
+  `${dayLabel(d.date, { weekday: "short", month: "short", day: "numeric" })} · ${!d.ms ? "no music" : d.ms < 60_000 ? "under a minute" : fmtHours(d.ms)}`;
+
+/**
+ * Your listening: how many songs, artists and albums the period held, each
+ * over a pile of its own art, then its days as a calendar, brighter where
+ * you listened more and your biggest day ringed. The week, this month and
+ * last month open on their month and step back through every month on
+ * record (the words beside it follow the month shown); the year and all time
+ * show a grid of weeks — the year, or the last twelve months.
+ */
+function Pattern({
+  data,
+  period,
+  allDays,
+  artists,
+  artistThumb,
+  albumThumb,
+}: {
+  data: ReplayData;
+  period: ReplayPeriod;
+  allDays: ReplayData["days"] | null;
+  artists: ReplayData["artists"];
+  artistThumb: (a: ReplayData["artists"][number]) => string;
+  albumThumb: (al: ReplayData["albums"][number]) => string;
+}) {
+  const now = new Date();
+  const today = isoDay(now);
+  const firstDay = useMemo(firstWeekday, []);
+  const wide = period === "year" || period === "all";
+  // The month calendar: months back from this one, starting on the period's own.
+  const [back, setBack] = useState(period === "lastMonth" ? 1 : 0);
+  const month = new Date(now.getFullYear(), now.getMonth() - back, 1, 12);
+  const onRecord = allDays ?? data.days;
+  const firstHeard = onRecord.reduce((min, d) => (d.ms > 0 && d.date < min ? d.date : min), today);
+  const canBack = isoDay(month).slice(0, 7) > firstHeard.slice(0, 7);
+  const range = wide ? periodRange(period, now) : { from: isoDay(month), to: isoDay(new Date(month.getFullYear(), month.getMonth() + 1, 0, 12)) };
+  const weeks = calendarWeeks(range.from, range.to, wide ? data.days : onRecord, today, firstDay);
+  const past = weeks.flat().filter((d): d is NonNullable<CalendarDay> => !!d && !d.ahead);
+  // All time's grid is its last twelve months; its biggest day is still all time's.
+  const best = biggestDay(period === "all" ? data.days : past);
+  const max = Math.max(1, ...past.map((d) => d.ms));
+  const level = (d: NonNullable<CalendarDay>): string => (d.ahead ? "rp-lvx" : `rp-lv${d.ms > 0 ? Math.min(4, Math.ceil((d.ms / max) * 4)) : 0}`);
+  const active = past.filter((d) => d.ms > 0).length;
+  const weekdays = Array.from({ length: 7 }, (_, i) =>
+    new Date(2026, 10, 1 + ((firstDay + i) % 7), 12).toLocaleDateString(undefined, { weekday: "narrow" })
+  );
+  // A grid of weeks names each month above the week it starts in.
+  const months = wide
+    ? weeks.flatMap((w, wi) => {
+        const first = w.find((d) => d && (d.date.endsWith("-01") || wi === 0));
+        return first ? [{ wi, label: new Date(`${first.date}T12:00:00`).toLocaleDateString(undefined, { month: "short" }) }] : [];
+      })
+    : [];
+  if (months.length > 1 && months[1].wi - months[0].wi < 3) months.shift();
+
   return (
     <section className="animate-slide-up">
       <h2 className="section-title text-[24px] mb-4">Your listening</h2>
-      <div className="grid grid-cols-3 gap-4 mb-6">
-        {[
-          [songs, "different songs"],
-          [artists, "artists"],
-          [albums, "albums"],
-        ].map(([n, what]) => (
-          <div key={what} className="rounded-2xl bg-ink-hi/[0.04] px-5 py-4">
-            <div className="font-display text-[34px] font-extrabold tracking-[-0.03em] text-ink-hi tabular-nums">{Number(n).toLocaleString()}</div>
-            <div className="text-[13px] text-ink-dim">{what}</div>
-          </div>
-        ))}
+      <div className="rp-counts">
+        <CountTile value={data.counts?.tracks ?? data.tracks.length} label="different songs" pile={data.tracks.slice(0, 5).map((t) => t.thumb).filter(Boolean)} />
+        <CountTile value={data.counts?.artists ?? artists.length} label="artists" pile={artists.slice(0, 5).map(artistThumb).filter(Boolean)} round />
+        <CountTile value={data.counts?.albums ?? data.albums.length} label="albums" pile={data.albums.slice(0, 5).map(albumThumb).filter(Boolean)} />
       </div>
-      {days.length > 1 && (
-        <div className="rounded-2xl bg-ink-hi/[0.04] px-5 pt-5 pb-3">
+
+      <div className={`rp-days ${wide ? "is-wide" : ""}`}>
+        <div className="rp-days-text">
           {best && (
-            <div className="mb-5 flex items-end justify-between gap-4">
-              <div className="min-w-0">
-                <div className="text-[13px] text-ink-dim">Your biggest day</div>
-                <div className="mt-1 text-[18px] font-bold tracking-[-0.01em] text-ink-hi">
-                  {dayLabel(best.date, { weekday: "long", month: "long", day: "numeric" })}
-                  <span className="font-semibold text-ink-dim"> · {fmtHours(best.ms)}</span>
-                </div>
+            <>
+              <div className="text-[13px] text-ink-dim">Your biggest day</div>
+              <div className="mt-1 text-[20px] font-bold leading-snug tracking-[-0.01em] text-ink-hi">
+                {dayLabel(best.date, { weekday: "long", month: "long", day: "numeric" })}
               </div>
-              {longPeriod && <div className="shrink-0 text-[12px] text-ink-faint">The last four weeks</div>}
-            </div>
+              <div className="mt-0.5 text-[14px] text-ink-dim">{fmtHours(best.ms)} of music</div>
+            </>
           )}
-          <div className="rp-wave">
-            {days.map((d, i) => (
-              <span
-                key={d.date}
-                title={d.ahead ? undefined : `${dayLabel(d.date)} — ${fmtHours(d.ms)}`}
-                className={d.ahead ? "bg-ink-hi/[0.06]" : d.date === best?.date ? "bg-accent" : d.ms ? "bg-ink-hi/40" : "bg-ink-hi/10"}
-                style={{ height: `${Math.max(4, (d.ms / max) * 100)}%`, animationDelay: `${Math.min(i, 40) * 14}ms` }}
-              />
-            ))}
+          <div className={`${best ? "mt-5" : ""} text-[13px] text-ink-dim`}>
+            <span className="font-semibold text-ink-hi tabular-nums">{active}</span> of {past.length} days with music
           </div>
-          <div className="flex justify-between text-[11.5px] text-ink-faint mt-3">
-            <span>{dayLabel(days[0].date)}</span>
-            <span>{dayLabel(days[days.length - 1].date)}</span>
+          <div className="rp-legend" aria-hidden>
+            Less
+            {[0, 1, 2, 3, 4].map((l) => (
+              <i key={l} className={`rp-lv${l}`} />
+            ))}
+            More
           </div>
         </div>
-      )}
+
+        {wide ? (
+          <div className="rp-yr" style={{ "--weeks": weeks.length } as CSSProperties} aria-hidden>
+            <div className="rp-yr-months">
+              {months.map((m) => (
+                <span key={m.wi} style={{ gridColumn: `${m.wi + 1} / span 4` }}>
+                  {m.label}
+                </span>
+              ))}
+            </div>
+            <div className="rp-yr-grid">
+              {weeks.map((w, wi) =>
+                w.map((d, di) => {
+                  const place = { gridColumn: wi + 1, gridRow: di + 1, "--i": wi } as CSSProperties;
+                  if (!d) return <span key={`${wi}-${di}`} style={place} />;
+                  const tip = d.ahead ? undefined : dayTip(d);
+                  return (
+                    <span
+                      key={d.date}
+                      className={`rp-yr-day ${level(d)} ${tip ? "rp-tip" : ""} ${d.date === best?.date ? "is-best" : ""}`}
+                      data-tip={tip}
+                      data-side={wi < 4 ? "start" : wi > weeks.length - 5 ? "end" : undefined}
+                      style={place}
+                    />
+                  );
+                })
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="rp-cal-wrap">
+            <div className="rp-cal-nav">
+              <button onClick={() => setBack(back + 1)} disabled={!canBack} title="Previous month" aria-label="Previous month">
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <span aria-live="polite">{month.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</span>
+              <button onClick={() => setBack(back - 1)} disabled={back === 0} title="Next month" aria-label="Next month">
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="rp-cal" aria-hidden>
+              {weekdays.map((w, i) => (
+                <span key={`h${i}`} className="rp-cal-head">
+                  {w}
+                </span>
+              ))}
+              {weeks.flat().map((d, i) => {
+                if (!d) return <span key={`g${i}`} />;
+                const tip = d.ahead ? undefined : dayTip(d);
+                const col = i % 7;
+                return (
+                  <span
+                    key={d.date}
+                    className={`rp-cal-day ${level(d)} ${tip ? "rp-tip" : ""} ${d.date === best?.date ? "is-best" : ""}`}
+                    data-tip={tip}
+                    data-side={col < 2 ? "start" : col > 4 ? "end" : undefined}
+                    style={{ "--i": i } as CSSProperties}
+                  >
+                    {Number(d.date.slice(8))}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
     </section>
   );
 }

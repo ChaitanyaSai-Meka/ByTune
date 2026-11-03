@@ -133,3 +133,26 @@ test("a streak lives through today until a day passes without music; the longest
   assert.equal(shiftDay("2026-03-01", -1), "2026-02-28");
   assert.equal(streakNow([day("2026-10-31"), day("2026-11-01"), day("2026-11-02")], today).current, 3, "across a month end");
 });
+
+test("the calendar: whole weeks from the locale's first weekday, days ahead marked, the rest blank", async () => {
+  const { calendarWeeks, periodRange } = await import("../.test-build/replay-format.mjs");
+  const now = new Date(2026, 10, 3, 15, 0); // Tue 3 Nov 2026
+  assert.deepEqual(periodRange("month", now), { from: "2026-11-01", to: "2026-11-30" });
+  assert.deepEqual(periodRange("lastMonth", now), { from: "2026-10-01", to: "2026-10-31" });
+  assert.deepEqual(periodRange("week", now), { from: "2026-10-28", to: "2026-11-03" });
+  assert.deepEqual(periodRange("year", now), { from: "2026-01-01", to: "2026-12-31" });
+  assert.deepEqual(periodRange("all", now), { from: "2025-11-04", to: "2026-11-03" });
+
+  const days = [{ date: "2026-11-01", ms: 3_480_000 }, { date: "2026-11-02", ms: 600_000 }];
+  const monday = calendarWeeks("2026-11-01", "2026-11-30", days, "2026-11-03", 1);
+  assert.equal(monday.length, 6, "Mon Oct 26 to Sun Dec 6");
+  assert.ok(monday.every((w) => w.length === 7));
+  assert.deepEqual(monday[0].slice(0, 6), [null, null, null, null, null, null], "the days before the 1st are blank");
+  assert.deepEqual(monday[0][6], { date: "2026-11-01", ms: 3_480_000, ahead: false }, "Sunday the 1st closes a Monday week");
+  assert.deepEqual(monday[1][1], { date: "2026-11-03", ms: 0, ahead: false }, "today, quiet so far");
+  assert.equal(monday[1][2].ahead, true, "tomorrow is still to come");
+  assert.deepEqual(monday[5].slice(1), [null, null, null, null, null, null], "after the 30th is blank");
+  const sunday = calendarWeeks("2026-11-01", "2026-11-30", days, "2026-11-03", 0);
+  assert.equal(sunday[0][0].date, "2026-11-01", "a Sunday week starts on the 1st");
+  assert.equal(sunday.length, 5);
+});
