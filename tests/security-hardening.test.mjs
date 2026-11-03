@@ -26,7 +26,7 @@ async function bundle(entry, stubs, externals = []) {
         b.onResolve({ filter: /^\.\/|^\.\.\// }, (a) => ({ path: a.path, namespace: "stub" }));
         b.onLoad({ filter: /.*/, namespace: "stub" }, (a) => ({
           contents: a.path.endsWith("artwork")
-            ? "export function artworkUrlOk(u){return /^(https?:\\/\\/|data:image\\/|blob:|localart:)/i.test(u);}"
+            ? "export function artworkUrlOk(u){return /^(https?:\\/\\/|data:image\\/|blob:|localart:)/i.test(u);} export function upgradeThumb(u){return u;}"
             : stubs[a.path.replace(/^.*\//, "").replace(/\.ts$/, "")] ?? "module.exports = {};",
           loader: "js",
         }));

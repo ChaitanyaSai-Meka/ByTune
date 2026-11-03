@@ -5,6 +5,8 @@ import { pathToFileURL } from "url";
 import * as fs from "fs";
 import * as path from "path";
 import * as downloads from "./downloads";
+import * as downloaded from "./downloaded-files";
+import { isKnownAudio, isPlayableAudio } from "./audio-types";
 import * as canvas from "./canvas";
 import * as music from "./music-service";
 import { backupExport, backupImport } from "./backup";
@@ -13,7 +15,7 @@ import * as mediaControls from "./media-controls";
 import * as persist from "./persist";
 import * as pip from "./pip";
 import * as stats from "./stats";
-import { proxyUrlFor, proxyUrlForLocalTrack, startStreamProxy } from "./stream-proxy";
+import { proxyUrlFor, proxyUrlForLocalTrack, setDownloadedFileLookup, startStreamProxy } from "./stream-proxy";
 import * as auth from "./supabase";
 import * as sync from "./sync";
 import * as transition from "./data-transition";
@@ -431,6 +433,17 @@ function registerIpc(): void {
   });
 
   ipc.handle("library:get", () => locallib.readLocalLibrary());
+  // Files dropped on the window. The preload reads their real paths (webUtils) itself, out of
+  // the page's reach — a file the page makes up has no path — and only it calls this.
+  ipc.handle("files:dropped", (_e, paths: unknown) => {
+    if (!Array.isArray(paths)) return;
+    queueOpen(paths.filter((p): p is string => typeof p === "string" && p.length < 4096 && path.isAbsolute(p)).slice(0, 100));
+  });
+  ipc.handle("files:take", () => openedBatches.splice(0));
+  ipc.handle("library:opened", () => locallib.openedFiles());
+  ipc.handle("library:forgetOpened", (_e, id: unknown) =>
+    typeof id === "string" && id.startsWith("local:") ? locallib.forgetOpenedFile(id) : locallib.openedFiles()
+  );
   ipc.handle("library:scan", async (_e, filterNonMusic?: boolean) => locallib.scanLibrary(filterNonMusic !== false));
   ipc.handle("library:setFolders", async (_e, folders: string[]) => {
     const clean = approvedFolderInputs(folders, 8);
@@ -530,7 +543,10 @@ function registerIpc(): void {
   });
   ipc.handle("data:write", (_e, name: string, data: unknown, scope: string) => transition.serializeData(async () => {
     assertRendererStore(name);
-    if (await transition.writeForDocument(name, data, scope)) sync.noteLocalWrite(String(name ?? ""));
+    if (await transition.writeForDocument(name, data, scope)) {
+      sync.noteLocalWrite(String(name ?? ""));
+      if (name === "library") downloaded.noteLibrary(data);
+    }
   }));
   ipc.handle("app:resetData", () => transition.serializeData(async () => {
     dataResetActive = true;
@@ -541,6 +557,7 @@ function registerIpc(): void {
       stats.resetStats();
       await Promise.all([downloads.resetDownloads(), locallib.resetLocalLibrary()]);
       await persist.resetAppData();
+      downloaded.noteLibrary(null);
       // Approvals live in memory too — drop them and re-approve the default
       // download location, or post-reset downloads would be rejected.
       approvedDirs.clear();
@@ -582,11 +599,17 @@ function registerIpc(): void {
   ipc.handle("download:cancel", (_e, id: string) => downloads.cancelDownload(String(id ?? "")));
   ipc.handle("download:queue", () => downloads.queueSnapshot());
   downloads.addDownloadListener((e) => {
+    if (e.type === "done" && e.path) downloaded.noteDownloaded(e.id, e.path);
     try {
       mainWindow?.webContents.send("download:event", e);
     } catch {
       /* window gone */
     }
+  });
+  // Downloaded songs play from their files — only from approved folders, and only formats that play.
+  setDownloadedFileLookup((id) => {
+    const file = downloaded.downloadedFilePath(id);
+    return file && isApprovedPath(file) && isPlayableAudio(file) ? file : null;
   });
 
   ipc.handle("backup:export", () => backupExport(mainWindow));
@@ -795,6 +818,37 @@ function isApprovedPath(p: string): boolean {
   return false;
 }
 
+/* --------------------- audio files opened with ByTune --------------------- */
+
+/** Paths from the OS (Open with, a double-click, a second launch, macOS open-file) or dropped on the
+ *  window, gathered for a moment so ten files opened together in Explorer play as one batch, in order. */
+const openPaths: string[] = [];
+let openTimer: ReturnType<typeof setTimeout> | null = null;
+/** Read batches waiting for the renderer, which takes them at startup or when pinged. */
+const openedBatches: { tracks: locallib.LocalTrack[]; unplayable: string[] }[] = [];
+
+function queueOpen(paths: string[]): void {
+  if (!paths.length) return;
+  openPaths.push(...paths);
+  openTimer ??= setTimeout(() => {
+    openTimer = null;
+    const batch = openPaths.splice(0);
+    void app
+      .whenReady()
+      .then(() => locallib.openFiles(batch))
+      .then((opened) => {
+        if (!opened.tracks.length && !opened.unplayable.length) return;
+        openedBatches.push(opened);
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("files:opened");
+      })
+      .catch((err) => console.warn("[bytune] opening files failed:", err instanceof Error ? err.message : err));
+  }, 300);
+}
+
+/** Audio files among launch arguments: Windows hands "Open with" files over this way. */
+const audioArgs = (argv: string[]): string[] =>
+  argv.slice(1).filter((a) => !a.startsWith("-") && !a.startsWith("bytune://") && isKnownAudio(a));
+
 const gotLock =
   process.env.BYTUNE_ALLOW_MULTI === "1" || app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -814,9 +868,15 @@ if (!gotLock) {
   };
   const bootUrl = process.argv.find((a) => a.startsWith("bytune://"));
   if (bootUrl) oauthFromUrl(bootUrl);
+  queueOpen(audioArgs(process.argv));
   app.on("open-url", (event, url) => {
     event.preventDefault();
     oauthFromUrl(url);
+  });
+  // macOS: Finder's Open With / a double-click on a file ByTune is set up to open.
+  app.on("open-file", (event, file) => {
+    event.preventDefault();
+    queueOpen([file]);
   });
   app.on("second-instance", (_event, argv) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -826,6 +886,7 @@ if (!gotLock) {
     }
     const url = argv.find((a) => a.startsWith("bytune://"));
     if (url) oauthFromUrl(url);
+    queueOpen(audioArgs(argv));
   });
 
   void app.whenReady().then(() => {
@@ -912,6 +973,8 @@ if (!gotLock) {
       mediaControls.stop();
       stats.flushSync();
       pip.savePipRect();
+      // A download cut off by the quit leaves no partial file behind; it restarts from the Downloads list.
+      downloads.abandonDownloads();
       // Kick off a final push, then persist sync-meta synchronously: quit
       // cannot await the push, but the meta must record any un-synced local
       // edits (changedAt > syncedAt) so the next boot pushes them instead of

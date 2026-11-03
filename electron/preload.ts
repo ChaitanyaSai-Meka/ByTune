@@ -1,6 +1,7 @@
 /** Preload — exposes a minimal, typed API to the renderer via contextBridge. */
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { DownloadProgress, MoodPage, PodcastPage, PodcastShelf, RadioPage, SearchSuggestion, Track } from "../src/types";
+import type { LocalTrack } from "./local-library";
 
 // The PiP window loads this same preload but its scope requests are rejected
 // by design (main-window-only handler) — an eager invoke there would leave an
@@ -208,6 +209,16 @@ const api = {
     return () => ipcRenderer.removeListener("media:action", listener as never);
   },
 
+  // Audio files opened with ByTune (Open with, a double-click, dropped on the window)
+  takeOpenedFiles: (): Promise<{ tracks: LocalTrack[]; unplayable: string[] }[]> => ipcRenderer.invoke("files:take"),
+  onFilesOpened: (cb: () => void): (() => void) => {
+    const listener = (): void => cb();
+    ipcRenderer.on("files:opened", listener);
+    return () => ipcRenderer.removeListener("files:opened", listener);
+  },
+  openedFiles: (): Promise<LocalTrack[]> => ipcRenderer.invoke("library:opened"),
+  forgetOpenedFile: (id: string): Promise<LocalTrack[]> => ipcRenderer.invoke("library:forgetOpened", id),
+
   // Filesystem helpers
   defaultDownloadDir: () => ipcRenderer.invoke("app:defaultDownloadDir"),
   pickFolder: () => ipcRenderer.invoke("app:pickFolder"),
@@ -231,5 +242,19 @@ const api = {
 };
 
 contextBridge.exposeInMainWorld("bytune", api);
+
+// Audio files dragged in from Explorer/Finder play at once. Their real paths
+// come from Electron here, in the preload's own world: a File the page builds
+// itself has no path, so the page can't hand over files the user never dropped.
+window.addEventListener("dragover", (e) => {
+  if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+});
+window.addEventListener("drop", (e) => {
+  const files = [...(e.dataTransfer?.files ?? [])];
+  if (!files.length) return;
+  e.preventDefault();
+  const paths = files.map((f) => webUtils.getPathForFile(f)).filter(Boolean);
+  if (paths.length) void ipcRenderer.invoke("files:dropped", paths).catch(() => undefined);
+});
 
 export type ByTuneApi = typeof api;

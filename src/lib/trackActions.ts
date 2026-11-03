@@ -22,6 +22,7 @@ import { playPlaylist } from "./playlist";
 import { copyLink, youtubeAlbumLink, youtubePlaylistLink } from "./playlistShare";
 import { requireBridge } from "./bridge";
 import { useLibrary, type Playlist } from "../stores/library";
+import { addSongsToPlaylists, newPlaylistWith } from "./devicePlaylists";
 import { usePlayer } from "../stores/player";
 import { useUI, type MenuItem } from "../stores/ui";
 import type { BrowseItem, Track } from "../types";
@@ -68,8 +69,8 @@ export function trackMenuItems(track: Track): MenuItem[] {
     items.push({
       label: `Add to "${p.name}"`,
       action: () => {
-        const added = useLibrary.getState().addToPlaylist(p.id, track);
-        useUI.getState().toast(added ? `Added to "${p.name}"` : "Already in this playlist");
+        const { added, told } = addSongsToPlaylists([p.id], [track]);
+        if (!told) useUI.getState().toast(added ? `Added to "${p.name}"` : "Already in this playlist");
       },
     });
   }
@@ -94,9 +95,7 @@ export function trackMenuItems(track: Track): MenuItem[] {
         placeholder: "Playlist name",
         confirmLabel: "Create",
         onConfirm: (value) => {
-          const lib = useLibrary.getState();
-          const playlist = lib.createPlaylist(value.trim() || suggested);
-          lib.addToPlaylist(playlist.id, track);
+          const playlist = newPlaylistWith(value.trim() || suggested, [track]);
           useUI.getState().navigate({ name: "playlist", param: playlist.id });
         },
       });

@@ -22,12 +22,13 @@ import {
   PinOff,
   User,
 } from "lucide-react";
-import { useLibrary } from "../stores/library";
+import { useLibrary, type Playlist } from "../stores/library";
 import { playingFromRow, usePlayer } from "../stores/player";
 import { useUI } from "../stores/ui";
 import { EqBars } from "./primitives";
 import { FitText } from "./FitText";
 import { shortTitle } from "../lib/format";
+import { addSongsToPlaylists, staysOnDevice } from "../lib/devicePlaylists";
 import { upgradeArtwork } from "../lib/artwork";
 import { CreateMenu } from "./CreateMenu";
 import { playlistFolderItems, playlistHeaderItems } from "../lib/trackActions";
@@ -151,12 +152,15 @@ function LibraryPill() {
   for (const a of followedArtists) {
     rows.push({ id: a.id, title: a.name, subtitle: "Artist", thumb: a.thumb, kind: "artist" });
   }
+  // A playlist of nothing but songs from this computer stays here, and says so where "Playlist" would be.
+  const subtitleOf = (p: Playlist): string =>
+    `${staysOnDevice(p) ? "On this device" : "Playlist"} · ${p.tracks.length} ${p.tracks.length === 1 ? "track" : "tracks"}`;
   const unfiled = playlists.filter((p) => !p.folderId);
   for (const p of [...unfiled.filter((x) => x.pinned), ...unfiled.filter((x) => !x.pinned)]) {
     rows.push({
       id: p.id,
       title: p.name,
-      subtitle: `Playlist · ${p.tracks.length} ${p.tracks.length === 1 ? "track" : "tracks"}`,
+      subtitle: subtitleOf(p),
       thumb: p.artistThumb ?? p.tracks[0]?.thumb,
       kind: "playlist",
       artistId: p.artistId,
@@ -169,7 +173,7 @@ function LibraryPill() {
         rows.push({
           id: p.id,
           title: p.name,
-          subtitle: `Playlist · ${p.tracks.length} ${p.tracks.length === 1 ? "track" : "tracks"}`,
+          subtitle: subtitleOf(p),
           thumb: p.artistThumb ?? p.tracks[0]?.thumb,
           kind: "playlist",
           folderId: f.id,
@@ -271,12 +275,14 @@ function LibraryPill() {
     } else {
       const p = lib.playlists.find((pl) => pl.id === r.id);
       if (!p) return;
-      const added = lib.addToPlaylist(r.id, track);
-      toast(
-        added
-          ? `Added “${shortTitle(track.title)}” to “${p.name}”`
-          : `“${shortTitle(track.title)}” is already in “${p.name}”`
-      );
+      const { added, told } = addSongsToPlaylists([r.id], [track]);
+      if (!told) {
+        toast(
+          added
+            ? `Added “${shortTitle(track.title)}” to “${p.name}”`
+            : `“${shortTitle(track.title)}” is already in “${p.name}”`
+        );
+      }
     }
     setPulse(r.id);
     window.setTimeout(() => setPulse((cur) => (cur === r.id ? null : cur)), 650);

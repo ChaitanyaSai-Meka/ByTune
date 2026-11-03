@@ -36,7 +36,7 @@ async function load({ offered = [251, 140], localTracks = {} } = {}) {
     bundle: true, platform: "node", format: "cjs", write: false,
     external: ["electron", "youtubei.js", "./po-token", "./market", "./local-library", "./lyrics", "./artwork", "./ytm"],
   }).then((r) => r.outputFiles[0].text);
-  const s = { offered, calls: [], fetched: [], n: 0 };
+  const s = { offered, calls: [], fetched: [], n: 0, downloadRanges: [], breakAt: 0, hang: false };
   const yt = {
     session: { context: { client: { visitorData: "visitor", gl: "US", hl: "en" } } },
     // One InnerTube answer per call; every URL is new, so a body fetched shows which answer it came from.
@@ -66,10 +66,26 @@ async function load({ offered = [251, 140], localTracks = {} } = {}) {
     module, exports: module.exports, URL, AbortController, AbortSignal, setTimeout, clearTimeout, Buffer,
     console: { log() {}, warn() {} },
     process: { env: {} },
-    // googlevideo: the probe and the downloads read a few bytes of whatever URL they were given
-    fetch: async (url) => {
+    // googlevideo: the format's whole length from the asked byte on (the probe reads one chunk, then the
+    // download fetches the same URL). `breakAt` cuts the next download body short there, once; `hang`
+    // makes download bodies stop sending without ending.
+    fetch: async (url, init) => {
       s.fetched.push(String(url));
-      return new Response(new Uint8Array([1, 2, 3]), { status: 206 });
+      const size = Number(FORMATS[/\/(\d+)\?/.exec(String(url))?.[1]]?.content_length ?? 3);
+      const range = init?.headers?.Range ?? "";
+      const from = Number(/bytes=(\d+)-/.exec(range)?.[1] ?? 0);
+      const headers = { "content-length": String(size - from) };
+      const download = s.fetched.filter((u) => u === String(url)).length >= 2;
+      if (download) s.downloadRanges.push(range);
+      if (download && s.hang) {
+        return new Response(new ReadableStream({ start: (c) => c.enqueue(new Uint8Array(1000)) }), { status: 206, headers });
+      }
+      let end = size;
+      if (download && s.breakAt > from) {
+        end = s.breakAt;
+        s.breakAt = 0;
+      }
+      return new Response(new Uint8Array(end - from), { status: 206, headers });
     },
     require: (name) => stubs[name] ?? require(name),
   });
@@ -141,4 +157,50 @@ test("localGainDb reads the scanned ReplayGain, and 0 dB is a real value", async
   assert.equal(music.localGainDb("local:zero"), 0, "a file already at the reference level");
   assert.equal(music.localGainDb("local:untagged"), null, "no tag: the renderer measures instead");
   assert.equal(music.localGainDb("local:missing"), null);
+});
+
+/** Wait for the download's last event ("done", "failed" or "cancelled"). */
+async function settled(events, ms = 8000) {
+  for (let t = 0; t < ms && !events.some((e) => ["done", "failed", "cancelled"].includes(e.type)); t += 10) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  return events.find((e) => ["done", "failed", "cancelled"].includes(e.type));
+}
+
+test("a download cut off mid-file resumes from its bytes on disk, on a fresh URL", async () => {
+  const { downloads, s } = await load({ offered: [140] });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bytune-dl-resume-"));
+  try {
+    const events = [];
+    downloads.addDownloadListener((e) => events.push(e));
+    s.breakAt = 1_000_000;
+    downloads.enqueueDownload({ id: ID, title: "Song", artist: "Artist", duration: 200, thumb: "" }, dir);
+    const end = await settled(events);
+    assert.equal(end?.type, "done", end?.reason);
+    assert.deepEqual(fs.readdirSync(dir), ["Artist - Song.m4a"], "one finished file, no partial file left");
+    assert.equal(fs.statSync(path.join(dir, "Artist - Song.m4a")).size, 3_000_000, "the whole file");
+    assert.deepEqual(s.downloadRanges, ["bytes=0-", "bytes=1000000-"], "the second request picked up where the first stopped");
+    assert.equal(s.calls.length, 2, "on a freshly resolved URL");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cancelling a running download deletes its partial file", async () => {
+  const { downloads, s } = await load({ offered: [140] });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bytune-dl-cancel-"));
+  try {
+    const events = [];
+    downloads.addDownloadListener((e) => events.push(e));
+    s.hang = true;
+    downloads.enqueueDownload({ id: ID, title: "Song", artist: "Artist", duration: 200, thumb: "" }, dir);
+    for (let t = 0; t < 3000 && !events.some((e) => e.type === "progress"); t += 10) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(fs.readdirSync(dir).some((f) => f.endsWith(".part")), "bytes go to a partial file first");
+    assert.equal(downloads.cancelDownload(ID), true);
+    const end = await settled(events);
+    assert.equal(end?.type, "cancelled");
+    assert.deepEqual(fs.readdirSync(dir), [], "nothing left behind");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

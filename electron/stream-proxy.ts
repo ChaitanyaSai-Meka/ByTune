@@ -13,6 +13,7 @@ import fs from "fs";
 import http from "http";
 import path from "path";
 import type { AddressInfo } from "net";
+import { audioMime } from "./audio-types";
 import { localStreamPath } from "./local-library";
 import { resolveStream, evictOldest } from "./music-service";
 
@@ -88,22 +89,13 @@ export function proxyUrlForLocalTrack(localId: string): string | null {
   return `http://127.0.0.1:${proxyPort}/?lid=${encodeURIComponent(localId)}`;
 }
 
-const LOCAL_MIME: Record<string, string> = {
-  ".mp3": "audio/mpeg",
-  ".m4a": "audio/mp4",
-  ".mp4": "audio/mp4",
-  ".aac": "audio/aac",
-  ".flac": "audio/flac",
-  ".ogg": "audio/ogg",
-  ".oga": "audio/ogg",
-  ".opus": "audio/ogg",
-  ".wav": "audio/wav",
-  ".webm": "audio/webm",
-  ".wma": "audio/x-ms-wma",
-};
+/** A song downloaded to this device, by YouTube id → its file, when it's still there (set by main.ts). */
+let downloadedFile: (trackId: string) => string | null = () => null;
+export function setDownloadedFileLookup(lookup: (trackId: string) => string | null): void {
+  downloadedFile = lookup;
+}
 
-function serveLocalFile(id: string, range: string | undefined, res: http.ServerResponse, req: http.IncomingMessage): void {
-  const filePath = localStreamPath(id);
+function serveLocalFile(filePath: string | null, range: string | undefined, res: http.ServerResponse, req: http.IncomingMessage): void {
   if (!filePath) {
     res.writeHead(404);
     res.end("local file missing");
@@ -122,7 +114,7 @@ function serveLocalFile(id: string, range: string | undefined, res: http.ServerR
     "Access-Control-Allow-Origin": "*",
     "Cache-Control": "no-store",
     "Accept-Ranges": "bytes",
-    "Content-Type": LOCAL_MIME[path.extname(filePath).toLowerCase()] ?? "audio/mpeg",
+    "Content-Type": audioMime(filePath),
   };
 
   // Range support is what makes seeking work: the media element re-requests
@@ -193,11 +185,35 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
     const range = req.headers.range;
     if (localId) {
-      serveLocalFile(localId, range, res, req);
+      serveLocalFile(localStreamPath(localId), range, res, req);
       return;
     }
     const kbpsRaw = Number(url.searchParams.get("kbps") ?? 0);
     const maxKbps = Number.isFinite(kbpsRaw) && kbpsRaw > 0 ? Math.floor(kbpsRaw) : undefined;
+    const key = req.url ?? "";
+
+    // A song downloaded to this device plays from its file: it works offline and
+    // costs no data. Its loudness has no YouTube value, so the player measures it.
+    const file = downloadedFile(trackId as string);
+    if (file) {
+      if (url.searchParams.get("meta") === "1") {
+        res.writeHead(200, { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store", "Content-Type": "application/json" });
+        res.end(JSON.stringify({ lufs: null }));
+        return;
+      }
+      // Same rule as a stream: a mid-song range must come from the file this URL served before
+      // (a download finishing while its stream plays must not splice two files together).
+      const before = served.get(key);
+      if (range && !/^bytes=0-/.test(range) && before && before !== `file:${file}`) {
+        res.writeHead(409, { "Access-Control-Allow-Origin": "*" });
+        res.end();
+        return;
+      }
+      served.set(key, `file:${file}`);
+      evictOldest(served, 500);
+      serveLocalFile(file, range, res, req);
+      return;
+    }
 
     // Metadata-only request: the renderer asks `?id=…&meta=1` to learn the
     // track's loudness (for Spotify-style −14 LUFS normalisation) without
@@ -244,7 +260,6 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     // error, and the player reloads at its position on a fresh URL. (A later
     // bytes=0- request on the old URL is served and re-recorded.)
     const identity = `${stream.itag ?? "?"}:${stream.clen ?? "?"}`;
-    const key = req.url ?? "";
     const before = served.get(key);
     if (range && !/^bytes=0-/.test(range) && before && before !== identity) {
       void upstream.body.cancel().catch(() => undefined);

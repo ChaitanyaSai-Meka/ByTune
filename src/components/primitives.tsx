@@ -642,9 +642,11 @@ export function Dialog() {
         )}
 
         <div className="flex items-center justify-end gap-2 mt-6">
-          <Btn variant="ghost" size="md" className="!rounded-xl" onClick={close}>
-            {req.cancelLabel ?? "Cancel"}
-          </Btn>
+          {!req.notice && (
+            <Btn variant="ghost" size="md" className="!rounded-xl" onClick={close}>
+              {req.cancelLabel ?? "Cancel"}
+            </Btn>
+          )}
           <button
             onClick={() => {
               const value = hasInput ? (inputRef.current?.value ?? req.initialValue ?? "") : "";

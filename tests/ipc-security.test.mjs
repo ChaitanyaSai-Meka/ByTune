@@ -48,7 +48,9 @@ async function harness({ legacyStores = false } = {}) {
         startStreamProxy: async () => { calls.push(["proxy"]); return 4321; },
         proxyUrlFor: (id, retry, kbps) => { calls.push(["url", id, retry, kbps]); return `proxy:${id}`; },
         proxyUrlForLocalTrack: () => null,
+        setDownloadedFileLookup() {},
       };
+      if (name === "./downloaded-files") return { noteLibrary() {}, noteDownloaded() {}, downloadedFilePath: () => null };
       if (name.startsWith("./")) return {};
       return require(name);
     },

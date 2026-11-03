@@ -39,6 +39,8 @@ test("actual main reset IPC clears files and stops the real stats timer", async 
         if (name === "./local-library") return { resetLocalLibrary: async () => {} };
         if (name === "./sync-merge") return { DEVICE_SETTINGS_FIELDS };
         if (name === "./pip") return { registerPipIpc() {}, isTrustedSender: () => true, restrictNavigation() {}, rendererUrl: () => "http://127.0.0.1:5173/" };
+        if (name === "./stream-proxy") return { setDownloadedFileLookup() {} };
+        if (name === "./downloaded-files") return { noteLibrary() {}, noteDownloaded() {}, downloadedFilePath: () => null };
         if (name.startsWith("./")) return {};
         return require(name);
       },

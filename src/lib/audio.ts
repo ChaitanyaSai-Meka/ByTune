@@ -79,6 +79,7 @@ let historyForId: string | null = null;
 let advancingToId: string | null = null;
 
 const MAX_SKIPS = 5;
+const LOCAL_MISSING = "Local file is missing on disk";
 
 interface FadeState {
   /** ids, to detect the fade's own completion vs an interrupting change */
@@ -1457,7 +1458,7 @@ async function loadUrl(track: Track, autoplay: boolean, forceRotate: boolean): P
       // and the IPC lookup is a local roundtrip.
       const src = await requireBridge().localTrackUrl(track.id);
       if (seq !== loadSeq) return;
-      if (!src) throw new Error("Local file is missing on disk");
+      if (!src) throw new Error(LOCAL_MISSING);
       // Levels like a stream: by its ReplayGain tag, else a measurement; the
       // fallback gain covers the moment before.
       levelLocal(track);
@@ -1554,7 +1555,12 @@ function handleFailure(track: Track, err?: unknown): void {
   // away. The entries survive in synced playlists, and re-importing the
   // folder relinks them (ids are hashes of the file's absolute path).
   const isLocal = !!track.localPath || track.id.startsWith("local:");
-  const localGoneMsg = `Couldn't play "${track.title}" — its local file can't be reached on this device. Re-add the folder in Local Music to relink your songs.`;
+  // A missing file fails before the player even loads it, so a local song that
+  // loaded and still failed (the retry found it too) is one it can't decode.
+  const unreadable = isLocal && !(err instanceof Error && err.message === LOCAL_MISSING);
+  const localGoneMsg = unreadable
+    ? `Couldn't play "${shortTitle(track.title)}": ByTune can't play this file's format.`
+    : `Couldn't play "${track.title}" — its local file can't be reached on this device. Re-add the folder in Local Music to relink your songs.`;
   if (state.playing && consecutiveFailures <= MAX_SKIPS) {
     console.warn(`[bytune] playback failed for ${track.id}`, err);
     if (isLocal) {

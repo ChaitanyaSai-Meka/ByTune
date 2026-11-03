@@ -17,13 +17,13 @@ import type { LocalFolderEntry } from "../../electron/local-library";
 import type { Track } from "../types";
 import { getDownload, startDownload } from "./downloads";
 import { draggingFromPlaylist, useTrackDrop } from "./dnd";
+import { addSongsToPlaylists } from "./devicePlaylists";
 import { shortTitle } from "./format";
 
 function addToOpenPlaylist(playlistId: string, track: Track): void {
-  const lib = useLibrary.getState();
-  const name = lib.playlists.find((p) => p.id === playlistId)?.name ?? "playlist";
-  const added = lib.addToPlaylist(playlistId, track);
-  useUI.getState().toast(added ? `Added to "${name}"` : `Already in "${name}"`, added ? "success" : "info");
+  const name = useLibrary.getState().playlists.find((p) => p.id === playlistId)?.name ?? "playlist";
+  const { added, told } = addSongsToPlaylists([playlistId], [track]);
+  if (!told) useUI.getState().toast(added ? `Added to "${name}"` : `Already in "${name}"`, added ? "success" : "info");
 }
 
 function likeTrack(track: Track): void {

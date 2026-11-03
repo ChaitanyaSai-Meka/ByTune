@@ -46,9 +46,10 @@ export async function startDownload(track: Track, dirOverride?: string): Promise
   }
 }
 
+/** Cancelling takes the song off the Downloads list (its partial file is deleted). */
 export function cancelDownload(id: string): void {
   void window.bytune?.cancelDownload(id);
-  useLibrary.getState().patchDownload(id, { status: "failed", progress: 0 });
+  useLibrary.getState().removeDownload(id);
 }
 
 /**
@@ -156,7 +157,7 @@ export function listenForDownloadProgress(): () => void {
       useUI.getState().toast(`Download failed: ${e.reason ?? "unknown error"}`, "error");
     } else if (e.type === "cancelled") {
       buffer.flush(e.id);
-      lib.patchDownload(e.id, { status: "failed", progress: 0 });
+      lib.removeDownload(e.id);
     }
   });
   // Legacy channel (kept for older event payloads).

@@ -51,6 +51,7 @@ import { useUI, type MenuItem } from "../stores/ui";
 import { upgradeArtwork } from "../lib/artwork";
 import { useDrag } from "../lib/dnd";
 import { shortTitle } from "../lib/format";
+import { addSongsToPlaylists, newPlaylistWith } from "../lib/devicePlaylists";
 import { FitText } from "./FitText";
 import { SLEEP_MAX_MINUTES, formatSleepLeft, parseSleepMinutes, useSleepTimer } from "../lib/sleepTimer";
 
@@ -249,8 +250,8 @@ export function PlayerBar() {
                   useLibrary.getState().removeFromPlaylist(p.id, track.id);
                   useUI.getState().toast(`Removed from "${p.name}"`);
                 } else {
-                  const added = useLibrary.getState().addToPlaylist(p.id, track);
-                  useUI.getState().toast(added ? `Added to "${p.name}"` : "Already in this playlist");
+                  const { added, told } = addSongsToPlaylists([p.id], [track]);
+                  if (!told) useUI.getState().toast(added ? `Added to "${p.name}"` : "Already in this playlist");
                 }
               },
             };
@@ -270,9 +271,7 @@ export function PlayerBar() {
                 placeholder: "Playlist name",
                 confirmLabel: "Create",
                 onConfirm: (value) => {
-                  const fresh = useLibrary.getState();
-                  const playlist = fresh.createPlaylist(value.trim() || suggested);
-                  fresh.addToPlaylist(playlist.id, track);
+                  const playlist = newPlaylistWith(value.trim() || suggested, [track]);
                   useUI.getState().navigate({ name: "playlist", param: playlist.id });
                 },
               });

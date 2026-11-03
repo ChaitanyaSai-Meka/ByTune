@@ -84,6 +84,8 @@ function fixture() {
           if (name === "./local-library") return { resetLocalLibrary: async () => {}, readLocalLibrary: () => ({ folders: [] }) };
           if (name === "./stats") return { resetStats() {}, initStats() {}, flushSync() {}, reloadStore() {}, recordListening() {}, summary: () => ({ totalMs: 0 }), HISTORY_STORE: "listening-history", onStoreWrite(fn) { statsNotify = fn; } };
           if (name === "./pip") return { registerPipIpc() {}, isTrustedSender: () => true };
+          if (name === "./stream-proxy") return { setDownloadedFileLookup() {} };
+          if (name === "./downloaded-files") return { noteLibrary() {}, noteDownloaded() {}, downloadedFilePath: () => null };
           return {};
         }
         if (name.startsWith(".")) return load(path.resolve(path.dirname(file), `${name}.ts`));
@@ -177,6 +179,40 @@ test("local songs never upload their absolute file path", async () => {
     assert.ok(uploaded.payload.state.liked.some((t) => t.id === "local:abc"), "the song itself still syncs");
     assert.equal(h.disk.readData("library").state.liked.find((t) => t.id === "local:abc").localPath, local.localPath,
       "the copy on this device is untouched");
+  } finally { await h.close(); }
+});
+
+test("songs from this computer never upload; their playlists sync without them and get them back on a restore", async () => {
+  const h = fixture();
+  try {
+    await h.invoke("auth:continueGuest");
+    const doc = await h.invoke("data:scope");
+    const lib = library("guest");
+    lib.state.playlists = [
+      { id: "mixed", name: "chills", createdAt: 3, device: true, tracks: [track("yt1"), track("local:a"), track("yt2")] },
+      { id: "here", name: "On this PC", createdAt: 2, tracks: [track("local:b")] },
+      { id: "plain", name: "Everywhere", createdAt: 1, tracks: [track("yt3")] },
+    ];
+    await h.invoke("data:write", "library", lib, doc);
+    h.rows([]);
+    await h.invoke("auth:signUp", "alice", "valid-password-123");
+    const uploaded = h.uploads.find((v) => v.store_name === "library").payload.state.playlists;
+    assert.deepEqual(uploaded.map((p) => p.id), ["mixed", "plain"], "a playlist of only local songs stays here");
+    assert.deepEqual(uploaded[0].tracks.map((t) => t.id), ["yt1", "yt2"], "the rest of its songs sync, the local one doesn't");
+    assert.equal("device" in uploaded[0], false, "an earlier build's flag never reaches the account");
+
+    // The account's copy replaces the library (a restore; another device added yt9).
+    const remote = library("remote");
+    remote.state.playlists = [
+      { id: "mixed", name: "chills", createdAt: 3, tracks: [track("yt1"), track("yt2"), track("yt9")] },
+      { id: "cloud", name: "Cloud", createdAt: 4, tracks: [track("yt5")] },
+    ];
+    h.rows([row("library", remote)]);
+    await h.sync.restoreNow();
+    const restored = h.disk.readData("library").state.playlists;
+    assert.deepEqual(plain(restored.map((p) => p.id)), ["here", "mixed", "cloud"], "the local-only playlist comes back whole");
+    assert.deepEqual(plain(restored.find((p) => p.id === "mixed").tracks.map((t) => t.id)), ["yt1", "local:a", "yt2", "yt9"],
+      "the local song is back where it was");
   } finally { await h.close(); }
 });
 

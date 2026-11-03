@@ -5,6 +5,7 @@ import { useUI } from "../stores/ui";
 import { Btn } from "./primitives";
 import { FitText } from "./FitText";
 import { shortTitle } from "../lib/format";
+import { addSongsToPlaylists } from "../lib/devicePlaylists";
 
 /**
  * "Add to playlists": tick any number of your playlists and add the song(s)
@@ -50,9 +51,8 @@ export function PlaylistPicker() {
       return next;
     });
   const add = (): void => {
-    const lib = useLibrary.getState();
-    for (const id of picked) for (const t of tracks) lib.addToPlaylist(id, t);
-    useUI.getState().toast(`Added to ${picked.size} ${picked.size === 1 ? "playlist" : "playlists"}`, "success");
+    const { told } = addSongsToPlaylists([...picked], tracks);
+    if (!told) useUI.getState().toast(`Added to ${picked.size} ${picked.size === 1 ? "playlist" : "playlists"}`, "success");
     close();
   };
   const what = tracks.length === 1 ? `"${shortTitle(tracks[0].title)}"` : `${tracks.length} songs`;

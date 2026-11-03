@@ -90,7 +90,9 @@ async function loadIpcHandlers() {
       };
       if (name === "./stream-proxy") return {
         proxyUrlFor: async () => "http://127.0.0.1:1/x", proxyUrlForLocalTrack: () => null, startStreamProxy: async () => {},
+        setDownloadedFileLookup() {},
       };
+      if (name === "./downloaded-files") return { noteLibrary() {}, noteDownloaded() {}, downloadedFilePath: () => null };
       if (name === "./supabase") return {
         getClient: () => null, registerProtocol() {}, initInstallMarker() {}, initAuth: async () => {},
         sessionInfo: () => ({ mode: null, userId: null, username: null, freshInstall: false }),

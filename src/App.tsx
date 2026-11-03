@@ -15,6 +15,8 @@ import { engineBoot } from "./lib/audio";
 import { initAutoplay } from "./lib/autoplay";
 import { setAmbientFromArtwork } from "./lib/ambient";
 import { listenForDownloadProgress } from "./lib/downloads";
+import { listenForOpenedFiles } from "./lib/openedFiles";
+import { FileDropOverlay } from "./components/FileDropOverlay";
 import { LYRICS_NUDGE_STEP, useLyricsNudge } from "./lib/lyricsOffset";
 import { watchMenuCommands } from "./lib/menuCommands";
 import { usePanelDrop } from "./lib/panelDrop";
@@ -329,6 +331,9 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  // Audio files opened with ByTune or dropped on the window play at once.
+  useEffect(() => listenForOpenedFiles(), []);
+
   // Native miniplayer bridge: push playback snapshots to the PiP window and
   // execute transport commands coming back from it.
   useEffect(() => startPipSync(), []);
@@ -465,6 +470,7 @@ export default function App() {
       <Dialog />
       <PlaylistPicker />
       <ContextMenu />
+      <FileDropOverlay />
       <Toasts />
     </div>
   );

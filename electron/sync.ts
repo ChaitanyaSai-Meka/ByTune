@@ -247,8 +247,16 @@ function stripForUpload(name: string, data: unknown): unknown {
         ...keep,
         liked: tracks(keep.liked),
         history: tracks(keep.history),
+        // Songs from this computer never leave it: a playlist uploads without them, and one made
+        // only of them doesn't upload at all. (`device` was a flag of an earlier build.)
         playlists: Array.isArray(keep.playlists)
-          ? keep.playlists.map((p) => (p && typeof p === "object" ? { ...p, tracks: tracks((p as { tracks?: unknown }).tracks) } : p))
+          ? keep.playlists
+              .filter((p) => !staysOnDevice(p))
+              .map((p) => {
+                if (!p || typeof p !== "object") return p;
+                const { device: _device, ...rest } = p as Record<string, unknown>;
+                return { ...rest, tracks: tracksOf(p).filter((t) => !isLocalTrack(t)).map(withoutPath) };
+              })
           : keep.playlists,
       },
     };
@@ -258,11 +266,43 @@ function stripForUpload(name: string, data: unknown): unknown {
   return data;
 }
 
+const idOf = (item: unknown): unknown => (item as { id?: unknown } | null)?.id;
+const isLocalTrack = (t: unknown): boolean => typeof idOf(t) === "string" && (idOf(t) as string).startsWith("local:");
+const tracksOf = (p: unknown): unknown[] => {
+  const list = (p as { tracks?: unknown } | null)?.tracks;
+  return Array.isArray(list) ? list : [];
+};
+/** Every song is from this computer: the playlist stays on this device altogether (src/lib/devicePlaylists.ts). */
+const staysOnDevice = (p: unknown): boolean => tracksOf(p).length > 0 && tracksOf(p).every(isLocalTrack);
+
+/** The cloud copy's songs, with this device's songs from this computer put back where they were: after
+ *  the streamed song they followed here (or first, when none did or it's gone). */
+function withLocalSongs(remote: unknown[], here: unknown[]): unknown[] {
+  const out = remote.filter((t) => !isLocalTrack(t));
+  let anchor: unknown = null;
+  let run = 0; // local songs already put back after that anchor
+  for (const t of here) {
+    if (!isLocalTrack(t)) {
+      anchor = idOf(t);
+      run = 0;
+      continue;
+    }
+    const at = anchor === null ? -1 : out.findIndex((o) => idOf(o) === anchor);
+    out.splice(at + 1 + run, 0, t);
+    run += 1;
+  }
+  return out;
+}
+
 /** Local device-owned fields, re-attached after any pull. */
 function localDeviceState(name: string): Record<string, unknown> {
   const local = persist.readData(name) as { state?: Record<string, unknown> } | null;
   const state = local?.state ?? {};
-  if (name === "library") return { downloads: state.downloads ?? {} };
+  if (name === "library") {
+    // This device's playlists that hold songs from this computer, as they are here.
+    const playlists = Array.isArray(state.playlists) ? state.playlists.filter((p) => tracksOf(p).some(isLocalTrack)) : [];
+    return { downloads: state.downloads ?? {}, localPlaylists: playlists };
+  }
   if (name === "settings") {
     const out: Record<string, unknown> = {};
     for (const f of DEVICE_SETTINGS_FIELDS) {
@@ -271,6 +311,25 @@ function localDeviceState(name: string): Record<string, unknown> {
     return out;
   }
   return {};
+}
+
+/** A cloud copy that replaces a local store, with this device's own fields put back. */
+function withDeviceState(name: string, payload: unknown, device: Record<string, unknown>): unknown {
+  const state = (payload as { state?: Record<string, unknown> })?.state;
+  if (!state || Object.keys(device).length === 0) return payload;
+  if (name !== "library") return { ...(payload as object), state: { ...state, ...device } };
+  const { localPlaylists, ...fields } = device;
+  const mine = Array.isArray(localPlaylists) ? localPlaylists : [];
+  const here = new Map(mine.map((p) => [idOf(p), p]));
+  const remote = Array.isArray(state.playlists) ? state.playlists : [];
+  const remoteIds = new Set(remote.map(idOf));
+  // A playlist of nothing but songs from this computer was never uploaded: it comes back whole.
+  // The others get their songs from this computer put back.
+  const playlists = [
+    ...mine.filter((p) => staysOnDevice(p) && !remoteIds.has(idOf(p))),
+    ...remote.map((p) => (here.has(idOf(p)) ? { ...(p as object), tracks: withLocalSongs(tracksOf(p), tracksOf(here.get(idOf(p)))) } : p)),
+  ];
+  return { ...(payload as object), state: { ...state, ...fields, playlists } };
 }
 
 /** Merge a fresh cloud payload into the local store when both sides changed. */
@@ -467,12 +526,7 @@ export async function syncNowExclusive(): Promise<{ pushed: string[]; pulled: st
         // Cloud is newer: keep a local backup, take the cloud copy, re-attach
         // device fields.
         await backupStore(name, local);
-        const device = localDeviceState(name);
-        const remoteState = (remote.payload as { state?: Record<string, unknown> })?.state;
-        let payload = remote.payload;
-        if (remoteState && Object.keys(device).length > 0) {
-          payload = { ...(remote.payload as object), state: { ...remoteState, ...device } };
-        }
+        const payload = withDeviceState(name, remote.payload, localDeviceState(name));
         await writeLocalStore(name, payload);
         restored.add(name);
         meta.stores[name] = { syncedAt: remote.updatedAt, changedAt: remote.updatedAt };
@@ -533,12 +587,7 @@ async function restoreNowExclusive(): Promise<string[]> {
       if (!isSyncedStore(name)) continue;
       const local = persist.readData(name);
       await backupStore(name, local);
-      const device = localDeviceState(name);
-      const remoteState = (row.payload as { state?: Record<string, unknown> })?.state;
-      let payload = row.payload;
-      if (remoteState && Object.keys(device).length > 0) {
-        payload = { ...(row.payload as object), state: { ...remoteState, ...device } };
-      }
+      const payload = withDeviceState(name, row.payload, localDeviceState(name));
       await writeLocalStore(name, payload);
       pulled.push(name);
       meta.stores[name] = { syncedAt: Date.now(), changedAt: Date.now() };

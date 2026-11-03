@@ -174,6 +174,7 @@ export async function resetAppData(): Promise<void> {
         "sync-meta",
         "approved-dirs",
         "local-library",
+        "opened-files",
         "data-owner",
         "lyrics-nudges",
         "recent-items",

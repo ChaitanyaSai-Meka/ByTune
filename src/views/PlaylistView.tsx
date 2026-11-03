@@ -18,6 +18,7 @@ import { FitText } from "../components/FitText";
 import { useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
 import { useLibrary, type Playlist } from "../stores/library";
+import { isLocalSong, staysOnDevice } from "../lib/devicePlaylists";
 import { usePlayer } from "../stores/player";
 import { useUI } from "../stores/ui";
 import type { Track } from "../types";
@@ -76,8 +77,11 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
   const totalSec = tracks.reduce((acc, t) => acc + t.duration, 0);
   // Spotify's model: a fresh playlist reads "PLAYLIST" — the "0 tracks"
   // count only appears once there's something to count.
+  // Songs from this computer don't sync: the playlist says what stays here.
+  const onDevice = staysOnDevice(playlist);
+  const localCount = tracks.filter(isLocalSong).length;
   const meta = [
-    "Playlist",
+    onDevice ? "On this device" : "Playlist",
     tracks.length ? plural(tracks.length, "track", "tracks") : "",
     totalSec > 0 ? fmtTotal(totalSec) : "",
   ]
@@ -167,6 +171,15 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
           <div className="text-[12px] font-semibold uppercase tracking-[0.14em] text-white/70 mt-1.5 drop-shadow-[0_1px_6px_rgba(0,0,0,0.5)]">
             {meta}
           </div>
+          {localCount > 0 && (
+            <p className="text-[12.5px] text-white/60 mt-1 drop-shadow-[0_1px_6px_rgba(0,0,0,0.5)]">
+              {onDevice
+                ? "All its songs are from this computer, so it stays here and doesn't sync."
+                : `${localCount === 1 ? "1 song is" : `${localCount} songs are`} from this computer and ${
+                    localCount === 1 ? "stays" : "stay"
+                  } on this device. The rest of the playlist syncs.`}
+            </p>
+          )}
 
           <div className="flex items-center justify-center gap-2.5 mt-4">
             {/* No `disabled` dimming when empty — play() no-ops on an empty

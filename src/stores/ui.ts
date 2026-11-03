@@ -80,6 +80,8 @@ export interface DialogRequest {
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
+  /** only tells the user something: one button, no Cancel */
+  notice?: boolean;
   onConfirm: (value: string) => void;
 }
 
