@@ -9,7 +9,7 @@
  * underline treatment, X returns to details). Lyrics live in the centre pane
  * (see LyricsCenter.tsx), not here.
  */
-import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { BadgeCheck, Heart, Music2, ThumbsDown, X } from "lucide-react";
 import { autoplayTail, isRadioSeed, shownTrack, usePlayer } from "../stores/player";
 import { useSettings } from "../stores/settings";
@@ -142,6 +142,10 @@ function TrackRow({
 
 /* ------------------------------------------------------------ queue sheet */
 
+/** A queue row's height plus the list's gap, and how many rows past the view stay built. */
+const ROW_PX = 50;
+const OVERSCAN = 10;
+
 /** Exported for the fullscreen player's Queue view — the same sheet, data
     and behavior as the right-rail queue; only the mount point differs. */
 export function QueuePanel({ onClose }: { onClose: () => void }) {
@@ -190,6 +194,33 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
     canDrag: (p) => (p < line ? line > 1 : p > line && suggestions.length > 1),
     onCommit: (from, to) => usePlayer.getState().moveUpcoming(queueIndexOf(from), queueIndexOf(to)),
   });
+  // Long queues: only the rows near the view are built (art, scrolling titles, drag
+  // handlers); the rest are plain row-high stand-ins, so a 3,000-song queue opens and
+  // moves on as fast as a short one. Every row stays in the list for drag-to-reorder
+  // to measure, and the row being dragged stays built while auto-scroll carries it.
+  const [inView, setInView] = useState({ first: 0, last: 40 });
+  const hasCurrent = !!current;
+  useEffect(() => {
+    const scroll = scrollRef.current;
+    const list = listRef.current;
+    if (!scroll || !list) return;
+    const update = (): void => {
+      const top = scroll.getBoundingClientRect().top - list.getBoundingClientRect().top;
+      const first = Math.max(0, Math.floor(top / ROW_PX) - OVERSCAN);
+      const last = Math.ceil((top + scroll.clientHeight) / ROW_PX) + OVERSCAN;
+      setInView((v) => (v.first === first && v.last === last ? v : { first, last }));
+    };
+    update();
+    scroll.addEventListener("scroll", update, { passive: true });
+    const ro = new ResizeObserver(update);
+    ro.observe(scroll);
+    return () => {
+      scroll.removeEventListener("scroll", update);
+      ro.disconnect();
+    };
+  }, [tab, hasCurrent]);
+  const built = (p: number): boolean => (p >= inView.first && p <= inView.last) || p === sortable.dragging;
+  const standIn = (key: string, p: number) => <div key={key} aria-hidden className="h-12" style={sortable.styleFor(p)} />;
   const note = suggestions.length
     ? `Suggested by AutoPlay${seedTitle ? ` \u00b7 similar to ${seedTitle}` : ""}`
     : !autoplay
@@ -215,23 +246,26 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
     return `${id}#${n}`;
   };
   const rows = [
-    ...own.map((t, p) => (
-      <TrackRow
-        key={stableKey(t.id)}
-        track={t}
-        style={sortable.styleFor(p)}
-        sortable={sortable.rowProps(p)}
-        onPlay={() => jumpTo(index + 1 + p)}
-        onRemove={() => {
-          // Removing a row shifts the list up under a stationary
-          // pointer — the row now under it never fires mouseenter,
-          // so clear the hover wash here (navigate() does the same
-          // for view changes).
-          useUI.getState().setTintThumb(null);
-          removeAt(index + 1 + p);
-        }}
-      />
-    )),
+    ...own.map((t, p) => {
+      if (!built(p)) return standIn(stableKey(t.id), p);
+      return (
+        <TrackRow
+          key={stableKey(t.id)}
+          track={t}
+          style={sortable.styleFor(p)}
+          sortable={sortable.rowProps(p)}
+          onPlay={() => jumpTo(index + 1 + p)}
+          onRemove={() => {
+            // Removing a row shifts the list up under a stationary
+            // pointer — the row now under it never fires mouseenter,
+            // so clear the hover wash here (navigate() does the same
+            // for view changes).
+            useUI.getState().setTintThumb(null);
+            removeAt(index + 1 + p);
+          }}
+        />
+      );
+    }),
     <div
       key="autoplay-line"
       style={sortable.styleFor(line)}
@@ -240,6 +274,7 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
       {note}
     </div>,
     ...suggestions.map((t, k) => {
+      if (!built(line + 1 + k)) return standIn(stableKey(t.id), line + 1 + k);
       const isLiked = likedIds.has(t.id);
       return (
         <TrackRow

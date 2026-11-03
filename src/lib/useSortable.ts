@@ -102,6 +102,8 @@ export function useSortable(opts: {
   styleFor: (index: number) => CSSProperties | undefined;
   rowProps: (index: number) => SortableRowProps;
   dragProps: (index: number) => SortableDragProps;
+  /** the row being dragged or gliding home, so a list that builds only the rows in view keeps it */
+  dragging: number | null;
 } {
   const [drag, setDrag] = useState<Drag | null>(null);
   const live = useRef<Drag | null>(null);
@@ -589,5 +591,5 @@ export function useSortable(opts: {
     },
   });
 
-  return { styleFor, rowProps, dragProps };
+  return { styleFor, rowProps, dragProps, dragging: drag?.from ?? null };
 }
