@@ -27,15 +27,6 @@ import { usePlayer } from "../stores/player";
 import { tintHoverHandlers, useUI } from "../stores/ui";
 import type { Track } from "../types";
 
-function greeting(): string {
-  const h = new Date().getHours();
-  if (h < 5) return "Up late?";
-  if (h < 12) return "Good morning";
-  if (h < 17) return "Good afternoon";
-  if (h < 22) return "Good evening";
-  return "Good night";
-}
-
 /** Quick-resume tiles — the compact 2×3 grid straight from history. Hovering
     a tile borrows its artwork colour for the panel wash (TintWash in App),
     and every tile is a drag source for the library. */
@@ -186,20 +177,11 @@ export function HomeView() {
   // rest it wears the playing track's colour, and hovering any card on any
   // view borrows that card's artwork colour.
 
-  // The algorithm, said plainly: who Home is leaning on right now.
-  const lately = profile?.lately.slice(0, 2).map((a) => a.name) ?? [];
-
   return (
     <div className="relative">
+      {/* No greeting: Home opens straight on your music. The heading stays for screen readers. */}
+      <h1 className="sr-only">Home</h1>
       <div className="relative space-y-10">
-        <div className="animate-slide-up pt-2">
-          <h1 className="font-display text-[34px] font-extrabold tracking-[-0.03em] text-ink-hi leading-tight">
-            {greeting()}
-          </h1>
-          <p className="text-[14px] text-ink-dim mt-1">
-            {lately.length ? `Lately you've been into ${lately.join(" and ")}` : "What do you feel like listening to?"}
-          </p>
-        </div>
 
         {sections.map((section) => (
           // A press inside a row counts for its kind: the rows you play from rise on your next visit.
