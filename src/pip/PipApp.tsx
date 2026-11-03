@@ -6,12 +6,12 @@
  * 330×342 viewport at 200% scale) and ByTune's own player treatments:
  *
  *   top bar 26px, auto-hides unless the window is hovered/focused — 6-dot
- *   grip centred, minimize and close X (12px boxes, right 29 / right 9,
- *   vertically centred);
+ *   grip centred, minimize and close X (12px marks in 20px hit boxes,
+ *   centred 35 / 15px from the right edge, vertically centred);
  *   artwork fills the card edge-to-edge (object-cover) inside a 4px frame
  *   (5px along the top on Windows — see TOP_INSET),
- *   easing down a few px beneath the dropped bar — transform only, the
- *   cover never re-crops (ByTune's original presentation);
+ *   sliding down beneath the dropped bar (21px on Windows, 22 elsewhere) —
+ *   transform only, the cover never re-crops (ByTune's original presentation);
  *   the card's background is the artwork's dominant colour (visible while
  *   the cover loads), blending 0.5s linear between tracks;
  *   seek (10px grey times + slider over a rise that is solid black at the
@@ -21,8 +21,10 @@
  *   #0a0a0a), opacity 0.3s cubic-bezier(0,0,0.5,1), transport row centred —
  *   mute (+ horizontal #282828 volume pill 96px wide, radius 12, on hover), shuffle, prev,
  *   PLAY (48px white circle, black icon, in a 56×48 button), next, repeat,
- *   copy-link — 32px buttons, 16px icons, #b3b3b3;
- *   48px metadata bar: ByTune's own 15px/12px title+artist treatment and
+ *   copy-link — 32px buttons, 16px icons, #b3b3b3, the row zoomed with the
+ *   window size (--pip-s);
+ *   48px metadata bar: ByTune's own 15px/12px title+artist treatment (the
+ *   title opens its album, the artist their page, in the main window) and
  *   the original 32px like button with its like-burst celebration, floated
  *   10px above the bottom edge;
  *   resize grip 9×9 (0.5 strokes) 4px from the corner;
@@ -36,6 +38,8 @@
  * Hover mechanics: pointer events stop over the app-region drag surface, so
  * visibility is driven by the main process's native cursor watch
  * ("pip:cursor-inside") + keyboard focus — never by per-element listeners.
+ * The cover is a drag handle like the rest of that surface: a click on it
+ * moves the window, it never plays or pauses.
  */
 import { useEffect, useRef, useState, type ReactNode, type FocusEvent } from "react";
 import { Loader2 } from "lucide-react";
@@ -69,10 +73,8 @@ const INSET = 4; // frame gap around the artwork card (left/right)
  *  which renders the collapsed top frame a device pixel thinner than the
  *  sides — on Windows the top runs 1px larger so all three read equal. */
 const TOP_INSET = isWindows ? INSET + 1 : INSET;
-/** How far the cover eases down when the panel drops. Spotify's artwork
- *  barely shifts — its ambient card grows behind a FIXED cover — so the
- *  motion stays a hint (8px), not a half-cover slide. */
-const COVER_SLIDE = 8;
+/** The overlay card's width at the default window size — the controls row's zoom is 1 there. */
+const CARD_W = 343;
 const GRADIENT = "linear-gradient(rgba(18, 18, 18, 0.53) 0%, rgb(10, 10, 10) 100%)";
 
 /** like-burst confetti — flight target (--tx/--ty), spin (--rot), size and
@@ -175,10 +177,17 @@ export function PipApp() {
   /** Spotify-style like-burst overlay (set when adding, self-clears) */
   const [likeBurst, setLikeBurst] = useState(false);
   const likeBurstTimer = useRef<number | null>(null);
-  /** While the seek thumb is held down, the drag is purely visual: snapshots
-      pushed from the main window must not fight the thumb mid-drag. The seek
-      command is sent once, on release. */
-  const [seekValue, setSeekValue] = useState<number | null>(null);
+  /** The seek thumb's own value. While it's held the drag is purely visual:
+      snapshots pushed from the main window must not fight the thumb mid-drag,
+      and the seek command is sent once, on release. Once sent, the thumb
+      stays where it was dropped until a snapshot shows the seek landed, so it
+      never flashes back to the old spot. */
+  const [seek, setSeek] = useState<{ v: number; sent: boolean } | null>(null);
+  const seekRef = useRef(seek);
+  seekRef.current = seek;
+  /** "Link copied" feedback on the copy-link button */
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<number | null>(null);
   /** dominant colour of the current artwork — the card's loading backdrop */
   const [ambient, setAmbient] = useState("#282828");
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -188,21 +197,69 @@ export function PipApp() {
     const off = window.bytune?.onPipState((s) => setSnap(s as PipSnapshot));
     return off;
   }, []);
+  const snapRef = useRef(snap);
+  snapRef.current = snap;
 
-  /* Space toggles playback while the PiP window is focused — main-window
-     parity. The engine lives in the main window, so this routes over the
-     command channel; text fields keep their normal Space, and keys only ever
-     arrive here while the PiP window itself is focused. */
+  /* The main window's playback shortcuts, while the PiP window is focused:
+     Space play/pause, ←/→ 5s back/forward (Shift: previous/next song), ↑/↓
+     volume, M mute, S shuffle, R repeat. The engine lives in the main window,
+     so they route over the command channel. A focused slider keeps its own
+     arrow keys, and only the plain arrows repeat while held. */
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.code !== "Space" || e.repeat) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      e.preventDefault();
-      send({ type: "toggle" });
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const arrow = e.code.startsWith("Arrow");
+      if (arrow && e.target instanceof HTMLInputElement) return;
+      if (e.repeat && (!arrow || e.shiftKey)) return;
+      const s = snapRef.current;
+      switch (e.code) {
+        case "Space":
+          e.preventDefault();
+          send({ type: "toggle" });
+          break;
+        case "ArrowRight":
+          if (e.shiftKey) send({ type: "next" });
+          else if (s) send({ type: "seek", sec: s.position + 5 });
+          break;
+        case "ArrowLeft":
+          if (e.shiftKey) send({ type: "prev" });
+          else if (s) send({ type: "seek", sec: Math.max(0, s.position - 5) });
+          break;
+        case "ArrowUp":
+        case "ArrowDown":
+          e.preventDefault();
+          if (s) send({ type: "volume", v: s.volume + (e.code === "ArrowUp" ? 0.05 : -0.05) });
+          break;
+        case "KeyM":
+          send({ type: "mute" });
+          break;
+        case "KeyS":
+          send({ type: "shuffle" });
+          break;
+        case "KeyR":
+          send({ type: "repeat" });
+          break;
+        default:
+          break;
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  /* The transport row zooms with the window (--pip-s, 1 at the default size):
+     a small window keeps every button inside the card, a big one grows them
+     (capped), and a short one keeps the row and its volume pill inside the
+     overlay. Written straight to the DOM — no re-render churn mid-resize. */
+  useEffect(() => {
+    const zone = zoneRef.current;
+    if (!zone) return;
+    const ro = new ResizeObserver(() => {
+      const s = Math.min(1.3, (zone.clientWidth - 2 * INSET) / CARD_W, (zone.clientHeight - TOP_BAR_H) / 120);
+      zone.style.setProperty("--pip-s", s.toFixed(3));
+    });
+    ro.observe(zone);
+    return () => ro.disconnect();
   }, []);
 
   /* The OS window's corners are rounded by the OS itself; the shell stays
@@ -222,7 +279,7 @@ export function PipApp() {
   const track = snap?.track ?? null;
   const trackId = track?.id ?? null;
   const thumb = track?.thumb ? upgradeArtwork(track.thumb) : "";
-  useEffect(() => setSeekValue(null), [trackId]);
+  useEffect(() => setSeek(null), [trackId]);
 
   /* Dominant artwork colour for the card's backdrop (visible while the cover
      loads): 48px canvas readback, 4-bit/channel quantisation, best bucket by
@@ -287,6 +344,7 @@ export function PipApp() {
     () => () => {
       if (volTimer.current !== null) window.clearTimeout(volTimer.current);
       if (likeBurstTimer.current !== null) window.clearTimeout(likeBurstTimer.current);
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
     },
     []
   );
@@ -299,17 +357,38 @@ export function PipApp() {
   const duration = snap?.duration ?? 0;
   const position = Math.min(snap?.position ?? 0, duration > 0 ? duration : Infinity);
   const max = duration > 0 ? duration : 1;
-  const shownSeek = Math.min(seekValue ?? position, max);
+  const shownSeek = Math.min(seek?.v ?? position, max);
+  /* Sent once per drag or key adjustment: on a key let go, on blur, or on a
+     release anywhere in the window — a drag whose pointer the window loses
+     mid-way (focus stolen, say) never gets its release on the slider, and
+     would otherwise sit unsent with the time frozen. Reads refs only, so the
+     window listener's first copy serves for good. */
   const commitSeek = (): void => {
-    if (seekValue === null) return;
-    send({ type: "seek", sec: Math.min(seekValue, max) });
-    setSeekValue(null);
+    const s = seekRef.current;
+    if (!s || s.sent) return;
+    seekRef.current = { v: s.v, sent: true };
+    send({ type: "seek", sec: s.v });
+    setSeek(seekRef.current);
   };
+  useEffect(() => {
+    window.addEventListener("pointerup", commitSeek);
+    return () => window.removeEventListener("pointerup", commitSeek);
+  }, []);
+  // A dropped thumb lets go once a snapshot puts playback next to it — or
+  // after 1.5s, should the seek never land.
+  useEffect(() => {
+    if (seek?.sent && Math.abs(position - seek.v) < 1.5) setSeek(null);
+  }, [seek, position]);
+  useEffect(() => {
+    if (!seek?.sent) return;
+    const t = window.setTimeout(() => setSeek(null), 1500);
+    return () => window.clearTimeout(t);
+  }, [seek]);
   const canShare = sharableId(track?.id ?? null);
 
-  const onCardFocus = (e: FocusEvent<HTMLDivElement>): void => {
-    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocusWithin(true);
-  };
+  // Keyboard focus holds the controls up; the focus a mouse click leaves on a
+  // button doesn't, so they still hide once the cursor leaves the window.
+  const onCardFocus = (e: FocusEvent<HTMLDivElement>): void => setFocusWithin((e.target as Element).matches(":focus-visible"));
   const onCardBlur = (e: FocusEvent<HTMLDivElement>): void => {
     if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocusWithin(false);
   };
@@ -330,10 +409,12 @@ export function PipApp() {
     }, 180);
   };
 
-  /* copy the song link (clipboard API with a textarea fallback) */
+  /* copy the song link (clipboard API with a textarea fallback); the button
+     shows a check and "Link copied" for a moment once it worked */
   const copyShareLink = async (): Promise<void> => {
     if (!track || !canShare) return;
     const url = `https://music.youtube.com/watch?v=${track.id}`;
+    let ok = true;
     try {
       await navigator.clipboard.writeText(url);
     } catch {
@@ -344,12 +425,23 @@ export function PipApp() {
         ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
         document.body.appendChild(ta);
         ta.select();
-        document.execCommand("copy");
+        ok = document.execCommand("copy");
         ta.remove();
       } catch {
-        /* clipboard unavailable */
+        ok = false; // clipboard unavailable
       }
     }
+    if (!ok) return;
+    setCopied(true);
+    if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+    copiedTimer.current = window.setTimeout(() => setCopied(false), 1500);
+  };
+
+  /* Title → its album, artist → their page, in the main window (brought
+     forward); with nothing playing, a click just brings ByTune forward. */
+  const openInMain = (to: "album" | "artist"): void => {
+    window.bytune?.pipShowMain();
+    if (track) send({ type: "open", to });
   };
 
   const reveal = (extra = ""): string =>
@@ -364,7 +456,7 @@ export function PipApp() {
       onBlur={onCardBlur}
       onPointerEnter={() => setCursorInside(true)}
       onContextMenu={(e) => e.preventDefault()}
-      className="animate-pip-in fixed inset-0 flex select-none flex-col overflow-hidden bg-black text-white"
+      className="pip-root animate-pip-in fixed inset-0 flex select-none flex-col overflow-hidden bg-black text-white"
     >
       {/* ------------------------- upper player zone ------------------------- */}
       {/* Everything above the metadata bar. Native drag surface first: the
@@ -376,8 +468,8 @@ export function PipApp() {
       <div ref={zoneRef} className="relative min-h-0 flex-1 overflow-hidden">
         <div aria-hidden className="absolute inset-0" style={dragRegion} />
 
-        {/* the cover — fills the card edge-to-edge and slides 22px beneath
-            the dropped bar (transform only: the image keeps its exact
+        {/* the cover — fills the card edge-to-edge and slides beneath the
+            dropped bar, TOP_BAR_H − TOP_INSET (transform only: the image keeps its exact
             rendered size, never re-crops; the tucked bottom clips at the
             zone edge). The layer must NOT carry app-regions: drag carve-outs
             inside a transformed subtree are placed wrong by Chromium, so
@@ -418,14 +510,8 @@ export function PipApp() {
           }`}
           style={{ top: TOP_BAR_H, backgroundImage: GRADIENT }}
         >
-          <div
-            className={`absolute inset-0 flex items-center justify-center ${reveal()}`}
-            onClick={() => send({ type: "toggle" })}
-          >
-            <div
-              className="pip-controls flex items-center justify-center gap-[2px] px-1"
-              onClick={(e) => e.stopPropagation()}
-            >
+          <div className={`absolute inset-0 flex items-center justify-center ${reveal()}`}>
+            <div className="pip-controls flex items-center justify-center gap-[2px] px-1">
               {/* volume + vertical popover — one hover region, bridged */}
               <div
                 className="relative"
@@ -504,8 +590,16 @@ export function PipApp() {
               >
                 {snap?.repeat === "one" ? <SpRepeatOne /> : <SpRepeat />}
               </IconBtn>
-              <IconBtn onClick={() => void copyShareLink()} disabled={!canShare} title="Copy link to Song">
-                <SpCopyLink className="h-4 w-4" />
+              <IconBtn onClick={() => void copyShareLink()} disabled={!canShare} title={copied ? "Link copied" : "Copy link to Song"}>
+                <span key={copied ? "copied" : "copy"} className="icon-swap">
+                  {copied ? (
+                    <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <path d="M3 8.5l3.2 3.2L13 4.8" />
+                    </svg>
+                  ) : (
+                    <SpCopyLink className="h-4 w-4" />
+                  )}
+                </span>
               </IconBtn>
             </div>
           </div>
@@ -518,28 +612,29 @@ export function PipApp() {
         <div
           className={`absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black via-black/70 to-transparent px-3 pb-2 pt-5 ${reveal()}`}
           style={noDragRegion}
-          onClick={(e) => e.stopPropagation()}
           aria-hidden={!expanded}
         >
           <div className="flex items-center gap-2">
             <span className="w-7 shrink-0 text-right text-[10px] tabular-nums leading-none text-white/70">
               {fmtTime(shownSeek)}
             </span>
+            {/* No step, and a millisecond-rounded value: the browser keeps
+                exactly the value React writes. A stepped slider rounded the
+                live position, and React read that rounding as an edit — the
+                slider's own release event then re-armed the old position as a
+                fresh drag, freezing the time and seeking back on the next blur. */}
             <input
               type="range"
               aria-label="Seek"
               className="slider mp-slider min-w-0 flex-1"
               min={0}
               max={max}
-              step={0.5}
-              value={shownSeek}
+              step="any"
+              value={Math.round(shownSeek * 1000) / 1000}
               disabled={!track}
-              onChange={(e) => setSeekValue(Number(e.target.value))}
-              onPointerUp={commitSeek}
+              onChange={(e) => setSeek({ v: Number(e.target.value), sent: false })}
               onKeyUp={commitSeek}
-              onBlur={() => {
-                if (seekValue !== null) commitSeek();
-              }}
+              onBlur={commitSeek}
               style={{ "--fill": `${Math.min(100, (shownSeek / max) * 100)}%` } as React.CSSProperties}
             />
             <span className="w-7 shrink-0 text-[10px] tabular-nums leading-none text-white/70">
@@ -559,19 +654,22 @@ export function PipApp() {
             }`}
           >
             <SpGrip className="h-6 w-6 text-[#b3b3b3]" />
+            {/* 20px hit boxes around the 12px marks — same look, easier to hit */}
             <button
               type="button"
               style={noDragRegion}
               onClick={() => window.bytune?.pipMinimize()}
               title="Minimize miniplayer"
               aria-label="Minimize miniplayer"
-              className="absolute right-[29px] top-[7px] grid h-3 w-3 cursor-pointer place-items-center rounded-full text-white transition-colors duration-150 hover:bg-white/10 active:scale-95"
+              className="group absolute right-[25px] top-[3px] grid h-5 w-5 cursor-pointer place-items-center rounded-full text-white active:scale-95"
             >
-              <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                {/* span matches one X stick's tip-to-tip reach (2.47→13.53
-                    incl. round caps) so the minus reads as wide as the X */}
-                <path d="M3.27 8h9.46" />
-              </svg>
+              <span className="grid h-3 w-3 place-items-center rounded-full transition-colors duration-150 group-hover:bg-white/10">
+                <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                  {/* span matches one X stick's tip-to-tip reach (2.47→13.53
+                      incl. round caps) so the minus reads as wide as the X */}
+                  <path d="M3.27 8h9.46" />
+                </svg>
+              </span>
             </button>
             <button
               type="button"
@@ -579,9 +677,11 @@ export function PipApp() {
               onClick={() => window.bytune?.pipClose()}
               title="Close miniplayer"
               aria-label="Close miniplayer"
-              className="absolute right-[9px] top-[7px] grid h-3 w-3 cursor-pointer place-items-center rounded-full text-white transition-colors duration-150 hover:bg-white/10 active:scale-95"
+              className="group absolute right-[5px] top-[3px] grid h-5 w-5 cursor-pointer place-items-center rounded-full text-white active:scale-95"
             >
-              <SpClose className="h-3.5 w-3.5" />
+              <span className="grid h-3 w-3 place-items-center rounded-full transition-colors duration-150 group-hover:bg-white/10">
+                <SpClose className="h-3.5 w-3.5" />
+              </span>
             </button>
           </div>
         </div>
@@ -590,19 +690,30 @@ export function PipApp() {
       {/* ------------------------- metadata bar ------------------------- */}
       {/* floats a 10px gap above the bottom edge instead of sitting flush */}
       <div className="relative z-10 mx-2 mb-[10px] flex h-12 shrink-0 items-center gap-1">
-        <button
-          type="button"
-          onClick={() => window.bytune?.pipShowMain()}
-          title="Open ByTune"
-          className="min-w-0 flex-1 cursor-pointer text-left"
-        >
-          <div key={trackId ?? "t"} className="animate-meta-in min-w-0 text-[15px] font-semibold leading-[1.35] text-white">
+        <div className="min-w-0 flex-1">
+          <button
+            key={trackId ?? "t"}
+            type="button"
+            onClick={() => openInMain("album")}
+            title={track ? "Go to album" : "Open ByTune"}
+            className={`animate-meta-in block w-full min-w-0 cursor-pointer text-left text-[15px] font-semibold leading-[1.35] text-white ${
+              track ? "hover:underline" : ""
+            }`}
+          >
             <FitText mode="auto" text={track ? shortTitle(track.title) : "Nothing playing"} full={track?.title} />
-          </div>
-          <div key={trackId ? `${trackId}-a` : "a"} className="animate-meta-in min-w-0 text-[12px] leading-[1.4] text-white/60">
+          </button>
+          <button
+            key={trackId ? `${trackId}-a` : "a"}
+            type="button"
+            onClick={() => openInMain("artist")}
+            title={track ? "Go to artist" : "Open ByTune"}
+            className={`animate-meta-in block w-full min-w-0 cursor-pointer text-left text-[12px] leading-[1.4] text-white/60 ${
+              track ? "hover:text-white hover:underline" : ""
+            }`}
+          >
             <FitText mode="auto" text={track ? track.artist : ""} />
-          </div>
-        </button>
+          </button>
+        </div>
 
         {track && (
           <button
@@ -618,7 +729,7 @@ export function PipApp() {
               }
               send({ type: "like" });
             }}
-            title={snap?.liked ? "Edit Liked Songs" : "Save to your library"}
+            title={snap?.liked ? "Remove from Liked Songs" : "Save to Liked Songs"}
             aria-label={snap?.liked ? "Remove from Liked Songs" : "Save to Liked Songs"}
             aria-pressed={snap?.liked}
             className="relative grid h-8 w-8 shrink-0 cursor-pointer place-items-center rounded-full transition-transform duration-150 hover:scale-105 active:scale-90"

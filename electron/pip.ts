@@ -160,9 +160,10 @@ function visibleRect(r: PipRect): PipRect {
     return r.x + r.w > a.x + 56 && r.x < a.x + a.width - 56 && r.y + r.h > a.y + 56 && r.y < a.y + a.height - 56;
   });
   if (!reachable) return defaultRect();
-  // Final safety net: keep the box inside the primary work area (never under
-  // the taskbar, never off-screen).
-  const wa = screen.getPrimaryDisplay().workArea;
+  // Final safety net: keep the box inside the work area of the display it is
+  // on (never under the taskbar, never off-screen) — a second monitor's spot
+  // must not be dragged back onto the primary one.
+  const wa = screen.getDisplayMatching({ x: r.x, y: r.y, width: r.w, height: r.h }).workArea;
   return {
     w: r.w,
     h: r.h,
@@ -220,6 +221,12 @@ export function savePipRect(): void {
 
 export function isPipOpen(): boolean {
   return !!pipWindow && !pipWindow.isDestroyed();
+}
+
+/** Open and on screen. A minimized miniplayer reads as closed to the main
+ *  window: its button offers to bring it back, and no snapshots are pushed. */
+function isPipShown(): boolean {
+  return isPipOpen() && !pipWindow?.isMinimized();
 }
 
 export function openPip(): void {
@@ -287,6 +294,11 @@ export function openPip(): void {
   pipWindow.on("moved", scheduleRectSave);
   pipWindow.on("resized", scheduleRectSave);
   pipWindow.on("close", savePipRect);
+  // The page's own <title> ("ByTune") would rename this window, leaving two
+  // "ByTune" entries in the taskbar and Alt-Tab.
+  pipWindow.on("page-title-updated", (event) => event.preventDefault());
+  pipWindow.on("minimize", () => notifyMain("pip:open-changed", false));
+  pipWindow.on("restore", () => notifyMain("pip:open-changed", true));
   // Same webContents-focus rule as the main window: when the PiP window
   // becomes active its page must hold keyboard focus right away, so Space
   // toggles playback without a click first.
@@ -316,9 +328,10 @@ export function closePip(): void {
 }
 
 export function togglePip(): boolean {
-  if (isPipOpen()) closePip();
+  // A minimized miniplayer comes back (openPip restores it) rather than closing.
+  if (isPipShown()) closePip();
   else openPip();
-  return isPipOpen();
+  return isPipShown();
 }
 
 export function registerPipIpc(): void {
@@ -327,7 +340,7 @@ export function registerPipIpc(): void {
   const fromPip = (event: SenderEvent): boolean => isTrustedSender(event, pipWindow, true);
   const fromEither = (event: SenderEvent): boolean => fromPip(event) || isTrustedSender(event, getMainWindow());
   ipcMain.handle("pip:toggle", (event) => { if (fromEither(event)) return togglePip(); });
-  ipcMain.handle("pip:isOpen", (event) => (fromEither(event) ? isPipOpen() : false));
+  ipcMain.handle("pip:isOpen", (event) => (fromEither(event) ? isPipShown() : false));
   ipcMain.on("pip:close", (event) => { if (fromPip(event)) closePip(); });
   // Real native minimize — the window stays alive (playback continues) and
   // is restorable from the Windows taskbar.

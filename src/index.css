@@ -536,11 +536,17 @@ input[type="range"].slider.slider-dot::-webkit-slider-thumb {
 }
 
 /* PiP transport scaling — the controls row zooms with the native window size
-   (PipApp drives --pip-s from a ResizeObserver, 1.0 at the 300px default),
-   so buttons shrink before they can crowd the artwork edges on small windows
-   and grow proportionally on large ones. Scoped: only .pip-controls uses it. */
+   (PipApp drives --pip-s from a ResizeObserver, 1 at the default size), so
+   buttons shrink before they can crowd the artwork edges on small windows
+   and grow (capped) on large ones. Scoped: only .pip-controls uses it. */
 .pip-controls {
   zoom: var(--pip-s, 1);
+}
+/* The app-wide :focus-visible reset hides outlines; the miniplayer's
+   controls draw the app's focus ring for keyboard users. */
+.pip-root :is(button, input):focus-visible {
+  outline: 2px solid rgb(var(--accent));
+  outline-offset: 2px;
 }
 
 /* Hero palette wash layer: the incoming gradient fades in over the previous

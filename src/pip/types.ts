@@ -39,4 +39,5 @@ export type PipCommand =
   | { type: "shuffle" }
   | { type: "repeat" }
   | { type: "like" }
-  | { type: "lyrics" };
+  /** the shown song's album or artist page, in the main window */
+  | { type: "open"; to: "album" | "artist" };
