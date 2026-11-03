@@ -38,7 +38,6 @@ import { shortTitle, titleSource } from "../lib/format";
 import { FitText } from "./FitText";
 import { useCanvas } from "../lib/canvas";
 import { requestLyricsAlignment, useLyricsOffset } from "../lib/lyricsOffset";
-import { LyricsTiming } from "./LyricsTiming";
 import type { LyricsResult } from "../types";
 
 /* ================================================================ backdrop */
@@ -528,7 +527,6 @@ export function NowPlaying() {
               <div className="flex-1 min-h-0 mt-5 flex flex-col">
                 {mode === "lyrics" ? (
                   <div ref={lyricsPanelRef} className="group relative flex-1 min-h-0 flex">
-                    <LyricsTiming trackId={track.id} className="absolute right-0 top-0 z-10" />
                     {/* Same LyricsView the centre pane uses, hero scale —
                         keyed per track so the scroll position resets with the
                         song, exactly like LyricsCenter. The anchor keeps the
