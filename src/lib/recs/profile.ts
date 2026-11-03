@@ -60,6 +60,7 @@ function emptySummary(period: ReplaySummary["period"]): ReplaySummary {
     days: [],
     period,
     months: [],
+    counts: { tracks: 0, artists: 0, albums: 0 },
   };
 }
 

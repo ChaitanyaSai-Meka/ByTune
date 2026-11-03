@@ -150,6 +150,10 @@ const api = {
   playlistExport: (name: string, m3u8: string, json: string): Promise<{ path?: string; cancelled?: boolean }> =>
     ipcRenderer.invoke("playlist:export", name, m3u8, json),
   playlistImport: (): Promise<{ name: string; text: string } | null> => ipcRenderer.invoke("playlist:import"),
+  /** Replay's share card: save the PNG through the native dialog, or copy it as an image. */
+  saveReplayImage: (png: Uint8Array, name: string): Promise<{ path?: string; cancelled?: boolean }> =>
+    ipcRenderer.invoke("replay:saveImage", png, name),
+  copyReplayImage: (png: Uint8Array): Promise<boolean> => ipcRenderer.invoke("replay:copyImage", png),
   /** A local file's ReplayGain track gain (dB), for volume leveling. */
   localGainDb: (id: string): Promise<number | null> => ipcRenderer.invoke("local:gainDb", id),
   getPodcast: (id: string): Promise<PodcastPage> => ipcRenderer.invoke("music:podcast", id),

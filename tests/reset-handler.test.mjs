@@ -29,6 +29,7 @@ test("actual main reset IPC clears files and stops the real stats timer", async 
       require(name) {
         if (name === "electron") return electron;
         if (name === "../src/lib/config") return { SYNCED_STORES: ["library", "settings", "recent-searches", "listening-signals"] };
+        if (name === "../src/lib/replayFormat") return { creditNames: (line) => [line] };
         if (name === "./persist") return loaded.persist;
         if (name === "./stats") return loaded.stats;
         if (name === "./data-transition") return loaded.transition;

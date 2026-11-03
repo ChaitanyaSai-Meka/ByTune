@@ -30,6 +30,7 @@ import { app } from "electron";
 import * as fs from "fs";
 import * as path from "path";
 import * as persist from "./persist";
+import { creditNames } from "../src/lib/replayFormat";
 import type { Track } from "../src/types";
 
 export interface TrackEntry {
@@ -69,6 +70,8 @@ export interface ReplaySummary {
   days: { date: string; ms: number }[];
   period: ReplayPeriod;
   months: string[];
+  /** how many different songs, artists and albums the period holds (the lists stop at 50) */
+  counts: { tracks: number; artists: number; albums: number };
 }
 
 const PLAY_FLOOR_MS = 30_000;
@@ -457,6 +460,8 @@ export function summary(period: ReplayPeriod): ReplaySummary {
     days: [...days.entries()].sort((x, y) => x[0].localeCompare(y[0])).map(([date, ms]) => ({ date, ms })),
     period,
     months,
+    // Artists as Replay lists them: each artist on a shared credit line counts.
+    counts: { tracks: tracks.size, artists: new Set([...artists.keys()].flatMap(creditNames)).size, albums: albums.size },
   };
 }
 

@@ -1,5 +1,5 @@
 /** ByTune desktop — Electron main process. */
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, session, shell } from "electron";
+import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, nativeImage, protocol, session, shell } from "electron";
 import type { NativeImage } from "electron";
 import { pathToFileURL } from "url";
 import * as fs from "fs";
@@ -625,6 +625,33 @@ function registerIpc(): void {
     return { name: path.basename(file).replace(/\.(m3u8?|json)$/i, ""), text: await fs.promises.readFile(file, "utf-8") };
   });
   ipc.handle("backup:import", () => backupImport(mainWindow));
+
+  // Replay's share card: a PNG the renderer drew, saved through the native
+  // dialog or copied to the clipboard as an image. Only real PNG bytes pass.
+  const REPLAY_IMAGE_MAX = 20 * 1024 * 1024;
+  const replayPng = (bytes: unknown): Buffer => {
+    if (!(bytes instanceof Uint8Array) || bytes.length < 8 || bytes.length > REPLAY_IMAGE_MAX) throw new Error("Invalid image");
+    const png = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (png.readUInt32BE(0) !== 0x89504e47 || png.readUInt32BE(4) !== 0x0d0a1a0a) throw new Error("Not a PNG image");
+    return png;
+  };
+  ipc.handle("replay:saveImage", async (_e, bytes: unknown, name: unknown) => {
+    const png = replayPng(bytes);
+    const safeName = (typeof name === "string" ? name : "").replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").trim().slice(0, 100) || "ByTune Replay";
+    const opts = { title: "Save your Replay", defaultPath: `${safeName}.png`, filters: [{ name: "PNG image", extensions: ["png"] }] };
+    const res = mainWindow ? await dialog.showSaveDialog(mainWindow, opts) : await dialog.showSaveDialog(opts);
+    if (res.canceled || !res.filePath) return { cancelled: true };
+    const file = /\.png$/i.test(res.filePath) ? res.filePath : `${res.filePath}.png`;
+    await fs.promises.writeFile(file, png);
+    return { path: file };
+  });
+  ipc.handle("replay:copyImage", async (_e, bytes: unknown) => {
+    const png = replayPng(bytes);
+    if (nativeImage.createFromBuffer(png).isEmpty()) throw new Error("Not a PNG image");
+    // A plain copy: a Buffer may sit on a shared pool, which Blob won't take.
+    await clipboard.write([new ClipboardItem({ "image/png": new Blob([new Uint8Array(png)], { type: "image/png" }) })]);
+    return true;
+  });
 
   // ---- Accounts (Supabase) + cloud backup ----
   const emitAuthChanged = (): void => {
