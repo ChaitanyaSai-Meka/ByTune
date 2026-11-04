@@ -20,6 +20,12 @@ import type { RoomChange, RoomState, RoomView, Track } from "../src/types";
 
 const STASH = "room-stash";
 const PING_MS = 30_000;
+/** The server takes up to 128 KB of queue (0004); this leaves room for how Postgres writes JSON out. */
+const QUEUE_BYTES = 120_000;
+/** What a server still on 0002 takes. */
+const OLD_MAX_QUEUE = 25;
+/** Unheard from for this long, a member has been let go (0004: after 3 minutes without a check-in). */
+const AWAY_MS = 2 * 60_000;
 
 let state: RoomState | null = null;
 let problem: string | undefined;
@@ -29,7 +35,13 @@ let offsetMs = 0;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let retryMs = 1000;
+/** When the room last answered this listener as one of its members. */
+let lastHeard = 0;
 let publish: (view: RoomView) => void = () => undefined;
+
+/** Out of the room: after being out of touch long enough, that was for being away. */
+const outOfRoom = (otherwise: string): string =>
+  Date.now() - lastHeard > AWAY_MS ? "You were away too long and left the room." : otherwise;
 
 /** Where the room's changes go (main sends them to the page). */
 export function onRoomChange(send: (view: RoomView) => void): void {
@@ -82,10 +94,11 @@ function take(raw: unknown, timing?: { sentAt: number; receivedAt: number }): vo
   if (timing) addSample(timing.sentAt, timing.receivedAt, (raw as { serverMs?: unknown }).serverMs);
   if (state && next.id === state.id && next.seq < state.seq) return; // overtaken on the way
   if (!next.members.some((m) => m.userId === auth.sessionInfo().userId)) {
-    end("You were removed from the room.");
+    end(outOfRoom("You were removed from the room."));
     return;
   }
   state = next;
+  lastHeard = Date.now();
   problem = undefined;
   publish(roomView());
 }
@@ -130,7 +143,7 @@ async function ping(): Promise<void> {
   try {
     take(await rpc("room_ping", { p_room: state.id }), { sentAt, receivedAt: Date.now() });
   } catch (err) {
-    if (/not in this room/i.test(message(err))) end("The room has ended, or you were removed.");
+    if (/not in this room/i.test(message(err))) end(outOfRoom("The room has ended, or you were removed."));
   }
 }
 
@@ -152,6 +165,7 @@ async function enter(raw: unknown): Promise<RoomView> {
   const next = roomState(raw);
   if (!next) throw new Error("The server's answer didn't read as a room.");
   state = next;
+  lastHeard = Date.now();
   await persist.writeData(STASH, { ...((persist.readData(STASH) as object | null) ?? {}), roomId: next.id }).catch(() => undefined);
   await measureClock().catch(() => undefined);
   await listen(next.id).catch((err) => console.warn("[bytune] room channel:", message(err)));
@@ -176,20 +190,45 @@ export async function leaveRoom(): Promise<RoomView> {
   return roomView();
 }
 
+/** The queue as the server takes it: room songs, as many as fit its limits (100 songs, 128 KB). */
+function fitQueue(queue: Track[]): Track[] {
+  const fit: Track[] = [];
+  let bytes = 2;
+  for (const song of queue.map(roomTrack)) {
+    if (!song) continue;
+    bytes += Buffer.byteLength(JSON.stringify(song)) + 1;
+    if (fit.length >= MAX_ROOM_QUEUE || bytes > QUEUE_BYTES) break;
+    fit.push(song);
+  }
+  return fit;
+}
+
 /** A change to what's playing. A stale one comes back as the room's current state, which the page applies. */
 export async function updateRoom(change: RoomChange): Promise<RoomView> {
   if (!state) throw new Error("You're not in a room.");
-  const sentAt = Date.now();
-  const raw = await rpc("room_update", {
-    p_room: state.id,
-    p_seq: change.baseSeq,
-    p_track: change.track ? roomTrack(change.track) : null,
-    p_position_ms: Math.max(0, Math.round(change.positionMs)),
-    p_playing: change.playing,
-    p_queue: change.queue.map(roomTrack).filter((t): t is Track => !!t).slice(0, MAX_ROOM_QUEUE),
-    p_lead: change.lead,
-    p_note: change.note.slice(0, 100),
-  });
+  const room = state.id;
+  const send = (queue: Track[]): Promise<unknown> =>
+    rpc("room_update", {
+      p_room: room,
+      p_seq: change.baseSeq,
+      p_track: change.track ? roomTrack(change.track) : null,
+      p_position_ms: Math.max(0, Math.round(change.positionMs)),
+      p_playing: change.playing,
+      p_queue: queue,
+      p_lead: change.lead,
+      p_note: change.note.slice(0, 100),
+    });
+  const queue = fitQueue(change.queue);
+  let sentAt = Date.now();
+  let raw: unknown;
+  try {
+    raw = await send(queue);
+  } catch (err) {
+    // A server still on 0002 takes 25 songs: the change goes through with those.
+    if (queue.length <= OLD_MAX_QUEUE || !/Not a queue/.test(message(err))) throw err;
+    sentAt = Date.now();
+    raw = await send(queue.slice(0, OLD_MAX_QUEUE));
+  }
   take(raw, { sentAt, receivedAt: Date.now() });
   return roomView();
 }

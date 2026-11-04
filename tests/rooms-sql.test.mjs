@@ -12,6 +12,7 @@ import { PGlite } from "@electric-sql/pglite";
 
 const MIGRATION = readFileSync(new URL("../supabase/migrations/0002-rooms.sql", import.meta.url), "utf8");
 const NAMES = readFileSync(new URL("../supabase/migrations/0003-display-names.sql", import.meta.url), "utf8");
+const LONGER = readFileSync(new URL("../supabase/migrations/0004-room-queue-and-away.sql", import.meta.url), "utf8");
 const SUPABASE = `
   create role anon nologin;
   create role authenticated nologin;
@@ -49,6 +50,7 @@ async function database() {
   }
   await db.exec(MIGRATION);
   await db.exec(NAMES);
+  await db.exec(LONGER);
   // Runs one statement as a signed-in user (or signed out with user null), as Supabase's API would.
   const as = async (user, sql, params = [], topic = "") => {
     await db.query("select set_config('request.jwt.claim.sub', $1, false), set_config('realtime.topic', $2, false)", [user ?? "", topic]);
@@ -117,7 +119,7 @@ test("playback changes: seq guards against stale updates, starts are anchored ah
   assert.equal(next.activity[0].text, "alice played Song 1", "no note, no activity line");
   for (const [track, pos, queue, message] of [
     [{ id: "../etc/passwd" }, 0, [], "Not a song"],
-    [song(YT(3)), 0, Array.from({ length: 26 }, (_, i) => song(YT(100 + i))), "Not a queue"],
+    [song(YT(3)), 0, Array.from({ length: 101 }, (_, i) => song(YT(100 + i))), "Not a queue"],
     [song(YT(3)), 0, [{ id: 1 }], "Not a queue"],
     [song(YT(3)), -5, [], "Not a position"],
   ]) {
@@ -198,6 +200,7 @@ test("the migration runs twice without trouble", async () => {
   await call(ALICE, "room_create");
   await db.exec(MIGRATION);
   await db.exec(NAMES);
+  await db.exec(LONGER);
   const again = await call(BOB, "room_create");
   assert.match(again.code, /^[A-HJKMNP-Z2-9]{6}$/);
 });
@@ -245,4 +248,39 @@ test("Rooms show a member's display name, the username until there is one, and a
   assert.deepEqual(last.payload.members.map((m) => m.name), ["Alice Liddell", "Bobby"]);
   const played = await call(ALICE, "room_update", [room.id, joined.seq, song(YT(1)), 0, true, [], true, "played Song 1"]);
   assert.equal(played.activity[0].text, "Alice Liddell played Song 1");
+});
+
+/* ---------------- a longer queue, and people who drop off (0004) ---------------- */
+
+test("a room's queue holds 100 songs, and no more than 128 KB of them", async () => {
+  const { call } = await database();
+  const room = await call(ALICE, "room_create");
+  const hundred = Array.from({ length: 100 }, (_, i) => song(YT(200 + i)));
+  const full = await call(ALICE, "room_update", [room.id, room.seq, song(YT(1)), 0, true, hundred, true, ""]);
+  assert.equal(full.queue.length, 100);
+  await assert.rejects(
+    call(ALICE, "room_update", [room.id, full.seq, song(YT(1)), 0, true, [...hundred, song(YT(999))], true, ""]),
+    /Not a queue/
+  );
+  // 40 songs of 3.5 KB each: 140 KB.
+  const heavy = Array.from({ length: 40 }, (_, i) => ({ ...song(YT(400 + i)), thumb: `https://example.com/${"x".repeat(3400)}` }));
+  await assert.rejects(call(ALICE, "room_update", [room.id, full.seq, song(YT(1)), 0, true, heavy, true, ""]), /Not a queue/);
+});
+
+test("someone who stops checking in for 3 minutes leaves the room, and the host role passes on", async () => {
+  const { db, call } = await database();
+  const room = await call(ALICE, "room_create");
+  await call(BOB, "room_join", [room.code]);
+  await call(CAROL, "room_join", [room.code]);
+  const quiet = (user, minutes) => db.query(`update public.room_members set last_seen = now() - interval '${minutes} minutes' where user_id = $1`, [user]);
+  await quiet(ALICE, 4); // the host's laptop went to sleep
+  await quiet(CAROL, 2); // carol's last check-in was 2 minutes ago: still here
+  const state = await call(BOB, "room_ping", [room.id]);
+  assert.deepEqual(state.members.map((m) => m.name), ["bob", "carol"]);
+  assert.equal(state.hostId, BOB, "the host role passes to whoever joined first");
+  assert.deepEqual(state.activity.slice(0, 2).map((a) => a.text), ["bob is the host now", "alice left"]);
+  await assert.rejects(call(ALICE, "room_ping", [room.id]), /not in this room/, "back from sleep: no longer in it");
+  await quiet(CAROL, 5);
+  const alone = await call(BOB, "room_ping", [room.id]);
+  assert.deepEqual(alone.members.map((m) => m.name), ["bob"], "the one checking in stays");
 });

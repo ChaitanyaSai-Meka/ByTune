@@ -237,6 +237,7 @@ async function bundleEngine() {
         export { useSettings } from "./src/stores/settings";
         export { useLibrary } from "./src/stores/library";
         export { useUI } from "./src/stores/ui";
+        export { useRoom, stoppingHere } from "./src/stores/room";
         export { useSleepTimer, parseSleepMinutes, formatSleepLeft } from "./src/lib/sleepTimer";
         export { nextNudges, describeLyricsShift } from "./src/lib/lyricsOffset";
       `,

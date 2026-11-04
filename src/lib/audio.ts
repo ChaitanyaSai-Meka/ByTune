@@ -53,7 +53,7 @@ import { upgradeArtwork } from "./artwork";
 import { shortTitle } from "./format";
 import { createMediaKeyTap } from "./media-key-tap";
 import { useSleepTimer } from "./sleepTimer";
-import { inRoom, useRoom } from "../stores/room";
+import { inRoom, stopHere, useRoom } from "../stores/room";
 import {
   deviceChoices,
   outputChangeAction,
@@ -1373,7 +1373,8 @@ function sleepStopsHere(): boolean {
   const sleep = useSleepTimer.getState();
   if (!sleep.endOfSong) return false;
   sleep.cancel();
-  usePlayer.getState().setPlaying(false);
+  // In a room only this computer stops; the room plays on.
+  stopHere({ until: "play" }, () => usePlayer.getState().setPlaying(false));
   return true;
 }
 
@@ -1564,6 +1565,14 @@ function handleFailure(track: Track, err?: unknown): void {
     void loadUrl(track, true, true);
     return;
   }
+  if (inRoom()) {
+    // The room decides what plays: skipping here would skip the song for everyone. This computer sits
+    // the song out and plays the room's next one (lib/rooms).
+    console.warn(`[bytune] playback failed for ${track.id} (in a room)`, err);
+    useUI.getState().toast(`Couldn't play "${shortTitle(track.title)}" on this computer. The room plays on.`, "error");
+    stopHere({ until: "next song", song: track.id }, () => usePlayer.getState().setPlaying(false));
+    return;
+  }
   consecutiveFailures += 1;
   // A local: track that resolves to nothing means ByTune lost the file's
   // folder — a data reset, a fresh sign-in on this device, or the drive is
@@ -1750,7 +1759,8 @@ function setupAudioOutputWatch(): void {
         const snap = snapshotOutputs(await md.enumerateDevices(), sink);
         // Playing is read after the await — it may have moved while enumerating.
         if (outputChangeAction(prev, snap, usePlayer.getState().playing, sink) === "pause") {
-          usePlayer.getState().setPlaying(false);
+          // In a room only this computer stops; the room plays on.
+          stopHere({ until: "play" }, () => usePlayer.getState().setPlaying(false));
           if (sink) {
             // The chosen device is gone; fall back to the system default so
             // the next resume is audible instead of routing into the void.

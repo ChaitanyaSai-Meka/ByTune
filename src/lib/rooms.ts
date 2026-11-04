@@ -12,7 +12,7 @@ import { hasBridge, requireBridge } from "./bridge";
 import { ipcMessage } from "./spotify";
 import { MAX_ROOM_QUEUE, offBy, roomCodeIn, roomPosition } from "./roomSync";
 import { usePlayer, type RepeatMode } from "../stores/player";
-import { inRoom, useRoom } from "../stores/room";
+import { inRoom, stoppingHere, useRoom, type LocalStop } from "../stores/room";
 import { useUI } from "../stores/ui";
 import type { RoomChange, RoomView, Track } from "../types";
 
@@ -31,6 +31,8 @@ const roomQueue = (p: { queue: Track[]; index: number }): Track[] =>
 let applying = false;
 /** Set while the room's start is still ahead: the player waits for it paused. */
 let startTimer = 0;
+/** This computer stopped on its own (stores/room stopHere): it follows the room quietly, not playing. */
+let sittingOut: LocalStop | null = null;
 
 function cancelStart(): void {
   window.clearTimeout(startTimer);
@@ -51,8 +53,11 @@ function apply(view: RoomView): void {
   const s = view.state;
   if (!s) return;
   cancelStart();
+  // A song this computer couldn't play is behind it once the room has moved on.
+  if (sittingOut?.until === "next song" && sittingOut.song !== s.track?.id) sittingOut = null;
   const at = roomPosition(s, Date.now() + view.offsetMs);
-  const startNow = s.playing && at.startsInMs === 0;
+  const playing = s.playing && !sittingOut;
+  const startNow = playing && at.startsInMs === 0;
   quietly(() => {
     const p = usePlayer.getState();
     const current = p.queue[p.index];
@@ -83,10 +88,10 @@ function apply(view: RoomView): void {
     }
   });
   // A start anchored ahead: everyone begins at the same moment.
-  if (s.playing && at.startsInMs > 0) {
+  if (playing && at.startsInMs > 0) {
     startTimer = window.setTimeout(() => {
       startTimer = 0;
-      if (useRoom.getState().view.state?.seq === s.seq) quietly(() => usePlayer.getState().setPlaying(true));
+      if (useRoom.getState().view.state?.seq === s.seq && !sittingOut) quietly(() => usePlayer.getState().setPlaying(true));
     }, at.startsInMs);
   }
 }
@@ -129,13 +134,14 @@ async function send(): Promise<void> {
   // Said only for songs the listener added: one played from a playlist that has a few just leaves them out.
   for (const text of want.says) toast(text);
   const queue = roomQueue(p);
+  // Stopped here only to wait for the room's common start, or on its own (stopHere): for the room
+  // it's still playing.
+  const playing = p.playing || (s.playing && (startTimer !== 0 || sittingOut !== null));
   // Nothing new for the room (none of the songs added could go in): the queue goes back to the room's.
-  if (!want.lead && !want.note && track?.id === s.track?.id && ids(queue) === ids(s.queue)) {
+  if (!want.lead && !want.note && track?.id === s.track?.id && playing === s.playing && ids(queue) === ids(s.queue)) {
     apply(room);
     return;
   }
-  // Paused here only to wait for the room's common start: for the room it's still playing.
-  const playing = p.playing || (startTimer !== 0 && s.playing);
   const change: RoomChange = {
     baseSeq: s.seq,
     track,
@@ -163,16 +169,31 @@ async function send(): Promise<void> {
 function watchPlayer(): () => void {
   return usePlayer.subscribe((p, prev) => {
     if (applying || !inRoom()) return;
+    const here = stoppingHere();
+    if (here) {
+      // Stopped on this computer only: the room plays on without it.
+      if (prev.playing && !p.playing) sittingOut = here;
+      return;
+    }
+    // Play, another song, next: the listener wants to hear the room again.
+    if (p.playing && !prev.playing) sittingOut = null;
     const cur = p.queue[p.index];
     const before = prev.queue[prev.index];
+    // Every computer reaches a song's end together: moving on (or stopping at the queue's end) needs
+    // no common start, and nobody did it.
+    const ended = !!before && prev.duration > 0 && prev.position >= prev.duration - 2;
     if (cur?.id !== before?.id) {
-      // Every computer reaches a song's end together: moving on needs no common start.
-      const ended = !!before && prev.duration > 0 && prev.position >= prev.duration - 2;
       propose(!ended, ended ? "" : `played ${cur?.title ?? "a song"}`);
     } else if (p.seekNonce !== prev.seekNonce) {
       propose(true, "");
     } else if (p.playing !== prev.playing) {
-      propose(p.playing, p.playing ? "pressed play" : "paused");
+      const s = useRoom.getState().view.state;
+      if (p.playing && s?.playing && s.track?.id === cur?.id) {
+        // The room never stopped: play joins it again at its moment, without moving it.
+        queueMicrotask(() => apply(useRoom.getState().view));
+        return;
+      }
+      propose(p.playing, p.playing ? "pressed play" : ended ? "" : "paused");
     } else if (ids(p.queue.slice(p.index + 1)) !== ids(prev.queue.slice(prev.index + 1))) {
       // Named by what reaches the room: none from this computer, and only what fits in its queue.
       const had = new Set(prev.queue.slice(prev.index + 1).map((t) => t.id));
@@ -188,6 +209,9 @@ function watchPlayer(): () => void {
   });
 }
 
+/** Past a song's end by this much with no computer saying so, the room moves on by itself. */
+const END_GRACE_MS = 10_000;
+
 /** Every few seconds: a computer that drifted (a slow load, a hiccup) seeks back to the room's moment. */
 function watchDrift(): () => void {
   const timer = window.setInterval(() => {
@@ -195,11 +219,35 @@ function watchDrift(): () => void {
     const s = view.state;
     const p = usePlayer.getState();
     if (!s?.track || applying || intent || inFlight) return;
-    if (p.queue[p.index]?.id !== s.track.id) return apply(view);
     const at = roomPosition(s, Date.now() + view.offsetMs);
+    // It played on no computer (or everyone stepped out): on to the next song, as a song ending does.
+    if (s.playing && s.track.duration > 0 && at.ms >= s.track.duration * 1000 + END_GRACE_MS) return moveOn(view);
+    if (p.queue[p.index]?.id !== s.track.id) return apply(view);
     if (s.playing && at.startsInMs === 0 && p.playing && offBy(p.position * 1000, at.ms)) quietly(() => p.seek(at.ms / 1000));
   }, 5000);
   return () => window.clearInterval(timer);
+}
+
+/** The room's song is over and no computer said so: the next one, the way a song ending moves on. */
+function moveOn(view: RoomView): void {
+  const s = view.state;
+  if (!s?.track) return;
+  const [next, ...rest] = s.queue;
+  const change: RoomChange = next
+    ? { baseSeq: s.seq, track: next, positionMs: 0, playing: true, queue: rest, lead: false, note: "" }
+    : { baseSeq: s.seq, track: s.track, positionMs: 0, playing: false, queue: [], lead: false, note: "" };
+  inFlight = true;
+  sending = sending.then(async () => {
+    try {
+      const answer = await requireBridge().roomUpdate(change);
+      useRoom.setState({ view: answer });
+      inFlight = false;
+      apply(answer);
+    } catch {
+      inFlight = false;
+      apply(useRoom.getState().view);
+    }
+  });
 }
 
 /* ---------------- entering and leaving ---------------- */
@@ -244,6 +292,7 @@ async function bringBack(): Promise<void> {
 async function enter(open: () => Promise<RoomView>, starting: boolean): Promise<void> {
   if (useRoom.getState().busy) return;
   useRoom.setState({ busy: true });
+  sittingOut = null;
   try {
     await setAside();
     const view = await open();
@@ -290,6 +339,7 @@ function received(view: RoomView): void {
     if (!intent && !inFlight) apply(view);
   } else if (was) {
     cancelStart();
+    sittingOut = null;
     if (view.problem) toast(view.problem);
     void bringBack();
   }

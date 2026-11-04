@@ -13,7 +13,8 @@ import type { RoomState, Track } from "../types";
 export const DRIFT_MS = 1200;
 /** What people type to join: no 0/O, 1/I/L. */
 export const ROOM_CODE = /^[A-HJKMNP-Z2-9]{6}$/;
-export const MAX_ROOM_QUEUE = 25;
+/** A room's queue: up to 100 songs (supabase/migrations/0004; a server still on 0002 takes 25). */
+export const MAX_ROOM_QUEUE = 100;
 
 /** A room code out of what was typed or pasted: "abc-234", " ABC234 ", or an invite link. */
 export function roomCodeIn(text: string): string | null {

@@ -67,7 +67,7 @@ test("a room's state is checked field by field", async () => {
   const raw = {
     id: "8d2f2a44-0000-4000-8000-000000000001", code: "ABC234", hostId: "u1", hostOnly: true,
     track: { id: "dQw4w9WgXcQ", title: "Song" }, positionMs: 1500, anchorMs: 1_793_000_000_000, playing: true,
-    queue: [{ id: "dQw4w9WgXcQ" }, { id: "bad" }, ...Array.from({ length: 30 }, () => ({ id: "dQw4w9WgXcQ" }))],
+    queue: [{ id: "dQw4w9WgXcQ" }, { id: "bad" }, ...Array.from({ length: 110 }, () => ({ id: "dQw4w9WgXcQ" }))],
     activity: [{ atMs: 1, text: "alice joined" }, { atMs: "x", text: "bad" }],
     members: [{ userId: "u1", name: "alice", lastSeenMs: 5 }, { name: "no id" }],
     seq: 7, serverMs: 1_793_000_000_100, stale: true,
@@ -75,7 +75,7 @@ test("a room's state is checked field by field", async () => {
   const s = roomState(raw);
   assert.equal(s.code, "ABC234");
   assert.equal(s.track.id, "dQw4w9WgXcQ");
-  assert.equal(s.queue.length, 25, "bad songs dropped, capped at 25");
+  assert.equal(s.queue.length, 100, "bad songs dropped, capped at 100");
   assert.deepEqual(s.activity, [{ atMs: 1, text: "alice joined" }]);
   assert.deepEqual(s.members, [{ userId: "u1", name: "alice", lastSeenMs: 5 }]);
   assert.equal("stale" in s, false);

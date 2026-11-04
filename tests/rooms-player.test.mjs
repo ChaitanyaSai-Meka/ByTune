@@ -13,7 +13,7 @@ import { build } from "esbuild";
 const code = build({
   stdin: {
     contents: `export * from "./src/lib/rooms"; export { usePlayer } from "./src/stores/player";
-      export { useRoom } from "./src/stores/room"; export { useUI } from "./src/stores/ui";`,
+      export { useRoom, stopHere } from "./src/stores/room"; export { useUI } from "./src/stores/ui";`,
     resolveDir: fileURLToPath(new URL("..", import.meta.url)),
     sourcefile: "rooms-player-entry.ts",
     loader: "ts",
@@ -283,10 +283,10 @@ test("songs from this computer: a playlist with one plays without a word; adding
   }
 });
 
-test("the room's queue holds 25: a song that doesn't fit is said so and never named as added", async () => {
+test("the room's queue holds 100: a song that doesn't fit is said so and never named as added", async () => {
   const { m, main, stop, player } = await setup();
   try {
-    const full = Array.from({ length: 25 }, (_, i) => song(`q${i}`));
+    const full = Array.from({ length: 100 }, (_, i) => song(`q${i}`));
     main.room.track = song("a");
     main.room.queue = full;
     main.room.playing = true;
@@ -298,21 +298,21 @@ test("the room's queue holds 25: a song that doesn't fit is said so and never na
     m.usePlayer.getState().addToQueue(song("late"));
     await sleep(10);
     assert.equal(main.sent.length, sends, "nothing new for the room");
-    assert.deepEqual(upNext(), full.map((t) => t.id), "the queue is the room's 25 again");
-    assert.equal(toasts().at(-1), "The room's queue is full (25 songs)");
+    assert.deepEqual(upNext(), full.map((t) => t.id), "the queue is the room's 100 again");
+    assert.equal(toasts().at(-1), "The room's queue is full (100 songs)");
     // Play next still works: the song goes first and the farthest one makes room.
     m.usePlayer.getState().addToQueue(song("soon"), true);
     await sleep(10);
-    assert.deepEqual(main.sent.at(-1).queue.map((t) => t.id), [song("soon").id, ...full.slice(0, 24).map((t) => t.id)]);
+    assert.deepEqual(main.sent.at(-1).queue.map((t) => t.id), [song("soon").id, ...full.slice(0, 99).map((t) => t.id)]);
     assert.equal(main.sent.at(-1).note, `added ${song("soon").title}`);
     // Room for one of two: the one that fits is the one named.
-    main.broadcast({ queue: full.slice(0, 24) });
+    main.broadcast({ queue: full.slice(0, 99) });
     m.usePlayer.getState().addToQueue([song("fits"), song("nofit")]);
     await sleep(10);
     assert.equal(main.sent.at(-1).queue.at(-1).id, song("fits").id);
-    assert.equal(main.sent.at(-1).queue.length, 25);
+    assert.equal(main.sent.at(-1).queue.length, 100);
     assert.equal(main.sent.at(-1).note, `added ${song("fits").title}`);
-    assert.equal(toasts().at(-1), "The room's queue is full (25 songs)");
+    assert.equal(toasts().at(-1), "The room's queue is full (100 songs)");
   } finally {
     stop();
   }
@@ -344,6 +344,104 @@ test("waiting for the room's common start: a change then keeps the room playing"
     m.usePlayer.getState().setPlaying(false);
     await sleep(10);
     assert.deepEqual([main.sent.at(-1).playing, main.sent.at(-1).note], [false, "paused"]);
+  } finally {
+    stop();
+  }
+});
+
+test("stopping on this computer only (headphones out, the sleep timer): the room plays on; play joins back in", async () => {
+  const { m, main, stop, player } = await setup();
+  try {
+    main.room.track = song("a");
+    main.room.queue = [song("b")];
+    main.room.playing = true;
+    main.room.anchorMs = Date.now();
+    await m.joinRoom("ABC234");
+    const sends = main.sent.length;
+    m.stopHere({ until: "play" }, () => m.usePlayer.getState().setPlaying(false));
+    await sleep(10);
+    assert.equal(main.sent.length, sends, "the room isn't told");
+    assert.equal(player().playing, false);
+    // Adding a song meanwhile changes the room's queue, not whether it plays.
+    m.usePlayer.getState().addToQueue(song("q"));
+    await sleep(10);
+    assert.deepEqual([main.sent.at(-1).playing, main.room.playing], [true, true], "the room keeps playing");
+    assert.equal(player().playing, false, "and this computer stays stopped");
+    const afterAdd = main.sent.length;
+    // The room moves on: this computer follows it, still stopped.
+    main.broadcast({ track: song("b"), queue: [], positionMs: 0, playing: true, anchorMs: Date.now() - 30_000 });
+    assert.equal(player().queue[player().index].id, song("b").id);
+    assert.equal(player().playing, false, "stays stopped until play");
+    await sleep(1500);
+    // Play: back in at the room's moment (31.5 s by now), without moving the room.
+    m.usePlayer.getState().setPlaying(true);
+    await sleep(10);
+    assert.equal(main.sent.length, afterAdd, "joining back in sends nothing");
+    assert.equal(player().playing, true);
+    assert.ok(Math.abs(player().position - 31.5) < 0.5, `at the room's moment (${player().position})`);
+    // Pausing yourself still pauses the room.
+    m.usePlayer.getState().setPlaying(false);
+    await sleep(10);
+    assert.deepEqual([main.sent.at(-1).playing, main.sent.at(-1).note], [false, "paused"]);
+  } finally {
+    stop();
+  }
+});
+
+test("a song this computer can't play: it sits that song out, and plays the room's next one", async () => {
+  const { m, main, stop, player } = await setup();
+  try {
+    main.room.track = song("a");
+    main.room.queue = [song("b")];
+    main.room.playing = true;
+    main.room.anchorMs = Date.now();
+    await m.joinRoom("ABC234");
+    const sends = main.sent.length;
+    m.stopHere({ until: "next song", song: song("a").id }, () => m.usePlayer.setState({ playing: false }));
+    await sleep(10);
+    assert.equal(main.sent.length, sends, "the room plays on: not skipped for everyone");
+    main.broadcast({ positionMs: 60_000, anchorMs: Date.now() }); // someone seeks: still that song
+    assert.equal(player().playing, false);
+    main.broadcast({ track: song("b"), queue: [], positionMs: 0, playing: true, anchorMs: Date.now() });
+    assert.equal(player().playing, true, "the next song plays here again");
+  } finally {
+    stop();
+  }
+});
+
+test("the end of the room's queue isn't put down as someone pausing", async () => {
+  const { m, main, stop, player } = await setup();
+  try {
+    main.room.track = song("a");
+    main.room.playing = true;
+    main.room.anchorMs = Date.now();
+    await m.joinRoom("ABC234");
+    m.usePlayer.setState({ duration: 200, position: 199.5 });
+    m.usePlayer.getState().next(false);
+    await sleep(10);
+    assert.deepEqual([main.sent.at(-1).playing, main.sent.at(-1).note, player().playing], [false, "", false]);
+  } finally {
+    stop();
+  }
+});
+
+test("a song whose time is up with no computer saying so: the room moves on by itself", async () => {
+  const { m, main, stop } = await setup();
+  try {
+    main.room.track = { ...song("a"), duration: 200 };
+    main.room.queue = [song("b"), song("c")];
+    main.room.playing = true;
+    main.room.anchorMs = Date.now() - 215_000; // 15 s past its end: it played nowhere
+    await m.joinRoom("ABC234");
+    const sends = main.sent.length;
+    await sleep(5300); // the next drift check
+    assert.equal(main.sent.length, sends + 1, "moved on once");
+    const moved = main.sent.at(-1);
+    assert.deepEqual(
+      [moved.track.id, moved.queue.map((t) => t.id), moved.playing, moved.lead, moved.note],
+      [song("b").id, [song("c").id], true, false, ""],
+      "like a song ending: no common start, nobody named"
+    );
   } finally {
     stop();
   }

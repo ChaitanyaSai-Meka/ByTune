@@ -7,6 +7,7 @@
  */
 import { create } from "zustand";
 import { usePlayer } from "../stores/player";
+import { stopHere } from "../stores/room";
 
 export const SLEEP_FADE_MS = 10_000;
 export const SLEEP_MAX_MINUTES = 12 * 60;
@@ -61,7 +62,8 @@ function tick(): void {
     const left = s.endsAt - performance.now();
     if (left <= 0) {
       stopTicker();
-      usePlayer.getState().setPlaying(false);
+      // In a room only this computer stops; the room plays on.
+      stopHere({ until: "play" }, () => usePlayer.getState().setPlaying(false));
       useSleepTimer.setState({ endsAt: null });
       // Full volume again once the pause has glided out.
       window.setTimeout(() => useSleepTimer.setState({ level: 1 }), 500);
