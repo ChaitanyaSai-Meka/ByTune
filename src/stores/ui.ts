@@ -10,6 +10,8 @@ export type ViewName =
   | "library"
   | "playlists"
   | "playlist"
+  /** a folder of the listener's playlists (param: its id) */
+  | "folder"
   | "ytplaylist"
   | "album"
   | "artist"

@@ -23,6 +23,7 @@ import { LYRICS_NUDGE_STEP, useLyricsNudge } from "./lib/lyricsOffset";
 import { watchMenuCommands } from "./lib/menuCommands";
 import { usePanelDrop } from "./lib/panelDrop";
 import { CoverGlow } from "./components/CoverGlow";
+import { PanelScrollbar } from "./components/PanelScrollbar";
 import { watchSession, useSession } from "./lib/session";
 import { watchSyncRestores } from "./lib/syncRestore";
 import { createSwipeNav, scrollsSideways } from "./lib/swipeNav";
@@ -35,6 +36,7 @@ import { useUI } from "./stores/ui";
 import { AlbumView } from "./views/AlbumView";
 import { ArtistView } from "./views/ArtistView";
 import { DownloadsView } from "./views/DownloadsView";
+import { FolderView } from "./views/FolderView";
 import { ExploreView } from "./views/ExploreView";
 import { HomeView } from "./views/HomeView";
 import { RemotePlaylistView } from "./views/RemotePlaylistView";
@@ -251,6 +253,8 @@ function CurrentView(): ReactNode {
       return <LibraryView />;
     case "playlist":
       return <PlaylistView playlistId={view.param ?? ""} />;
+    case "folder":
+      return <FolderView folderId={view.param ?? ""} />;
     case "ytplaylist":
       return <RemotePlaylistView playlistId={view.param ?? ""} />;
     case "import":
@@ -286,6 +290,7 @@ export default function App() {
   const pendingScroll = useUI((s) => s.pendingScroll);
   const lyricsCenter = useUI((s) => s.lyricsCenter);
   const shellRef = useRef<HTMLDivElement | null>(null);
+  const viewScrollRef = useRef<HTMLDivElement | null>(null);
   const session = useSession();
   const panelDrop = usePanelDrop();
 
@@ -420,7 +425,10 @@ export default function App() {
             <LyricsCenter />
           ) : (
             <>
-              <div className="flex-1 min-h-0 overflow-y-auto scroll-host relative" id="view-scroll">
+              {/* No native scrollbar: it would take a strip of its own and cut
+                  full-bleed covers short of the panel's right edge.
+                  PanelScrollbar draws the thumb over the page instead. */}
+              <div ref={viewScrollRef} className="flex-1 min-h-0 overflow-y-auto no-scrollbar relative" id="view-scroll">
                 {/* The reload nonce rides in the key: a bump remounts the current
                     view so its data effects re-run — that is the Refresh button's
                     mechanism everywhere except Home (which re-orchestrates its
@@ -431,16 +439,14 @@ export default function App() {
                   </ErrorBoundary>
                 </div>
               </div>
+              <PanelScrollbar target={viewScrollRef} />
               {/* Frosted band behind the search filter row. It lives OUTSIDE
-                  the scroller on purpose: in-flow content is clipped before
-                  the 14px scrollbar gutter, so a band inside the list can
-                  never touch the panel's right edge. From here it spans the
-                  full panel width (clipped by main's rounded corners) and
-                  reads the list's scroll through the shared timeline hoisted
-                  by timeline-scope on <main>. Tree order puts it above the
-                  scrolling rows; the sticky pills (z-10 inside the scroller)
-                  paint above it, so they stay sharp while the rows behind
-                  them blur. */}
+                  the scroller, so it stays put over the panel's full width
+                  (clipped by main's rounded corners) and reads the list's
+                  scroll through the shared timeline hoisted by timeline-scope
+                  on <main>. Tree order puts it above the scrolling rows; the
+                  sticky pills (z-10 inside the scroller) paint above it, so
+                  they stay sharp while the rows behind them blur. */}
               {viewName === "search" && (
                 <div aria-hidden className="search-band pointer-events-none absolute inset-x-0 top-0 h-16" />
               )}

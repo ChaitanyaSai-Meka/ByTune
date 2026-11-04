@@ -8,8 +8,6 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  ChevronDown,
-  ChevronRight,
   Download,
   Folder,
   FolderOpen,
@@ -31,6 +29,7 @@ import { shortTitle } from "../lib/format";
 import { addSongsToPlaylists, staysOnDevice } from "../lib/devicePlaylists";
 import { upgradeArtwork } from "../lib/artwork";
 import { CreateMenu } from "./CreateMenu";
+import { askForNewFolder, folderMenuItems, rowIsOpen } from "../lib/collection";
 import { playlistFolderItems, playlistHeaderItems } from "../lib/trackActions";
 import { draggingFromPlaylist, dragHasAlbum, dragHasArtist, dragHasPlaylist, dragHasTrack, readAlbum, readArtist, readPlaylist, readTrack, type AlbumPayload, type ArtistPayload, type PlaylistPayload } from "../lib/dnd";
 import { requireBridge } from "../lib/bridge";
@@ -80,11 +79,12 @@ function LibraryPill() {
   const spotifyProblem = useSpotify((s) => s.status.problem);
   const spotifyPlaylists = useSpotify((s) => s.playlists);
   const navigate = useUI((s) => s.navigate);
+  /** the page open in the middle panel: its row stays lit */
+  const view = useUI((s) => s.view);
   const openDialog = useUI((s) => s.openDialog);
   const openContextMenu = useUI((s) => s.openContextMenu);
   const playingFrom = usePlayer(playingFromRow);
 
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const libraryOrder = useLibrary((s) => s.libraryOrder);
   /** the scrolling list, and the rows inside it that a drag reorders */
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -214,13 +214,14 @@ function LibraryPill() {
   const movable: Entry[] = [
     ...followedArtists.map((a) => ({ key: `artist:${a.id}`, rows: [{ id: a.id, title: a.name, subtitle: "Artist", thumb: a.thumb, kind: "artist" as const }] })),
     ...unfiled.filter((p) => !p.pinned).map((p) => ({ key: `playlist:${p.id}`, rows: [playlistRow(p)] })),
-    ...folders.map((f) => ({
-      key: `folder:${f.id}`,
-      rows: [
-        { id: f.id, title: f.name, subtitle: "Folder", kind: "folder" as const, folderId: f.id },
-        ...(expanded.has(f.id) ? playlists.filter((p) => p.folderId === f.id).map(playlistRow) : []),
-      ],
-    })),
+    // A folder is one row: it opens its page in the middle panel (FolderView), where its playlists are.
+    ...folders.map((f) => {
+      const filed = playlists.filter((p) => p.folderId === f.id);
+      return {
+        key: `folder:${f.id}`,
+        rows: [{ id: f.id, title: f.name, subtitle: `Folder · ${filed.length} ${filed.length === 1 ? "playlist" : "playlists"}`, kind: "folder" as const, folderId: f.id }],
+      };
+    }),
     ...singles.filter((r) => !r.pinned).map((r) => ({ key: `single:${r.singleKey}`, rows: [r] })),
   ];
   const byKey = new Map(movable.map((e) => [e.key, e]));
@@ -236,15 +237,6 @@ function LibraryPill() {
       useLibrary.getState().setLibraryOrder(moveKey(keys, from - fixed.length, target - fixed.length));
     },
   });
-
-  const toggleFolder = (id: string): void => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
 
   /* ---------------------------------------------------------- drag & drop */
 
@@ -308,7 +300,6 @@ function LibraryPill() {
     const name = localPlaylistName(id);
     if (!name) return;
     lib.setPlaylistFolder(id, folderId);
-    setExpanded((prev) => new Set(prev).add(folderId));
     toast(`Moved “${name}” into the folder`, "success");
     setPulse(folderId);
     window.setTimeout(() => setPulse((cur) => (cur === folderId ? null : cur)), 650);
@@ -393,9 +384,9 @@ function LibraryPill() {
   };
 
   /**
-   * Hovering a collapsed folder mid-drag opens it after a beat so the drag
-   * can continue onto the playlists inside — one gesture, no re-drag. The
-   * highlight itself is immediate (set in onRowDragOver); only the expansion
+   * Hovering a folder with a song mid-drag opens the folder's page after a
+   * beat, so the drag can go on to one of its playlists there: one gesture,
+   * no re-drag. The highlight is immediate (onRowDragOver); only the opening
    * waits, the way file managers do.
    */
   const expandTimer = useRef<number | null>(null);
@@ -405,12 +396,14 @@ function LibraryPill() {
       expandTimer.current = null;
     }
   };
+  const openFolder = (folderId: string): void => navigate({ name: "folder", param: folderId });
   const scheduleExpand = (folderId: string): void => {
-    if (expanded.has(folderId)) return;
+    const v = useUI.getState().view;
+    if (v.name === "folder" && v.param === folderId) return;
     if (expandTimer.current !== null) return;
     expandTimer.current = window.setTimeout(() => {
       expandTimer.current = null;
-      setExpanded((prev) => new Set(prev).add(folderId));
+      openFolder(folderId);
     }, 650);
   };
   useEffect(() => {
@@ -441,7 +434,7 @@ function LibraryPill() {
     e.stopPropagation();
     e.dataTransfer.dropEffect = "copy";
     setDropHover(r.id);
-    if (r.kind === "folder") scheduleExpand(r.id);
+    if (previewsFolder) scheduleExpand(r.id);
   };
 
   const onRowDragLeave = (e: React.DragEvent, r: LibRow): void => {
@@ -494,12 +487,12 @@ function LibraryPill() {
       return;
     }
     if (r.kind === "folder" && dragHasTrack(e)) {
-      // Folders hold playlists, not songs: open the folder so the drag can
-      // finish on a playlist inside, and say so once.
+      // Folders hold playlists, not songs: open the folder's page so the next
+      // drag can land on a playlist there, and say so once.
       e.preventDefault();
       e.stopPropagation();
       setDropHover(null);
-      setExpanded((prev) => new Set(prev).add(r.id));
+      openFolder(r.id);
       setPulse(r.id);
       window.setTimeout(() => setPulse((cur) => (cur === r.id ? null : cur)), 650);
       useUI.getState().toast(`“${r.title}” holds playlists — drop onto one of them`, "info");
@@ -520,7 +513,7 @@ function LibraryPill() {
         navigate({ name: "downloads" });
         break;
       case "folder":
-        toggleFolder(r.id);
+        openFolder(r.id);
         break;
       case "local":
         navigate({ name: "local" });
@@ -583,26 +576,11 @@ function LibraryPill() {
       return;
     }
     if (r.kind === "folder") {
+      const folder = folders.find((f) => f.id === r.id);
+      if (!folder) return;
       e.preventDefault();
       e.stopPropagation();
-      openContextMenu(e.clientX, e.clientY, [
-        {
-          label: "Rename folder",
-          action: () =>
-            openDialog({
-              title: "Rename folder",
-              initialValue: r.title,
-              placeholder: "Folder name",
-              confirmLabel: "Save",
-              onConfirm: (value) => useLibrary.getState().renameFolder(r.id, value),
-            }),
-        },
-        {
-          label: "Delete folder",
-          danger: true,
-          action: () => useLibrary.getState().deleteFolder(r.id),
-        },
-      ]);
+      openContextMenu(e.clientX, e.clientY, folderMenuItems(folder));
     }
   };
 
@@ -634,32 +612,26 @@ function LibraryPill() {
       {
         label: "Create folder",
         icon: Folder,
-        action: () => {
-          const suggested = `New Folder ${useLibrary.getState().folders.length + 1}`;
-          openDialog({
-            title: "New folder",
-            body: "Give your folder a name.",
-            initialValue: suggested,
-            placeholder: "Folder name",
-            confirmLabel: "Create",
-            onConfirm: (value) => {
-              const f = useLibrary.getState().createFolder(value.trim() || suggested);
-              setExpanded((prev) => new Set(prev).add(f.id));
-            },
-          });
-        },
+        action: askForNewFolder,
       },
     ]);
   };
 
   function renderRow(r: LibRow, drag: SortableRowProps | undefined): ReactNode {
-    const isCurrent = playingFrom !== null && (playingFrom === r.id || playingFrom === r.artistId);
+    const filed = r.kind === "folder" ? playlists.filter((p) => p.folderId === r.id) : [];
+    // A folder plays when one of its playlists (or the folder itself) does.
+    const isCurrent =
+      playingFrom !== null && (playingFrom === r.id || playingFrom === r.artistId || filed.some((p) => p.id === playingFrom));
+    const open = rowIsOpen(r, view);
+    /** a folder's face: its playlists' covers, four up once it has four */
+    const folderArt = [...new Set(filed.map((p) => p.artistThumb ?? p.tracks[0]?.thumb).filter((t): t is string => !!t))].slice(0, 4);
     return (
       <div
         key={`${r.kind}-${r.id}`}
         {...drag}
         role="button"
         tabIndex={0}
+        aria-current={open ? "page" : undefined}
         onClick={() => onClickRow(r)}
         onKeyDown={(e) => {
           if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
@@ -671,9 +643,12 @@ function LibraryPill() {
         onDragOver={(e) => onRowDragOver(e, r)}
         onDragLeave={(e) => onRowDragLeave(e, r)}
         onDrop={(e) => onRowDrop(e, r)}
-        className={`fit-host group w-full flex items-center gap-3 p-2 rounded-lg text-left cursor-pointer select-none hover:bg-ink-hi/[0.05] active:bg-ink-hi/[0.09] transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${
-          r.kind === "playlist" && r.folderId ? "pl-6" : ""
-        } ${dropHover === r.id ? "ring-2 ring-inset ring-accent/60 bg-ink-hi/[0.08] scale-[1.02]" : ""} ${
+        // The open page's row keeps the hover's light, a touch stronger, so it reads as "you're here".
+        className={`fit-host group w-full flex items-center gap-3 p-2 rounded-lg text-left cursor-pointer select-none ${
+          open ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.05]"
+        } active:bg-ink-hi/[0.1] transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${
+          dropHover === r.id ? "ring-2 ring-inset ring-accent/60 bg-ink-hi/[0.08] scale-[1.02]" : ""
+        } ${
           pulse === r.id ? "animate-drop-pulse" : ""
         }`}
       >
@@ -691,9 +666,19 @@ function LibraryPill() {
             </span>
           )
         ) : r.kind === "folder" ? (
-          <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
-            <Folder className="w-5 h-5 text-ink-hi/55" />
-          </span>
+          folderArt.length === 4 ? (
+            <span className="w-12 h-12 rounded-md overflow-hidden art-hairline shrink-0 grid grid-cols-2">
+              {folderArt.map((src) => (
+                <img key={src} src={upgradeArtwork(src)} alt="" draggable={false} className="w-full h-full object-cover" />
+              ))}
+            </span>
+          ) : folderArt.length ? (
+            <img src={upgradeArtwork(folderArt[0])} alt="" draggable={false} className="w-12 h-12 rounded-md object-cover art-hairline shrink-0" />
+          ) : (
+            <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
+              <Folder className="w-5 h-5 text-ink-hi/55" />
+            </span>
+          )
         ) : r.kind === "spotify" ? (
           <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
             <SpotifyIcon className="w-6 h-6" />
@@ -730,12 +715,6 @@ function LibraryPill() {
             playlists.find((p) => p.id === r.id)?.pinned)) && (
           <Pin className="w-3.5 h-3.5 text-accent shrink-0 fill-accent/20" aria-label="Pinned" />
         )}
-        {r.kind === "folder" &&
-          (expanded.has(r.id) ? (
-            <ChevronDown className="w-4 h-4 text-ink-hi/45 shrink-0" />
-          ) : (
-            <ChevronRight className="w-4 h-4 text-ink-hi/45 shrink-0" />
-          ))}
       </div>
     );
   }
@@ -800,7 +779,7 @@ function LibraryPill() {
         </button>
         <div className="ml-auto flex items-center gap-1">
           {/* + opens Spotify's create dropdown — Playlist / Folder, no modal. */}
-          <CreateMenu onFolderCreated={(f) => setExpanded((prev) => new Set(prev).add(f.id))} />
+          <CreateMenu />
         </div>
       </div>
 

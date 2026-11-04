@@ -1,107 +1,131 @@
-import { AlertCircle, Check, Download, FolderOpen, Loader2, Music2, RotateCcw, X } from "lucide-react";
+/**
+ * Downloads: a wall of the covers of the songs saved for offline; how many and how long, what's still
+ * on the way and what failed; Play, Shuffle and the folder they're saved in. A song's cover stays grey
+ * until it's saved, filling with its colour from the bottom as it downloads; each row is lit by its own
+ * cover as the pointer passes, and a saved song plays on click.
+ */
+import type { CSSProperties } from "react";
+import { AlertCircle, Check, Clock3, Download, FolderOpen, Play, RotateCcw, Shuffle, X } from "lucide-react";
 import { downloadMenuItems } from "../lib/trackActions";
 import { useDrag } from "../lib/dnd";
-import { useLibrary } from "../stores/library";
+import { useLibrary, type DownloadItem } from "../stores/library";
+import { usePlayer } from "../stores/player";
 import { useSettings } from "../stores/settings";
 import { tintHoverHandlers, useUI } from "../stores/ui";
 import { cancelDownload, startDownload } from "../lib/downloads";
-import { plural, shortTitle } from "../lib/format";
-import { Artwork, Btn, EmptyState, IconBtn } from "../components/primitives";
+import { collectionFacts } from "../lib/collection";
+import { fmtTime, shortTitle } from "../lib/format";
+import { upgradeArtwork } from "../lib/artwork";
+import { Artwork, EmptyState, IconBtn } from "../components/primitives";
 import { FitText } from "../components/FitText";
-import type { DownloadItem } from "../stores/library";
+import { CollectionHero, HERO_PLAY } from "../components/CollectionHero";
+import { HERO_ROUND } from "../components/PlaylistHero";
+import { PlayingLight, useRowLight } from "../components/RowLight";
+import type { Track } from "../types";
 
-function StatusCell({ item }: { item: DownloadItem }) {
-  if (item.status === "queued") {
-    return (
-      <div className="flex items-center gap-2 text-[13px] text-ink-dim w-48">
-        <span className="w-2 h-2 rounded-full bg-ink-hi/30 shrink-0" />
-        Queued
-      </div>
-    );
-  }
-  if (item.status === "downloading") {
-    const pct = Math.round(item.progress * 100);
-    return (
-      <div className="flex items-center gap-3 w-48">
-        <Loader2 className="w-4 h-4 text-accent animate-spin shrink-0" />
-        <div className="flex-1">
-          <div className="h-1 rounded-full bg-ink-hi/10 overflow-hidden">
-            <div className="h-full bg-accent rounded-full transition-[width]" style={{ width: `${pct}%` }} />
-          </div>
-          <div className="text-[11px] text-ink-faint mt-1 tabular-nums">{pct}%</div>
-        </div>
-      </div>
-    );
-  }
-  if (item.status === "done") {
-    return (
-      <div className="flex items-center gap-2 text-[13px] text-emerald-400 w-48">
-        <span className="p-1 rounded-full bg-emerald-400/10">
-          <Check className="w-3.5 h-3.5" />
-        </span>
-        Downloaded
-      </div>
-    );
-  }
+/** The cover: grey until the song is saved, filling with its colour from the bottom as it comes in. */
+function DownloadCover({ item }: { item: DownloadItem }) {
+  const pct = Math.round(item.progress * 100);
   return (
-    <div className="flex items-center gap-2 text-[13px] text-red-400 w-48">
-      <span className="p-1 rounded-full bg-red-400/10">
-        <AlertCircle className="w-3.5 h-3.5" />
-      </span>
-      Failed
-    </div>
+    <span className={`dl-cover ${item.status}`} style={{ "--fill": `${item.status === "downloading" ? pct : 0}%` } as CSSProperties}>
+      <Artwork src={item.track.thumb} className="w-[52px] h-[52px] rounded-lg" iconClassName="w-4 h-4" alt="" />
+      {item.status === "downloading" && (
+        <>
+          {item.track.thumb && (
+            <span aria-hidden className="dl-fill" style={{ backgroundImage: `url(${JSON.stringify(upgradeArtwork(item.track.thumb))})` }} />
+          )}
+          <span className="dl-pct">{pct}%</span>
+        </>
+      )}
+      {item.status === "done" && (
+        <span aria-hidden className="dl-badge ok">
+          <Check className="w-3 h-3" strokeWidth={3} />
+        </span>
+      )}
+      {item.status === "failed" && (
+        <span aria-hidden className="dl-badge fail">
+          <AlertCircle className="w-3 h-3" strokeWidth={3} />
+        </span>
+      )}
+      {item.status === "queued" && (
+        <span aria-hidden className="dl-badge wait">
+          <Clock3 className="w-3 h-3" strokeWidth={3} />
+        </span>
+      )}
+    </span>
   );
 }
 
-/** One download row — a drag source like every other list row. */
+function StatusText({ item }: { item: DownloadItem }) {
+  if (item.status === "downloading") return <span className="text-accent">Downloading · {Math.round(item.progress * 100)}%</span>;
+  if (item.status === "queued") return <span className="text-ink-dim">Waiting to download</span>;
+  if (item.status === "failed") return <span className="text-red-400">Couldn't download</span>;
+  return <span className="text-ink-faint">Saved</span>;
+}
+
+/** One download: a drag source like every other list row; a saved one plays on click. */
 function DownloadRow({
   item,
+  onPlay,
   onOpenMenu,
   onRemove,
+  onHover,
 }: {
   item: DownloadItem;
+  onPlay?: () => void;
   onOpenMenu: (x: number, y: number) => void;
   onRemove: (id: string) => void;
+  onHover: (row: HTMLElement, thumb: string) => void;
 }) {
   const drag = useDrag({ track: item.track });
+  const tint = tintHoverHandlers(item.track.thumb);
+  const isCurrent = usePlayer((s) => s.queue[s.index]?.id === item.track.id);
+  const busy = item.status === "downloading" || item.status === "queued";
   return (
     <div
-      key={item.track.id}
-      {...tintHoverHandlers(item.track.thumb)}
       {...drag.props}
-      className={`fit-host group flex items-center gap-3 h-[58px] px-3 rounded-xl hover:bg-ink-hi/[0.045] ${
-        drag.dragging ? "opacity-40" : ""
-      }`}
+      onMouseEnter={(e) => {
+        tint.onMouseEnter();
+        onHover(e.currentTarget, item.track.thumb);
+      }}
+      onMouseLeave={tint.onMouseLeave}
+      onClick={onPlay}
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
         onOpenMenu(e.clientX, e.clientY);
       }}
+      className={`tl-row fit-host group flex items-center gap-3.5 h-[66px] px-3 rounded-lg select-none ${onPlay ? "cursor-pointer" : ""} ${
+        isCurrent ? "bg-ink-hi/[0.06]" : "hover:bg-ink-hi/[0.04]"
+      } ${drag.dragging ? "opacity-40" : ""}`}
     >
-      <Artwork src={item.track.thumb} className="w-10 h-10 rounded-lg shrink-0" iconClassName="w-4 h-4" alt="" />
+      {isCurrent && <PlayingLight thumb={item.track.thumb} />}
+      <DownloadCover item={item} />
       <div className="flex-1 min-w-0">
-        <FitText text={shortTitle(item.track.title)} full={item.track.title} className="text-[13.5px] text-ink" />
-        <FitText text={item.track.artist} className="text-xs text-ink-faint mt-px" />
+        <FitText text={shortTitle(item.track.title)} full={item.track.title} className="text-[16px] font-semibold tracking-[-0.2px] text-ink-hi" />
+        <FitText text={item.track.artist} className="text-[14px] text-ink-dim mt-0.5" />
       </div>
-      <StatusCell item={item} />
-      <div className="w-20 shrink-0 flex items-center justify-end gap-0.5">
+      <div className="w-44 shrink-0 text-[13px] tabular-nums">
+        <StatusText item={item} />
+      </div>
+      {/* While a song is on the way, Cancel stays in reach; otherwise the actions show on hover. */}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className={`w-24 shrink-0 flex items-center justify-end gap-0.5 transition-opacity ${
+          busy ? "" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
+        }`}
+      >
         {item.status === "failed" && (
           <IconBtn icon={RotateCcw} title="Retry download" onClick={() => void startDownload(item.track)} size="sm" />
         )}
-        {(item.status === "downloading" || item.status === "queued") && (
-          <IconBtn icon={X} title="Cancel download" danger onClick={() => cancelDownload(item.track.id)} size="sm" />
-        )}
+        {busy && <IconBtn icon={X} title="Cancel download" danger onClick={() => cancelDownload(item.track.id)} size="sm" />}
         {item.status === "done" && item.path && (
-          <IconBtn
-            icon={FolderOpen}
-            title="Show in folder"
-            onClick={() => window.bytune?.revealPath(item.path!)}
-            size="sm"
-          />
+          <IconBtn icon={FolderOpen} title="Show in folder" onClick={() => window.bytune?.revealPath(item.path!)} size="sm" />
         )}
-        {item.status !== "downloading" && item.status !== "queued" && (
-          <IconBtn icon={X} title="Remove from list" danger onClick={() => onRemove(item.track.id)} size="sm" />
-        )}
+        {!busy && <IconBtn icon={X} title="Remove from list" danger onClick={() => onRemove(item.track.id)} size="sm" />}
+      </div>
+      <div className="w-11 shrink-0 text-right text-xs text-ink-faint tabular-nums">
+        {item.track.duration > 0 ? fmtTime(item.track.duration) : "—"}
       </div>
     </div>
   );
@@ -113,11 +137,20 @@ export function DownloadsView() {
   const downloadDir = useSettings((s) => s.downloadDir);
   const openContextMenu = useUI((s) => s.openContextMenu);
   const toast = useUI((s) => s.toast);
+  const rowLight = useRowLight();
 
   const items = Object.values(downloads).sort((a, b) => a.track.title.localeCompare(b.track.title));
-  const doneCount = items.filter((i) => i.status === "done").length;
+  /** what's saved, in the page's order: what Play plays */
+  const saved: Track[] = items.filter((i) => i.status === "done").map((i) => i.track);
   const failedCount = items.filter((i) => i.status === "failed").length;
   const activeCount = items.filter((i) => i.status === "downloading" || i.status === "queued").length;
+  const facts = collectionFacts(saved);
+
+  const play = (index: number, shuffle = false): void => {
+    if (!saved.length) return;
+    if (shuffle) usePlayer.setState({ shuffle: true });
+    usePlayer.getState().playQueue(saved, index, "__downloads__");
+  };
 
   const openFolder = (): void => {
     const b = window.bytune;
@@ -133,47 +166,58 @@ export function DownloadsView() {
   };
 
   return (
-    <div className="space-y-7">
-      <div className="flex items-end justify-between gap-4 animate-slide-up">
-        <div>
-          <h1 className="font-display text-[28px] font-bold tracking-tight text-ink-hi">Downloads</h1>
-          <p className="text-sm text-ink-dim mt-1 flex items-center gap-2">
-            <span>
-              {items.length === 0
-                ? "Saved music lives on your disk"
-                : plural(doneCount, "track", "tracks") + " saved"}
-            </span>
-            {failedCount > 0 && <span className="text-red-400">· {plural(failedCount, "failure", "failures")}</span>}
-            {activeCount > 0 && <span className="text-accent">· {plural(activeCount, "download", "downloads")} in progress</span>}
-          </p>
-        </div>
-        <Btn variant="glass" icon={FolderOpen} onClick={openFolder}>
-          Open folder
-        </Btn>
-      </div>
+    <div className="pb-14">
+      <CollectionHero
+        icon={Download}
+        kind="Saved for offline"
+        title="Downloads"
+        covers={items.map((i) => i.track.thumb)}
+        facts={
+          <>
+            {saved.length ? [facts.songs, facts.length].filter(Boolean).join(" · ") : "Nothing saved yet"}
+            {activeCount > 0 && <span className="text-white"> · {activeCount} on the way</span>}
+            {failedCount > 0 && <span className="text-red-300"> · {failedCount} couldn't download</span>}
+          </>
+        }
+      >
+        <button type="button" className={HERO_PLAY} aria-label="Play Downloads" disabled={!saved.length} onClick={() => play(0)}>
+          <Play className="w-5 h-5 fill-current" />
+          Play
+        </button>
+        <button
+          type="button"
+          className={HERO_ROUND}
+          aria-label="Shuffle"
+          title="Shuffle"
+          disabled={!saved.length}
+          onClick={() => play(Math.floor(Math.random() * saved.length), true)}
+        >
+          <Shuffle className="w-5 h-5" />
+        </button>
+        <button type="button" className={HERO_ROUND} aria-label="Open the downloads folder" title="Open folder" onClick={openFolder}>
+          <FolderOpen className="w-5 h-5" />
+        </button>
+      </CollectionHero>
 
       {items.length === 0 ? (
-        <EmptyState
-          icon={Download}
-          title="No downloads yet"
-          body='Right-click any track and choose "Download", or use the download arrow on a track row. Files are saved to your downloads folder.'
-        />
+        <div className="mt-6">
+          <EmptyState
+            icon={Download}
+            title="No downloads yet"
+            body='Right-click any song and choose "Download", or use the download arrow on a song row. Its cover joins the wall above once it starts.'
+          />
+        </div>
       ) : (
-        <div className="space-y-1">
-          <div className="flex items-center gap-3 px-3 pb-2 border-b border-ink-hi/[0.055] text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-ghost">
-            <div className="w-10 shrink-0" />
-            <div className="flex-1 min-w-0">Track</div>
-            <div className="w-48 shrink-0">Status</div>
-            <div className="w-20 shrink-0" />
-          </div>
+        <div className="relative mt-6" onMouseLeave={rowLight.leave}>
+          {rowLight.light}
           {items.map((item) => (
             <DownloadRow
               key={item.track.id}
               item={item}
-              onOpenMenu={(x, y) =>
-                openContextMenu(x, y, downloadMenuItems(item.track, item.path))
-              }
+              onPlay={item.status === "done" ? () => play(saved.findIndex((t) => t.id === item.track.id)) : undefined}
+              onOpenMenu={(x, y) => openContextMenu(x, y, downloadMenuItems(item.track, item.path))}
               onRemove={removeDownload}
+              onHover={rowLight.hover}
             />
           ))}
         </div>

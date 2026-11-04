@@ -383,10 +383,8 @@ body.bytune-dragging * {
   scroll-behavior: smooth;
 }
 
-/* The main content scroller — Spotify's floating pill. The scroller itself
-   carries no background of its own (the rounded panel behind it is the only
-   surface), and the thumb floats a few pixels inside the panel edge instead
-   of hugging it. */
+/* The lyrics scroller (SyncedLyrics): no background of its own, and a slim
+   pill that floats a few pixels in from the edge instead of hugging it. */
 .scroll-host {
   background: transparent;
   scrollbar-gutter: stable;
@@ -414,6 +412,331 @@ body.bytune-dragging * {
 }
 .no-scrollbar {
   scrollbar-width: none;
+}
+
+/* The middle panel's scrollbar (components/PanelScrollbar), drawn over the
+   page: the panel's scroller hides its own so covers run to the panel's right
+   edge (see App.tsx). The pill the native one drew, 4px wide and 5px in from
+   the edge, with a faint dark rim so it still shows over a light cover. Only
+   the thumb takes the pointer; the strip under it is the page's. */
+.panel-scrollbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  z-index: 20;
+  pointer-events: none;
+}
+.panel-scrollbar-thumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  pointer-events: auto;
+}
+.panel-scrollbar-thumb::before {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border-radius: 999px;
+  background-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.2);
+  transition: background-color 150ms ease;
+}
+.panel-scrollbar-thumb:hover::before,
+.panel-scrollbar-thumb[data-dragging]::before {
+  background-color: rgba(255, 255, 255, 0.22);
+}
+
+/* ---------- collection pages (CollectionHero, CoverStack, the lit song list) ----------
+   ByTune's own pages, lit by the music: a wall of the collection's covers for a header,
+   playlists as stacks of their covers, and a light made of each song's cover following
+   the pointer down a list. No colour of their own: every colour comes off the artwork. */
+.collection-hero {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: rgb(var(--surface));
+}
+/* The wall: tilted and overfilling the header, it sinks and dims as the page scrolls. */
+.cover-wall {
+  position: absolute;
+  inset: -80px -120px;
+  z-index: -2;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  transform: rotate(-7deg);
+  filter: brightness(0.6) saturate(1.15);
+  animation: cover-wall-sink linear both;
+  animation-timeline: --view-scroll;
+  animation-range: 0px 420px;
+}
+.cover-wall-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: cover-wall-in 1200ms var(--ease-enter) both;
+}
+/* Each row holds its tiles twice and slides by one length, so it never runs out. */
+.cover-wall-row {
+  display: flex;
+  width: max-content;
+  animation: cover-wall-drift linear infinite;
+  will-change: transform;
+}
+.cover-wall-tile {
+  flex: none;
+  width: 136px;
+  height: 136px;
+  margin-right: 14px;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 0.05) center / cover no-repeat;
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.45);
+}
+@keyframes cover-wall-drift {
+  to { transform: translateX(-50%); }
+}
+@keyframes cover-wall-in {
+  from { opacity: 0; transform: scale(1.08); }
+}
+@keyframes cover-wall-sink {
+  from { transform: rotate(-7deg) translateY(0); filter: brightness(0.6) saturate(1.15); }
+  to { transform: rotate(-7deg) translateY(130px); filter: brightness(0.3) saturate(0.9); }
+}
+/* Darker on the text's side, and the foot melting into the panel. */
+.cover-wall-shade {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    linear-gradient(to top, rgb(var(--surface)) 0%, rgb(var(--surface) / 0.9) 16%, rgb(var(--surface) / 0.4) 48%, rgb(var(--surface) / 0.08) 100%),
+    radial-gradient(110% 95% at 0% 100%, rgb(0 0 0 / 0.55), transparent 62%);
+}
+.collection-hero .cover-glow-grain {
+  z-index: -1;
+}
+.collection-hero-text > * {
+  animation: rise-in 560ms var(--ease-enter) both;
+}
+.collection-hero-text > :nth-child(2) { animation-delay: 60ms; }
+.collection-hero-text > :nth-child(3) { animation-delay: 120ms; }
+.collection-hero-text > :nth-child(4) { animation-delay: 180ms; }
+@supports not (animation-timeline: scroll()) {
+  .cover-wall { animation: none; }
+}
+
+/* A collection as a stack of its covers: hovering fans the sleeves out and lights them from below. */
+.stack-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 30px 26px;
+}
+.stack-card {
+  position: relative;
+  min-width: 0;
+  animation: rise-in 520ms var(--ease-enter) both;
+}
+.stack-art {
+  position: relative;
+  aspect-ratio: 1;
+}
+.stack-open {
+  position: absolute;
+  inset: 0;
+  border-radius: 18px;
+  transition: box-shadow 200ms ease;
+}
+.stack-sleeve {
+  position: absolute;
+  inset: 13%;
+  border-radius: 12px;
+  background: rgb(var(--panel)) center / cover no-repeat;
+  box-shadow: 0 14px 34px rgb(0 0 0 / 0.5), inset 0 0 0 1px rgb(255 255 255 / 0.06);
+  transition: transform 460ms var(--ease-enter);
+}
+.stack-sleeve.s1 { transform: rotate(-7deg) translateX(-9%); }
+.stack-sleeve.s2 { transform: rotate(7deg) translateX(9%); }
+.stack-card:hover .stack-sleeve.s0,
+.stack-card:focus-within .stack-sleeve.s0,
+.stack-card.is-lit .stack-sleeve.s0 { transform: translateY(-5%) scale(1.04); }
+.stack-card:hover .stack-sleeve.s1,
+.stack-card:focus-within .stack-sleeve.s1,
+.stack-card.is-lit .stack-sleeve.s1 { transform: rotate(-14deg) translate(-22%, 1%); }
+.stack-card:hover .stack-sleeve.s2,
+.stack-card:focus-within .stack-sleeve.s2,
+.stack-card.is-lit .stack-sleeve.s2 { transform: rotate(14deg) translate(22%, 1%); }
+.stack-light {
+  position: absolute;
+  inset: 22% 8% 0;
+  background: center / 100% 100% no-repeat;
+  filter: blur(28px) saturate(1.6);
+  opacity: 0;
+  transform: translateY(8%) scale(0.9);
+  transition: opacity 460ms var(--ease-enter), transform 460ms var(--ease-enter);
+  pointer-events: none;
+}
+.stack-card:hover .stack-light,
+.stack-card:focus-within .stack-light,
+.stack-card.is-lit .stack-light { opacity: 0.6; transform: translateY(14%) scale(1); }
+.stack-card.is-lit .stack-open { box-shadow: 0 0 0 2px rgb(var(--accent) / 0.6); }
+/* The Play button sits on the top sleeve's corner, not the card's. */
+.stack-play {
+  position: absolute;
+  inset: 13%;
+  z-index: 4;
+  pointer-events: none;
+}
+/* Its options: a round … on the top sleeve's upper corner, on hover. */
+.stack-menu {
+  position: absolute;
+  top: calc(13% + 8px);
+  right: calc(13% + 8px);
+  z-index: 5;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: white;
+  background: rgb(0 0 0 / 0.6);
+  opacity: 0;
+  transition: opacity 180ms ease, background-color 180ms ease;
+}
+.stack-menu:hover {
+  background: rgb(0 0 0 / 0.8);
+}
+.stack-card:hover .stack-menu,
+.stack-card:focus-within .stack-menu {
+  opacity: 1;
+}
+/* Needs attention (a local folder that can't be reached). */
+.stack-warn {
+  position: absolute;
+  top: calc(13% - 9px);
+  left: calc(13% - 9px);
+  z-index: 5;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: #1c1100;
+  background: rgb(251 191 36);
+  box-shadow: 0 0 0 3px rgb(var(--surface));
+}
+/* "Import another folder": an empty sleeve drawn in dashes. */
+.stack-add .stack-art::before {
+  content: "";
+  position: absolute;
+  inset: 13%;
+  border-radius: 12px;
+  border: 1.5px dashed rgb(255 255 255 / 0.18);
+  transition: border-color 200ms ease, background-color 200ms ease;
+}
+.stack-add:hover .stack-art::before {
+  border-color: rgb(255 255 255 / 0.4);
+  background: rgb(255 255 255 / 0.03);
+}
+
+/* Downloads: a song's cover fills with its colour from the bottom as it comes in. Until it's
+   saved (waiting, failed), the cover stays grey. */
+.dl-cover {
+  position: relative;
+  flex: none;
+  width: 52px;
+  height: 52px;
+}
+.dl-cover:not(.done) > :first-child {
+  filter: grayscale(1) brightness(0.45);
+}
+.dl-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  background: center / cover no-repeat;
+  clip-path: inset(calc(100% - var(--fill)) 0 0 0 round 8px);
+  transition: clip-path 600ms var(--ease-enter);
+}
+.dl-pct {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: white;
+  text-shadow: 0 1px 6px rgb(0 0 0 / 0.8);
+  font-variant-numeric: tabular-nums;
+}
+.dl-badge {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 19px;
+  height: 19px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2.5px rgb(var(--surface));
+}
+.dl-badge.ok { background: rgb(52 211 153); color: #03140d; }
+.dl-badge.fail { background: rgb(248 113 113); color: #1d0606; }
+.dl-badge.wait { background: rgb(82 82 91); color: white; }
+
+/* The lit song list (TrackList): a light made of the cover of the song under the pointer, blurred
+   and stretched across its row, glides from row to row; the playing song keeps a softer one. */
+.tl-light,
+.tl-playing {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.tl-light {
+  opacity: 0;
+  transition: transform 240ms var(--ease-enter), height 240ms var(--ease-enter), opacity 320ms ease;
+}
+.tl-light.is-on {
+  opacity: 1;
+}
+/* Inside the playing row, under its text. */
+.tl-playing {
+  bottom: 0;
+  z-index: -1;
+}
+.tl-light::before,
+.tl-playing::before {
+  content: "";
+  position: absolute;
+  inset: -45% -8%;
+  background: var(--light) center / 100% 100% no-repeat;
+  filter: blur(30px) saturate(1.7);
+  opacity: 0.4;
+}
+.tl-playing::before {
+  opacity: 0.22;
+  animation: tl-breathe 3.2s ease-in-out infinite;
+}
+@keyframes tl-breathe {
+  50% { opacity: 0.34; }
+}
+.tl-row {
+  position: relative;
+  z-index: 1;
+}
+
+html.reduce-motion .cover-wall,
+html.reduce-motion .cover-wall-rows,
+html.reduce-motion .cover-wall-row,
+html.reduce-motion .collection-hero-text > *,
+html.reduce-motion .stack-card,
+html.reduce-motion .tl-playing::before {
+  animation: none;
 }
 
 /* ---------- range sliders (ThinSlider port) ----------

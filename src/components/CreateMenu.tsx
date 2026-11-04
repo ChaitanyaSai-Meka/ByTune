@@ -12,10 +12,13 @@ import { createPortal } from "react-dom";
 import { ClipboardList, FileUp, Folder, ListPlus, Plus } from "lucide-react";
 import { importPlaylistFile } from "../lib/playlistShare";
 import { importFromText } from "../lib/importSongs";
-import { useLibrary, type LibraryFolder } from "../stores/library";
+import { askForNewFolder } from "../lib/collection";
+import { useLibrary } from "../stores/library";
 import { useUI } from "../stores/ui";
+import { HERO_PLAY } from "./CollectionHero";
 
-export function CreateMenu({ onFolderCreated }: { onFolderCreated?: (folder: LibraryFolder) => void }) {
+/** `pill`: Your Library's header button ("Create"); the left panel keeps the small +. */
+export function CreateMenu({ variant = "icon" }: { variant?: "icon" | "pill" }) {
   const navigate = useUI((s) => s.navigate);
 
   const [open, setOpen] = useState(false);
@@ -55,7 +58,8 @@ export function CreateMenu({ onFolderCreated }: { onFolderCreated?: (folder: Lib
     if (r) {
       const MENU_W = 264;
       const EDGE = 12;
-      const HANG = 72; // menu starts this far left of the + and extends right
+      // The left panel's + hangs the menu out over the page; a header button lines up with it.
+      const HANG = variant === "pill" ? 0 : 72;
       const left = Math.min(Math.max(r.left - HANG, EDGE), window.innerWidth - MENU_W - EDGE);
       setPos({ top: r.bottom + 8, left: Math.max(left, EDGE) });
     }
@@ -80,20 +84,10 @@ export function CreateMenu({ onFolderCreated }: { onFolderCreated?: (folder: Lib
     });
   };
 
+  // The new folder opens in the middle panel, ready to be filled.
   const newFolder = (): void => {
     setOpen(false);
-    const suggested = `New Folder ${useLibrary.getState().folders.length + 1}`;
-    useUI.getState().openDialog({
-      title: "New folder",
-      body: "Give your folder a name.",
-      initialValue: suggested,
-      placeholder: "Folder name",
-      confirmLabel: "Create",
-      onConfirm: (value) => {
-        const f = useLibrary.getState().createFolder(value.trim() || suggested);
-        onFolderCreated?.(f);
-      },
-    });
+    askForNewFolder();
   };
 
   const importList = (): void => {
@@ -116,11 +110,16 @@ export function CreateMenu({ onFolderCreated }: { onFolderCreated?: (folder: Lib
         title="Create playlist or folder"
         aria-label="Create playlist or folder"
         aria-expanded={open}
-        className={`p-1.5 rounded-full transition-colors ${
-          open ? "text-ink-hi bg-ink-hi/[0.10]" : "text-ink-hi/55 hover:text-ink-hi hover:bg-ink-hi/[0.06]"
-        }`}
+        className={
+          variant === "pill"
+            ? HERO_PLAY
+            : `p-1.5 rounded-full transition-colors ${
+                open ? "text-ink-hi bg-ink-hi/[0.10]" : "text-ink-hi/55 hover:text-ink-hi hover:bg-ink-hi/[0.06]"
+              }`
+        }
       >
-        <Plus className="w-4 h-4" />
+        <Plus className={variant === "pill" ? "w-5 h-5" : "w-4 h-4"} />
+        {variant === "pill" && "Create"}
       </button>
       {open &&
         pos &&

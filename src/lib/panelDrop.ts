@@ -20,7 +20,8 @@ import { draggingFromPlaylist, useTrackDrop } from "./dnd";
 import { addSongsToPlaylists } from "./devicePlaylists";
 import { shortTitle } from "./format";
 
-function addToOpenPlaylist(playlistId: string, track: Track): void {
+/** A song dropped on one of your playlists (the open one, or a card of it): added, or already there. */
+export function addSongToPlaylist(playlistId: string, track: Track): void {
   const name = useLibrary.getState().playlists.find((p) => p.id === playlistId)?.name ?? "playlist";
   const { added, told } = addSongsToPlaylists([playlistId], [track]);
   if (!told) useUI.getState().toast(added ? `Added to "${name}"` : `Already in "${name}"`, added ? "success" : "info");
@@ -98,7 +99,7 @@ export function usePanelDrop(): {
   };
   return useTrackDrop((track) => {
     const view = useUI.getState().view;
-    if (view.name === "playlist" && view.param) addToOpenPlaylist(view.param, track);
+    if (view.name === "playlist" && view.param) addSongToPlaylist(view.param, track);
     else if (view.name === "library" && view.param === "liked") likeTrack(track);
     else if (view.name === "local") downloadIntoLocalFolder(track, view.param);
   }, accepts);

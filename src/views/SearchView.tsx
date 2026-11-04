@@ -628,8 +628,8 @@ export function SearchView() {
       {/* pointer-events-none: rows scrolling under this strip keep their
           hover — only the pills themselves take the pointer. The frosted
           blur band behind them is NOT painted here: it lives at panel level
-          (see .search-band in index.css and App.tsx) so it can reach the
-          panel's true right edge past the scrollbar gutter. This row just
+          (see .search-band in index.css and App.tsx) so it stays put over
+          the panel's full width. This row just
           sticks to the top and sits above that band (z-10). Pills are
           full-size but narrow-padded so all six fit the content column at
           the default window size; flex-wrap is the safety valve below

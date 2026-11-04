@@ -1,22 +1,24 @@
 /**
- * A local playlist page — BitChord mobile's DetailScreen, same construction
- * as the album and remote-playlist pages: full-bleed cover hero with the
- * "PLAYLIST • N TRACKS • ABOUT 3:2X" metadata line, circular glass controls,
- * then the playlist's own numbered track rows.
+ * One of your playlists: a wall of its songs' covers, its name, how many songs and how long (and
+ * which stay on this device), Play, Shuffle and its options; then its songs in your order, each lit
+ * by its own cover as the pointer passes. Songs dropped on the page are added (App's panel drop);
+ * its own songs move within the list instead (useSortable).
  */
 import { useEffect, useRef } from "react";
-import { Download, FileDown, Heart, ListMusic, ListPlus, MoreHorizontal, Play, Shuffle } from "lucide-react";
+import { Download, FileDown, HardDrive, Heart, ListMusic, ListPlus, MoreHorizontal, Play, Shuffle } from "lucide-react";
 import { downloadAll } from "../lib/downloads";
 import { exportPlaylist } from "../lib/playlistShare";
 import { DownloadBadge } from "../components/TrackList";
+import { CollectionHero, HERO_PLAY } from "../components/CollectionHero";
+import { HERO_ROUND } from "../components/PlaylistHero";
+import { PlayingLight, useRowLight } from "../components/RowLight";
 import { Artwork, EmptyState, EqBars, ExplicitBadge } from "../components/primitives";
 import { playlistHeaderItems, playlistMenuItems } from "../lib/trackActions";
 import { useDrag } from "../lib/dnd";
 import { useSortable, type SortableDragProps } from "../lib/useSortable";
-import { fmtTime, fmtTotal, PAGE_TITLE_SIZE, plural, shortTitle, titleStep } from "../lib/format";
+import { collectionFacts } from "../lib/collection";
+import { fmtTime, shortTitle } from "../lib/format";
 import { FitText } from "../components/FitText";
-import { pageColors, useArtworkPalette } from "../lib/palette";
-import { upgradeArtwork } from "../lib/artwork";
 import { useLibrary, type Playlist } from "../stores/library";
 import { isLocalSong, staysOnDevice } from "../lib/devicePlaylists";
 import { usePlayer } from "../stores/player";
@@ -28,14 +30,7 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
   const playQueue = usePlayer((s) => s.playQueue);
   const openContextMenu = useUI((s) => s.openContextMenu);
   const toast = useUI((s) => s.toast);
-
-  // Artist-imported playlists wear the artist's photo, not a song cover —
-  // the page tint and the hero read from that same artwork.
-  const coverThumb = playlist?.artistThumb ?? playlist?.tracks[0]?.thumb ?? null;
-  const pagePalette = useArtworkPalette(coverThumb);
-
-  // Dropping songs onto this page is handled panel-wide in App (usePanelDrop);
-  // its own songs move within the list instead (useSortable).
+  const rowLight = useRowLight();
 
   // A song dragged within the list moves the way the queue's do; dragged out,
   // it still drops onto other playlists or the queue.
@@ -74,20 +69,10 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
     copies.set(id, n + 1);
     return `${id}#${n}`;
   };
-  const totalSec = tracks.reduce((acc, t) => acc + t.duration, 0);
-  // Spotify's model: a fresh playlist reads "PLAYLIST" — the "0 tracks"
-  // count only appears once there's something to count.
   // Songs from this computer don't sync: the playlist says what stays here.
   const onDevice = staysOnDevice(playlist);
   const localCount = tracks.filter(isLocalSong).length;
-  const meta = [
-    onDevice ? "On this device" : "Playlist",
-    tracks.length ? plural(tracks.length, "track", "tracks") : "",
-    totalSec > 0 ? fmtTotal(totalSec) : "",
-  ]
-    .filter(Boolean)
-    .join(" • ")
-    .toUpperCase();
+  const facts = collectionFacts(tracks);
 
   const play = (shuffle: boolean): void => {
     if (!tracks.length) return;
@@ -118,114 +103,78 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
   };
 
   return (
-    <div className="page-tint -mt-5" style={pageColors(pagePalette)}>
-      {/* Hero — the playlist cover full-bleed, name + metadata over its lower edge. */}
-      <div className="relative -mx-10 overflow-hidden">
-        <div className="absolute inset-0">
-          {coverThumb ? (
-            <img src={upgradeArtwork(coverThumb, 1200)} alt="" className="w-full h-full object-cover" />
-          ) : (
-            /* Default cover — ByTune violet gradient with a big soft note
-               watermark, Spotify's default-playlist-cover model. The bottom
-               fade below still melts it into the page background. */
-            <div
-              className="relative w-full h-full overflow-hidden"
-              style={{
-                background:
-                  "linear-gradient(140deg, rgb(109 40 217 / 0.85) 0%, rgb(59 7 100 / 0.9) 42%, rgb(30 27 75 / 0.92) 70%, rgb(var(--page-bg)) 100%)",
-              }}
-            >
-              {/* sheen — keeps the violet from reading flat */}
-              <div
-                className="absolute inset-0"
-                style={{
-                  background:
-                    "radial-gradient(ellipse 55% 45% at 18% 12%, rgb(255 255 255 / 0.14), transparent 70%)",
-                }}
-              />
-              <ListMusic
-                className="absolute -right-8 -bottom-10 w-[280px] h-[280px] text-white/[0.08] rotate-[-10deg]"
-                aria-hidden
-              />
-            </div>
-          )}
-          <div
-            className="absolute inset-0"
-            style={{
-              background: `linear-gradient(to bottom,
-                rgb(var(--page-bg) / 0.20) 0%,
-                rgb(var(--page-bg) / 0.45) 50%,
-                rgb(var(--page-bg) / 0.90) 80%,
-                rgb(var(--page-bg)) 100%)`,
-            }}
-          />
-        </div>
+    <div className="pb-14">
+      <CollectionHero
+        icon={onDevice ? HardDrive : ListMusic}
+        kind={onDevice ? "On this device" : "Your playlist"}
+        title={playlist.name}
+        // An artist's playlist leads with the artist's photo.
+        covers={[playlist.artistThumb, ...tracks.map((t) => t.thumb)]}
+        facts={
+          <>
+            {tracks.length ? [facts.songs, facts.length].filter(Boolean).join(" · ") : "No songs yet"}
+            {facts.topArtist && (
+              <>
+                {" · Top artist: "}
+                <span className="font-semibold text-white">{facts.topArtist.name}</span>
+              </>
+            )}
+            {localCount > 0 && (
+              <span className="block mt-1.5 text-[13px] text-white/60">
+                {onDevice
+                  ? "All its songs are from this computer, so it stays here and doesn't sync."
+                  : `${localCount === 1 ? "1 song is" : `${localCount} songs are`} from this computer and ${
+                      localCount === 1 ? "stays" : "stay"
+                    } on this device. The rest of the playlist syncs.`}
+              </span>
+            )}
+          </>
+        }
+      >
+        {/* Not dimmed when empty: play() does nothing then, and grey buttons made new playlists look broken. */}
+        <button type="button" className={HERO_PLAY} aria-label={`Play ${playlist.name}`} onClick={() => play(false)}>
+          <Play className="w-5 h-5 fill-current" />
+          Play
+        </button>
+        <button type="button" className={HERO_ROUND} aria-label="Shuffle" title="Shuffle" onClick={() => play(true)}>
+          <Shuffle className="w-5 h-5" />
+        </button>
+        <button
+          type="button"
+          className={HERO_ROUND}
+          aria-label="More options"
+          title="More options"
+          onClick={(e) => openHeaderMenu(e.clientX, e.clientY)}
+        >
+          <MoreHorizontal className="w-5 h-5" />
+        </button>
+      </CollectionHero>
 
-        <div className="relative flex flex-col items-center text-center px-8 pt-[244px] pb-5">
-          {/* The whole name, a size smaller as it grows — never cut. */}
-          <h1
-            className={`font-display ${PAGE_TITLE_SIZE[titleStep(playlist.name)]} leading-[1.2] font-extrabold tracking-[-0.03em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)] break-words max-w-3xl`}
-          >
-            {playlist.name}
-          </h1>
-          <div className="text-[12px] font-semibold uppercase tracking-[0.14em] text-white/70 mt-1.5 drop-shadow-[0_1px_6px_rgba(0,0,0,0.5)]">
-            {meta}
-          </div>
-          {localCount > 0 && (
-            <p className="text-[12.5px] text-white/60 mt-1 drop-shadow-[0_1px_6px_rgba(0,0,0,0.5)]">
-              {onDevice
-                ? "All its songs are from this computer, so it stays here and doesn't sync."
-                : `${localCount === 1 ? "1 song is" : `${localCount} songs are`} from this computer and ${
-                    localCount === 1 ? "stays" : "stay"
-                  } on this device. The rest of the playlist syncs.`}
-            </p>
-          )}
-
-          <div className="flex items-center justify-center gap-2.5 mt-4">
-            {/* No `disabled` dimming when empty — play() no-ops on an empty
-                list, and grayed-out buttons made fresh playlists look broken. */}
-            <button
-              onClick={() => play(true)}
-              title="Shuffle"
-              aria-label="Shuffle"
-              className="w-11 h-11 grid place-items-center rounded-full bg-black/45 border border-white/10 text-white backdrop-blur-sm hover:bg-black/60 transition-all active:scale-[0.98]"
-            >
-              <Shuffle className="w-[18px] h-[18px]" />
-            </button>
-            <button
-              onClick={() => play(false)}
-              className="inline-flex items-center gap-2 h-11 px-6 rounded-full bg-black/45 border border-white/10 text-[14.5px] font-semibold text-white backdrop-blur-sm hover:bg-black/60 transition-all active:scale-[0.98]"
-            >
-              <Play className="w-[18px] h-[18px] fill-current" />
-              Play
-            </button>
-            <button
-              onClick={(e) => openHeaderMenu(e.clientX, e.clientY)}
-              title="More options"
-              aria-label="More options"
-              className="w-11 h-11 grid place-items-center rounded-full bg-black/45 border border-white/10 text-white backdrop-blur-sm hover:bg-black/60 transition-all active:scale-[0.98]"
-            >
-              <MoreHorizontal className="w-[18px] h-[18px]" />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="px-8 pb-12 pt-2">
+      <div className="pt-6">
         {tracks.length ? (
-          <div ref={listRef}>
-            {tracks.map((track, i) => (
-              <div key={rowKey(track.id)} style={sortable.styleFor(i)}>
-                <PlaylistTrackRow track={track} index={i} queue={tracks} playlist={playlist} sortDrag={sortable.dragProps(i)} />
-                {i < tracks.length - 1 && <div className="h-px bg-ink-hi/[0.05] ml-[112px] mr-3" />}
-              </div>
-            ))}
+          <div className="relative" onMouseLeave={rowLight.leave}>
+            {rowLight.light}
+            <div ref={listRef}>
+              {tracks.map((track, i) => (
+                <div key={rowKey(track.id)} style={sortable.styleFor(i)}>
+                  <PlaylistTrackRow
+                    track={track}
+                    index={i}
+                    queue={tracks}
+                    playlist={playlist}
+                    sortDrag={sortable.dragProps(i)}
+                    onHover={rowLight.hover}
+                  />
+                  {i < tracks.length - 1 && <div className="h-px bg-ink-hi/[0.05] ml-[112px] mr-3" />}
+                </div>
+              ))}
+            </div>
           </div>
         ) : (
           <EmptyState
             icon={ListMusic}
             title="Let's find something for your playlist"
-            body="Search for songs you love, or browse Explore to discover something new — then right-click any track to add it here."
+            body="Search for songs you love, or browse Explore to discover something new, then right-click any song to add it here. Its cover joins the wall above."
             action={
               <div className="flex items-center gap-2.5">
                 <button
@@ -260,6 +209,7 @@ function PlaylistTrackRow({
   queue,
   playlist,
   sortDrag,
+  onHover,
 }: {
   track: Track;
   index: number;
@@ -267,6 +217,8 @@ function PlaylistTrackRow({
   playlist: Playlist;
   /** moving the row within the playlist (see useSortable) */
   sortDrag: SortableDragProps;
+  /** the pointer came onto this row: the list's light moves to it */
+  onHover: (row: HTMLElement, thumb: string) => void;
 }) {
   const playQueue = usePlayer((s) => s.playQueue);
   const openContextMenu = useUI((s) => s.openContextMenu);
@@ -296,16 +248,18 @@ function PlaylistTrackRow({
       onPointerMove={sortDrag.onPointerMove}
       onPointerUp={sortDrag.onPointerUp}
       onPointerCancel={sortDrag.onPointerCancel}
+      onMouseEnter={(e) => onHover(e.currentTarget, track.thumb)}
       onClick={() => playQueue(queue, index, playlist.id)}
       onContextMenu={(e) => {
         e.preventDefault();
         openMenu(e.clientX, e.clientY);
       }}
-      className={`fit-host group relative flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
-        isCurrent ? "bg-ink-hi/[0.14]" : "hover:bg-ink-hi/[0.05]"
+      className={`tl-row fit-host group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
+        isCurrent ? "bg-ink-hi/[0.06]" : "hover:bg-ink-hi/[0.04]"
       } ${drag.dragging ? "opacity-40" : ""}`}
     >
-      {/* The playlist's own running order — numbered rows, play on hover. */}
+      {isCurrent && <PlayingLight thumb={track.thumb} />}
+      {/* The playlist's own running order: numbered rows, play on hover. */}
       <div data-ghost-hide className="w-7 shrink-0 grid place-items-center text-[13px] text-ink-faint tabular-nums">
         {isCurrent && playing ? (
           <EqBars />
