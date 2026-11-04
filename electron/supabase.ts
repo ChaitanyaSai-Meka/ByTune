@@ -19,7 +19,14 @@ import { createClient, type Session, type SupabaseClient } from "@supabase/supab
 import * as persist from "./persist";
 import { openSecret, sealSecret } from "./secrets";
 import { OAUTH_REDIRECT, SUPABASE_ANON_KEY, SUPABASE_URL, syntheticEmail } from "../src/lib/config";
-import { normalizeUsername, passwordProblem, usernameProblem } from "../src/lib/account-validators";
+import {
+  DISPLAY_NAME_MAX,
+  displayNameProblem,
+  normalizeDisplayName,
+  normalizeUsername,
+  passwordProblem,
+  usernameProblem,
+} from "../src/lib/account-validators";
 
 export type AuthMode = "guest" | "account";
 export interface LocalProfile {
@@ -28,6 +35,12 @@ export interface LocalProfile {
   username?: string;
   /** Google sign-ins start with an auto username until the user picks one. */
   pendingUsername?: boolean;
+  /** What people see (Rooms, the avatar). An account's is kept on the server too (display_names). */
+  displayName?: string;
+  /** Saved here while the server couldn't take it: sent at the next sync. */
+  displayNamePending?: boolean;
+  /** A new Google account's name (or the guest's, carried over), offered while it picks a username. */
+  suggestedDisplayName?: string;
   deviceId: string;
   createdAt: number;
 }
@@ -35,6 +48,9 @@ export interface SessionInfo {
   mode: AuthMode | null;
   userId: string | null;
   username: string | null;
+  displayName?: string | null;
+  /** Offered as the display name: a guest's own as they create an account, or a new Google account's. */
+  suggestedDisplayName?: string;
   /** True right after a reinstall (install dir marker missing, data kept). */
   freshInstall: boolean;
   /** Fresh Google sign-in still using the auto-generated username. */
@@ -51,6 +67,8 @@ export interface SessionInfo {
 let client: SupabaseClient | null = null;
 let currentSession: Session | null = null;
 let freshInstall = false;
+/** A guest's display name while they go through sign-up (clearGuestProfile empties the profile first). */
+let carriedName: string | null = null;
 
 /**
  * The install directory is replaced by a reinstall while userData survives —
@@ -153,16 +171,120 @@ async function writeProfile(patch: Partial<LocalProfile> & { mode: AuthMode }): 
 
 export function sessionInfo(): SessionInfo {
   const profile = readProfile();
-  if (!profile) return { mode: null, userId: null, username: null, freshInstall };
-  if (profile.mode === "guest") return { mode: "guest", userId: null, username: null, freshInstall };
+  if (!profile) {
+    return { mode: null, userId: null, username: null, displayName: null, freshInstall, ...(carriedName ? { suggestedDisplayName: carriedName } : {}) };
+  }
+  if (profile.mode === "guest") {
+    return { mode: "guest", userId: null, username: null, displayName: profile.displayName ?? null, freshInstall };
+  }
   const username = profile.username ?? null;
   return {
     mode: "account",
     userId: currentSession?.user?.id ?? profile.userId ?? null,
     username,
+    displayName: profile.displayName ?? null,
     freshInstall,
     needsUsername: profile.pendingUsername === true,
+    ...(profile.pendingUsername && profile.suggestedDisplayName ? { suggestedDisplayName: profile.suggestedDisplayName } : {}),
   };
+}
+
+/**
+ * The profile for an account just signed in. Its display name is the account's own: one left by
+ * another identity doesn't come along, and a guest's name carried for a sign-up is used up.
+ */
+async function accountProfile(userId: string, patch: Partial<LocalProfile>): Promise<LocalProfile> {
+  carriedName = null;
+  const same = readProfile()?.userId === userId;
+  return writeProfile({
+    ...(same ? {} : { displayName: undefined, displayNamePending: undefined, suggestedDisplayName: undefined }),
+    ...patch,
+    mode: "account",
+    userId,
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Display name                                                        */
+/* ------------------------------------------------------------------ */
+
+function nameError(message: string): Error {
+  // The migration isn't on the server yet: PostgREST can't find the table.
+  if (/schema cache|could not find the table|does not exist/i.test(message)) {
+    return new Error("Display names aren't set up on ByTune's server yet.");
+  }
+  return new Error(message);
+}
+
+async function fetchDisplayName(userId: string): Promise<string | null> {
+  const { data, error } = await supabase().from("display_names").select("name").eq("user_id", userId).maybeSingle();
+  if (error) throw nameError(error.message);
+  return typeof data?.name === "string" ? data.name : null;
+}
+
+async function pushDisplayName(userId: string, name: string): Promise<void> {
+  const { error } = await supabase().from("display_names").upsert({ user_id: userId, name });
+  if (error) throw nameError(error.message);
+}
+
+/** Writes only while the profile is still this account's: an answer after a sign-out mustn't sign it back in. */
+async function patchAccount(userId: string, patch: Partial<LocalProfile>): Promise<void> {
+  const profile = readProfile();
+  if (profile?.mode === "account" && profile.userId === userId) await writeProfile({ ...patch, mode: "account" });
+}
+
+/** A new account's name: to the server, or (it can't take it now) kept here and sent at the next sync. */
+async function claimDisplayName(userId: string, name: string): Promise<void> {
+  let pending = false;
+  try {
+    await pushDisplayName(userId, name);
+  } catch (err) {
+    pending = true;
+    console.warn("[bytune] display name not saved on the server yet:", err instanceof Error ? err.message : err);
+  }
+  await patchAccount(userId, { displayName: name, displayNamePending: pending || undefined, suggestedDisplayName: undefined });
+}
+
+/** Settings: an account's name goes to the server first (every device and room gets it there); a guest's stays here. */
+export async function setDisplayName(raw: string): Promise<SessionInfo> {
+  const name = normalizeDisplayName(raw);
+  const problem = displayNameProblem(name);
+  if (problem) throw new Error(problem);
+  const profile = readProfile();
+  if (profile?.mode === "guest") {
+    await writeProfile({ mode: "guest", displayName: name });
+    return sessionInfo();
+  }
+  const userId = authenticatedUserId();
+  if (profile?.mode !== "account" || !userId) throw new Error("Sign in again to change your display name.");
+  await pushDisplayName(userId, name);
+  await patchAccount(userId, { displayName: name, displayNamePending: undefined });
+  return sessionInfo();
+}
+
+/**
+ * Puts this computer's copy of the account's name in step with the server's: one saved here while the
+ * server couldn't take it is sent now; otherwise the server's counts (another device may have changed
+ * it, and a name it doesn't have isn't this account's). True when the name shown here changed.
+ */
+export async function syncDisplayName(): Promise<boolean> {
+  const profile = readProfile();
+  const userId = authenticatedUserId();
+  if (profile?.mode !== "account" || !userId) return false;
+  try {
+    if (profile.displayNamePending && profile.displayName) {
+      await pushDisplayName(userId, profile.displayName);
+      await patchAccount(userId, { displayNamePending: undefined });
+      return false;
+    }
+    const remote = await fetchDisplayName(userId);
+    if ((remote ?? undefined) === profile.displayName) return false;
+    await patchAccount(userId, { displayName: remote ?? undefined });
+    return true;
+  } catch (err) {
+    console.warn("[bytune] display name sync failed:", err instanceof Error ? err.message : err);
+    return false;
+  }
 }
 
 /**
@@ -219,9 +341,10 @@ export async function usernameAvailableToUser(username: string, userId: string |
   return data == null || (userId != null && data.id === userId);
 }
 
-export async function signUp(username: string, password: string): Promise<SessionInfo> {
+export async function signUp(username: string, password: string, displayName: string): Promise<SessionInfo> {
   const clean = normalizeUsername(username);
-  const problem = usernameProblem(clean) ?? passwordProblem(password);
+  const name = normalizeDisplayName(displayName);
+  const problem = usernameProblem(clean) ?? passwordProblem(password) ?? displayNameProblem(name);
   if (problem) throw new Error(problem);
   if (!(await usernameAvailable(clean))) throw new Error("That username is already taken.");
 
@@ -249,8 +372,9 @@ export async function signUp(username: string, password: string): Promise<Sessio
   }
   currentSession = data.session;
   await persistSession(data.session);
-  const profile = await writeProfile({ mode: "account", userId, username: clean });
-  return { mode: profile.mode, userId, username: clean, freshInstall: false, isNewAccount: true };
+  const profile = await accountProfile(userId, { username: clean });
+  await claimDisplayName(userId, name);
+  return { mode: profile.mode, userId, username: clean, displayName: name, freshInstall: false, isNewAccount: true };
 }
 
 export async function signIn(username: string, password: string): Promise<SessionInfo> {
@@ -264,7 +388,7 @@ export async function signIn(username: string, password: string): Promise<Sessio
   currentSession = data.session;
   await persistSession(data.session);
   const userId = data.user.id;
-  const profile = await writeProfile({ mode: "account", userId, username: clean });
+  const profile = await accountProfile(userId, { username: clean });
   return { mode: profile.mode, userId, username: profile.username ?? clean, freshInstall: false, isNewAccount: false };
 }
 
@@ -410,22 +534,29 @@ async function finishGoogleSignIn(code: string): Promise<SessionInfo> {
       .insert({ id: userId, username: finalName });
     if (pErr) console.warn("[bytune] profile insert failed:", pErr.message);
     username = finalName;
+    // The display name offered with the username choice: the guest's own if they had one, else the
+    // name on the Google account (cut to the length a display name can be).
+    const meta = data.user.user_metadata ?? {};
+    const fromGoogle = normalizeDisplayName([...normalizeDisplayName(String(meta.full_name ?? meta.name ?? ""))].slice(0, DISPLAY_NAME_MAX).join(""));
+    const suggested = carriedName ?? (fromGoogle || undefined);
     // Fresh Google user — let them choose a real username once.
-    const profile = await writeProfile({ mode: "account", userId, username, pendingUsername: true });
+    const profile = await accountProfile(userId, { username, pendingUsername: true, suggestedDisplayName: suggested });
     return { mode: profile.mode, userId, username, freshInstall: false, needsUsername: true, isNewAccount: true };
   }
   username = existing.username;
-  const profile = await writeProfile({ mode: "account", userId, username });
+  const profile = await accountProfile(userId, { username });
   return { mode: profile.mode, userId, username, freshInstall: false, isNewAccount: false };
 }
 
 /**
  * One-time username choice for Google sign-ups: claims a username (letters
- * and digits only, UNIQUE-checked) and clears the pending flag.
+ * and digits only, UNIQUE-checked) and clears the pending flag. Settings
+ * renames through here too. The Google screen sends the display name along.
  */
-export async function setUsername(username: string): Promise<SessionInfo> {
+export async function setUsername(username: string, displayName?: string): Promise<SessionInfo> {
   const clean = normalizeUsername(username);
-  const problem = usernameProblem(clean);
+  const name = displayName === undefined ? null : normalizeDisplayName(displayName);
+  const problem = usernameProblem(clean) ?? (name === null ? null : displayNameProblem(name));
   if (problem) throw new Error(problem);
   const profile = readProfile();
   const userId = sessionInfo().userId ?? profile?.userId ?? null;
@@ -437,14 +568,17 @@ export async function setUsername(username: string): Promise<SessionInfo> {
     .eq("id", userId);
   if (error) throw new Error(error.message);
   const next = await writeProfile({ mode: "account", username: clean, pendingUsername: false });
+  if (name !== null) await claimDisplayName(userId, name);
   return { mode: next.mode, userId, username: clean, freshInstall: false };
 }
 
-/** Offline-safe escape from the pick-username screen: keep the auto name. */
-export async function skipUsernameClaim(): Promise<SessionInfo> {
+/** Offline-safe escape from the pick-username screen: keep the auto name (and the display name, if one was given). */
+export async function skipUsernameClaim(displayName?: string): Promise<SessionInfo> {
   const profile = readProfile();
   if (profile?.mode === "account" && profile.pendingUsername) {
-    await writeProfile({ mode: "account", pendingUsername: false });
+    await writeProfile({ mode: "account", pendingUsername: false, suggestedDisplayName: undefined });
+    const name = normalizeDisplayName(displayName ?? "");
+    if (profile.userId && !displayNameProblem(name)) await claimDisplayName(profile.userId, name);
   }
   return sessionInfo();
 }
@@ -453,21 +587,31 @@ export async function skipUsernameClaim(): Promise<SessionInfo> {
 /* Guest + sign-out                                                    */
 /* ------------------------------------------------------------------ */
 
-export async function continueAsGuest(): Promise<SessionInfo> {
+/** A guest's display name is optional: given, it's checked; left out, a guest keeps the one they had. */
+export async function continueAsGuest(displayName?: string): Promise<SessionInfo> {
+  const given = normalizeDisplayName(displayName ?? "");
+  const problem = given ? displayNameProblem(given) : null;
+  if (problem) throw new Error(problem);
   // An account session must not survive a switch to guest: drop the live
   // session and its sealed copy so no later flow can act as the account.
   currentSession = null;
   await persist.writeData("auth", null);
-  const profile = await writeProfile({ mode: "guest" });
+  const was = readProfile();
+  const kept = was?.mode === "guest" ? was.displayName : (carriedName ?? undefined);
+  const profile = await writeProfile({ mode: "guest", displayName: given || kept, displayNamePending: undefined, suggestedDisplayName: undefined });
+  carriedName = null;
   // The user answered the resume prompt (if any) — don't ask again.
   freshInstall = false;
-  return { mode: profile.mode, userId: null, username: null, freshInstall: false };
+  return { mode: profile.mode, userId: null, username: null, displayName: profile.displayName ?? null, freshInstall: false };
 }
 
-/** Wipe the guest marker so onboarding shows (used by "Sign in instead"). */
+/** Wipe the guest marker so onboarding shows (used by "Sign in instead"). The guest's name is offered at sign-up. */
 export async function clearGuestProfile(): Promise<void> {
   const profile = readProfile();
-  if (profile?.mode === "guest") await persist.writeData("profile", null);
+  if (profile?.mode === "guest") {
+    carriedName = profile.displayName ?? null;
+    await persist.writeData("profile", null);
+  }
 }
 
 export async function signOut(): Promise<SessionInfo> {

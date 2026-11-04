@@ -29,7 +29,7 @@ import { withSearchRows } from "../../electron/ytm";
 import { reloadHomeFeed } from "../lib/recs/feed";
 import { searchPageOnce } from "../lib/searchOnce";
 import { browseMenuItems, trackMenuItems } from "../lib/trackActions";
-import { useSession } from "../lib/session";
+import { shownName, useSession } from "../lib/session";
 import { isMac } from "../lib/platform";
 import { useUI } from "../stores/ui";
 import { usePlayer } from "../stores/player";
@@ -87,12 +87,12 @@ function avatarColor(seed: string): string {
 function Avatar({ onClick, active }: { onClick: () => void; active?: boolean }) {
   const mode = useSession((s) => s.mode);
   const username = useSession((s) => s.username);
-  // Signed-in users show their username's first letter; guest accounts (and
-  // sessions that haven't loaded yet) fall back to "G".
-  const letter =
-    mode === "account" && username?.trim()
-      ? username.trim().charAt(0).toUpperCase()
-      : "G";
+  const displayName = useSession((s) => s.displayName);
+  // The first letter of the display name (an account without one yet: its username's); a guest
+  // without a name (and a session not loaded yet) shows "G". By code point, so an emoji stays whole.
+  const name = shownName({ mode, username, displayName });
+  const letter = name ? Array.from(name)[0].toUpperCase() : "G";
+  // The colour stays tied to the account, so it doesn't change with a new display name.
   const color = avatarColor(mode === "account" && username?.trim() ? username.trim().toLowerCase() : "guest");
   return (
     <button

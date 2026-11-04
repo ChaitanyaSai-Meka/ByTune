@@ -16,6 +16,7 @@ import { autoplayTail, isRadioSeed, usePlayer } from "../stores/player";
 import { useSettings } from "../stores/settings";
 import { useLibrary } from "../stores/library";
 import { useUI } from "../stores/ui";
+import { inRoom } from "../stores/room";
 import type { RadioPage, Track } from "../types";
 import { requireBridge } from "./bridge";
 import { artistKey, pickSuggestions, recordingKey, type RadioCandidate } from "./radio-filter";
@@ -66,7 +67,7 @@ function addKeys(tracks: readonly Track[], ids: Set<string>, keys: Set<string>):
 /** True while AutoPlay should keep the queue topped up. */
 function wantsMore(): boolean {
   const p = usePlayer.getState();
-  if (!useSettings.getState().autoplay || p.repeat !== "off") return false;
+  if (!useSettings.getState().autoplay || inRoom() || p.repeat !== "off") return false;
   // The radio continues from the newest queued song; local files have none.
   const newest = p.queue[p.queue.length - 1];
   if (!isRadioSeed(newest?.id) || newest?.episode) return false; // podcasts have no radio
@@ -211,7 +212,7 @@ function offered(): boolean {
  * having chosen it. The first time their queue runs out, offer it once.
  */
 function maybeOffer(): void {
-  if (useSettings.getState().autoplay || offered()) return;
+  if (useSettings.getState().autoplay || offered() || inRoom()) return;
   // Never take over a dialog the listener has open; ask at a later end instead.
   if (useUI.getState().dialog) return;
   try {

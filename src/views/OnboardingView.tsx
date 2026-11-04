@@ -16,6 +16,7 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import {
+  AtSign,
   Check,
   CircleUserRound,
   Eye,
@@ -30,6 +31,9 @@ import { useSession } from "../lib/session";
 import { isMac } from "../lib/platform";
 import {
   availabilityState,
+  DISPLAY_NAME_MAX,
+  displayNameProblem,
+  normalizeDisplayName,
   passwordProblem,
   usernameProblem,
   usernameTypable,
@@ -39,7 +43,7 @@ import {
 import brandLogo from "../assets/brand/bytune-logo.svg";
 import brandText from "../assets/brand/bytune-Text.svg";
 
-type Screen = "choose" | "signup" | "signin" | "resume" | "restoring" | "pickusername";
+type Screen = "choose" | "signup" | "signin" | "resume" | "restoring" | "pickusername" | "guestname";
 
 /** Raw provider/engine errors → short, human, actionable messages. */
 function friendlyError(err: unknown): string {
@@ -267,6 +271,49 @@ function UsernameHint({
   );
 }
 
+/** The display name field with its reserved-height row: what it's for, or that it's too long. */
+function DisplayNameField({
+  value,
+  onChange,
+  note,
+  autoFocus,
+  disabled,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  note: string;
+  autoFocus?: boolean;
+  disabled?: boolean;
+}) {
+  const tooLong = [...normalizeDisplayName(value)].length > DISPLAY_NAME_MAX;
+  return (
+    <div>
+      <Field
+        icon={UserRound}
+        autoFocus={autoFocus}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Display name"
+        autoComplete="name"
+        disabled={disabled}
+        aria-label="Display name"
+      />
+      <div
+        aria-live="polite"
+        className={`h-[18px] mt-1.5 px-1 flex items-center text-[12px] leading-none ${tooLong ? "text-amber-400/90" : "text-ink-ghost"}`}
+      >
+        {tooLong ? `Up to ${DISPLAY_NAME_MAX} characters.` : note}
+      </div>
+    </div>
+  );
+}
+
+/** A guest's own name, or one carried from the guest who is now creating an account. */
+function startingName(): string {
+  const s = useSession.getState();
+  return s.suggestedDisplayName ?? (s.mode === "guest" ? s.displayName : null) ?? "";
+}
+
 /* ------------------------------------------------------------------ */
 /* Card: username + password form (sign up / sign in)                  */
 /* ------------------------------------------------------------------ */
@@ -280,6 +327,7 @@ function UsernamePasswordForm({
   onBack: () => void;
   navigate: (s: Screen) => void;
 }) {
+  const [displayName, setDisplayName] = useState(startingName);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -291,11 +339,12 @@ function UsernamePasswordForm({
     username,
     mode === "signup" && !formatProblem && username.trim().length >= USERNAME_MIN
   );
+  const nameProblem = mode === "signup" ? displayNameProblem(displayName) : null;
 
   const canSubmit =
     username.trim().length >= USERNAME_MIN &&
     password.length > 0 &&
-    (mode === "signin" || (confirm.length > 0 && availability !== "taken" && !formatProblem)) &&
+    (mode === "signin" || (confirm.length > 0 && availability !== "taken" && !formatProblem && !nameProblem)) &&
     !busy;
 
   const google = async (): Promise<void> => {
@@ -334,8 +383,9 @@ function UsernamePasswordForm({
     setBusy(true);
     setError(null);
     try {
-      const fn = mode === "signup" ? window.bytune?.authSignUp : window.bytune?.authSignIn;
-      const info = (await fn?.(username.trim(), password)) as { needsUsername?: boolean } | undefined;
+      const info = (await (mode === "signup"
+        ? window.bytune?.authSignUp(username.trim(), password, displayName)
+        : window.bytune?.authSignIn(username.trim(), password))) as { needsUsername?: boolean } | undefined;
       if (info?.needsUsername) {
         navigate("pickusername");
         return;
@@ -357,10 +407,19 @@ function UsernamePasswordForm({
         hint={mode === "signup" ? undefined : "Pick up right where you left off."}
       />
       <div className="space-y-3">
+        {mode === "signup" && (
+          <DisplayNameField
+            value={displayName}
+            onChange={setDisplayName}
+            note="What people see. Your username is for signing in."
+            autoFocus
+            disabled={busy}
+          />
+        )}
         <div>
           <Field
-            icon={UserRound}
-            autoFocus
+            icon={AtSign}
+            autoFocus={mode === "signin"}
             value={username}
             onChange={(e) => setUsername(usernameTypable(e.target.value))}
             placeholder="Username"
@@ -448,20 +507,7 @@ function ChooseContent({
   navigate: (s: Screen) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"none" | "guest" | "google">("none");
-
-  const guest = async (): Promise<void> => {
-    if (busy !== "none") return;
-    setBusy("guest");
-    setError(null);
-    try {
-      await window.bytune?.authContinueGuest();
-      await useSession.getState().refresh();
-    } catch (err) {
-      setError(friendlyError(err));
-      setBusy("none");
-    }
-  };
+  const [busy, setBusy] = useState<"none" | "google">("none");
 
   const google = async (): Promise<void> => {
     if (busy !== "none") return;
@@ -518,26 +564,78 @@ function ChooseContent({
         <div className="h-px flex-1 bg-ink-hi/[0.09]" />
       </div>
       <button
-        onClick={() => void guest()}
+        onClick={() => navigate("guestname")}
         className={`${btnTertiary} ob-item`}
         style={dly(250)}
         disabled={busy !== "none"}
       >
-        {busy === "guest" ? (
-          <span className="inline-flex items-center gap-2">
-            <Spinner /> Starting…
-          </span>
-        ) : (
-          <>
-            <CircleUserRound className="w-4 h-4" /> Continue as guest
-          </>
-        )}
+        <CircleUserRound className="w-4 h-4" /> Continue as guest
       </button>
       <p className="text-[12px] text-ink-ghost mt-2 leading-relaxed text-center ob-item" style={dly(290)}>
         Guest mode keeps your data on this PC. It survives reinstall, but isn't backed up.
       </p>
       <ErrorNote msg={error} />
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Card: guest name — optional, before entering as a guest              */
+/* ------------------------------------------------------------------ */
+
+function GuestNameContent({ onBack }: { onBack: () => void }) {
+  const [name, setName] = useState(startingName);
+  const [busy, setBusy] = useState<"none" | "name" | "skip">("none");
+  const [error, setError] = useState<string | null>(null);
+  const problem = displayNameProblem(name);
+
+  const enter = async (withName: boolean): Promise<void> => {
+    if (busy !== "none" || (withName && problem)) return;
+    setBusy(withName ? "name" : "skip");
+    setError(null);
+    try {
+      await window.bytune?.authContinueGuest(withName ? name : undefined);
+      await useSession.getState().refresh();
+    } catch (err) {
+      setError(friendlyError(err));
+      setBusy("none");
+    }
+  };
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        void enter(true);
+      }}
+    >
+      <CardHead title="What should we call you?" hint="Your name stays on this PC. You can change it any time in Settings." />
+      <DisplayNameField value={name} onChange={setName} note="Shown around ByTune." autoFocus disabled={busy !== "none"} />
+      <ErrorNote msg={error} />
+      <button type="submit" disabled={busy !== "none" || !!problem} className={`${btnPrimary} mt-5`}>
+        {busy === "name" ? (
+          <>
+            <Spinner /> Starting…
+          </>
+        ) : (
+          "Continue"
+        )}
+      </button>
+      <div className="flex items-center justify-between mt-4">
+        <button type="button" onClick={onBack} className={btnGhost} disabled={busy !== "none"}>
+          Back
+        </button>
+        <button type="button" onClick={() => void enter(false)} className={btnGhost} disabled={busy !== "none"}>
+          {busy === "skip" ? (
+            <>
+              <Spinner /> Starting…
+            </>
+          ) : (
+            "Skip for now"
+          )}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -611,6 +709,8 @@ function RestoringContent() {
 /* ------------------------------------------------------------------ */
 
 function PickUsernameContent() {
+  // The name on their Google account (or the guest's own), ready to keep.
+  const [displayName, setDisplayName] = useState(startingName);
   const [username, setUsername] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -620,13 +720,14 @@ function PickUsernameContent() {
     username,
     !formatProblem && username.trim().length >= USERNAME_MIN
   );
+  const nameProblem = displayNameProblem(displayName);
 
   const save = async (): Promise<void> => {
-    if (busy || availability === "taken" || formatProblem) return;
+    if (busy || availability === "taken" || formatProblem || nameProblem) return;
     setBusy(true);
     setError(null);
     try {
-      await window.bytune?.authSetUsername(username.trim());
+      await window.bytune?.authSetUsername(username.trim(), displayName);
       // Username claimed — now pull/merge the account and enter.
       await window.bytune?.syncNow().catch(() => undefined);
       await useSession.getState().refresh();
@@ -643,7 +744,7 @@ function PickUsernameContent() {
     setBusy(true);
     setError(null);
     try {
-      await window.bytune?.authSkipUsername();
+      await window.bytune?.authSkipUsername(displayName);
       await window.bytune?.syncNow().catch(() => undefined);
       await useSession.getState().refresh();
     } catch (err) {
@@ -654,9 +755,12 @@ function PickUsernameContent() {
 
   return (
     <div>
-      <CardHead title="Choose your username" hint="This is how you'll appear in ByTune. You can change it later in Settings." />
+      <CardHead title="Finish setting up" hint="Your username is unique to you. You can change both later in Settings." />
+      <div className="mb-3">
+        <DisplayNameField value={displayName} onChange={setDisplayName} note="What people see in rooms and around ByTune." disabled={busy} />
+      </div>
       <Field
-        icon={UserRound}
+        icon={AtSign}
         autoFocus
         value={username}
         onChange={(e) => setUsername(usernameTypable(e.target.value))}
@@ -677,7 +781,7 @@ function PickUsernameContent() {
       <ErrorNote msg={error} />
       <button
         onClick={() => void save()}
-        disabled={busy || availability === "taken" || !!formatProblem || username.trim().length < USERNAME_MIN}
+        disabled={busy || availability === "taken" || !!formatProblem || !!nameProblem || username.trim().length < USERNAME_MIN}
         className={`${btnPrimary} mt-5`}
       >
         {busy ? (
@@ -782,6 +886,7 @@ export function Onboarding({ initial }: { initial: Screen }) {
               {screen === "resume" && <ResumeContent onSignInInstead={() => navigate("choose", "back")} />}
               {screen === "restoring" && <RestoringContent />}
               {screen === "pickusername" && <PickUsernameContent />}
+              {screen === "guestname" && <GuestNameContent onBack={() => navigate("choose", "back")} />}
             </div>
           </div>
         </div>

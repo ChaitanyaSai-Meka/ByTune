@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   availabilityState,
+  displayNameProblem,
+  normalizeDisplayName,
   normalizeUsername,
   usernameProblem,
   passwordProblem,
@@ -58,4 +60,24 @@ test("failed availability lookups read as unknown, never taken (H3)", () => {
   // Offline / network error: the form must stay submittable, not show "Taken".
   assert.equal(availabilityState(null), "unknown");
   assert.equal(availabilityState(undefined), "unknown");
+});
+
+test("a display name is tidied: spaces collapsed and trimmed, line breaks and control characters gone", () => {
+  assert.equal(normalizeDisplayName("  Rishi   Teja  "), "Rishi Teja");
+  assert.equal(normalizeDisplayName("Ri\tshi\nTeja\r\n"), "Ri shi Teja");
+  assert.equal(normalizeDisplayName("A\u0007B\u0085C"), "A B C");
+  assert.equal(normalizeDisplayName("\u00a0Rishi\u2028"), "Rishi");
+  assert.equal(normalizeDisplayName("🎧 Rishi"), "🎧 Rishi");
+  assert.equal(normalizeDisplayName("Ana María"), "Ana María");
+});
+
+test("a display name is 1-30 characters, counted the way the database counts them", () => {
+  assert.equal(displayNameProblem("R"), null);
+  assert.equal(displayNameProblem("a".repeat(30)), null);
+  assert.equal(displayNameProblem(`${"x".repeat(29)}🎧`), null, "an emoji is one character");
+  assert.equal(displayNameProblem("リシ・テジャ"), null);
+  assert.equal(displayNameProblem("  Rishi  "), null, "checked after tidying");
+  assert.match(displayNameProblem(""), /Enter a display name/);
+  assert.match(displayNameProblem(" \n\t "), /Enter a display name/);
+  assert.match(displayNameProblem("a".repeat(31)), /30 characters/);
 });

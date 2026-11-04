@@ -7,6 +7,7 @@ import { coalescedStorage } from "../lib/persist";
 import { hash32, seededShuffle } from "../lib/recs/seeded";
 import type { Track } from "../types";
 import { useSettings } from "./settings";
+import { inRoom } from "./room";
 
 export type RepeatMode = "off" | "all" | "one";
 
@@ -56,10 +57,11 @@ export function upNext(s: PlayOrder): Track | null {
 }
 
 /** The queue ran out: AutoPlay continues it when it is on, nothing repeats,
-    and the newest song has a YouTube radio (local files have none). */
+    and the newest song has a YouTube radio (local files have none). A room's
+    queue is the room's: AutoPlay sits out there. */
 function autoplayContinues(queue: Track[], repeat: RepeatMode): boolean {
   const last = queue[queue.length - 1];
-  return useSettings.getState().autoplay && repeat === "off" && isRadioSeed(last?.id) && !last?.episode;
+  return useSettings.getState().autoplay && !inRoom() && repeat === "off" && isRadioSeed(last?.id) && !last?.episode;
 }
 
 const randomSeed = (): number => (Math.random() * 2 ** 32) >>> 0;

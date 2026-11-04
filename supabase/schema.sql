@@ -1,6 +1,8 @@
 -- ============================================================
 -- ByTune cloud schema — paste into Supabase → SQL Editor → Run
 -- ============================================================
+-- Then run migrations/0002-rooms.sql for Rooms (listen together),
+-- and migrations/0003-display-names.sql for display names.
 
 -- One row per user. The UNIQUE constraint is what guarantees no two
 -- accounts can ever claim the same username (the app checks availability

@@ -20,7 +20,7 @@ const row = (store_name, payload) => ({ store_name, payload, updated_at: "2026-0
 // Only Electron, the SDK transport, and unrelated main-process services are replaced.
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bytune-phase7-"));
-  const handlers = new Map(), modules = new Map(), events = [], calls = [], uploads = [], spotifyCalls = [];
+  const handlers = new Map(), modules = new Map(), events = [], calls = [], uploads = [], spotifyCalls = [], roomCalls = [], names = new Map();
   let rows = [], user = "A", expired = false, authChanged, failUpload, failWrite, statsNotify = () => {};
   const sdk = {
     auth: {
@@ -33,6 +33,11 @@ function fixture() {
       async signOut() { authChanged?.("SIGNED_OUT", null); return { error: null }; },
     },
     from(table) {
+      // Display names (supabase/migrations/0003) sit in their own table, apart from the store rows.
+      if (table === "display_names") return {
+        select: () => ({ eq: (_field, id) => ({ maybeSingle: async () => ({ data: names.has(id) ? { name: names.get(id) } : null, error: null }) }) }),
+        async upsert(value) { names.set(value.user_id, value.name); return { error: null }; },
+      };
       calls.push(table);
       return {
         select: () => ({ eq: (_field, id) => {
@@ -90,6 +95,7 @@ function fixture() {
             forgetSpotify: async () => { spotifyCalls.push("forget"); },
             moveGuestSpotify: async (owner) => { spotifyCalls.push(`moveGuest:${owner}`); },
           };
+          if (name === "./rooms") return { onRoomChange() {}, leaveRoom: async () => { roomCalls.push("leave"); return {}; }, roomView: () => ({ state: null }) };
           return {};
         }
         if (name.startsWith(".")) return load(path.resolve(path.dirname(file), `${name}.ts`));
@@ -107,7 +113,7 @@ function fixture() {
   sync.bindRestoredNotifier((stores, seq) => events.push({ stores: [...stores], seq }));
   load(path.join(root, "electron", "main.ts")).registerIpc();
   return {
-    dir, disk, auth, sync, transition, events, calls, uploads, spotifyCalls,
+    dir, disk, auth, sync, transition, events, calls, uploads, spotifyCalls, roomCalls, names,
     invoke: (name, ...args) => handlers.get(name)({}, ...args),
     statsNotify: () => statsNotify?.(),
     /** The real Replay module sync.ts uses (main.ts gets a stand-in). */
@@ -132,8 +138,10 @@ test("guest data migrates into an account CREATED by sign-up", async () => {
     await h.invoke("data:write", "recent-searches", envelope({ searches: ["guest query"] }), doc);
     assert.equal(h.calls.length, 0, "guest writes are local-only");
     h.rows([row("library", library("remote"))]);
-    await h.invoke("auth:signUp", "alice", "valid-password-123");
+    await h.invoke("auth:signUp", "alice", "valid-password-123", "Alice");
     assert.equal(h.transition.currentOwner(), "A");
+    assert.equal(h.names.get("A"), "Alice", "the display name reaches the account");
+    assert.equal(h.auth.sessionInfo().displayName, "Alice");
     assert.deepEqual(new Set(h.disk.readData("library").state.liked.map(t => t.id)), new Set(["guest", "remote"]));
     assert.equal(h.disk.readData("library").state.playlists[0].id, "p");
     assert.deepEqual(plain(h.disk.readData("recent-searches").state.searches), ["guest query"]);
@@ -175,7 +183,7 @@ test("local songs never upload their absolute file path", async () => {
     lib.state.playlists = [{ id: "p", name: "Mixed", createdAt: 1, tracks: [local, track("yt")] }];
     await h.invoke("data:write", "library", lib, doc);
     h.rows([]);
-    await h.invoke("auth:signUp", "alice", "valid-password-123");
+    await h.invoke("auth:signUp", "alice", "valid-password-123", "Alice");
     const uploaded = h.uploads.find((v) => v.store_name === "library");
     assert.ok(uploaded, "the library was uploaded");
     assert.ok(!JSON.stringify(uploaded.payload).includes("localPath"), "no localPath anywhere in the upload");
@@ -199,7 +207,7 @@ test("songs from this computer never upload; their playlists sync without them a
     ];
     await h.invoke("data:write", "library", lib, doc);
     h.rows([]);
-    await h.invoke("auth:signUp", "alice", "valid-password-123");
+    await h.invoke("auth:signUp", "alice", "valid-password-123", "Alice");
     const uploaded = h.uploads.find((v) => v.store_name === "library").payload.state.playlists;
     assert.deepEqual(uploaded.map((p) => p.id), ["mixed", "plain"], "a playlist of only local songs stays here");
     assert.deepEqual(uploaded[0].tracks.map((t) => t.id), ["yt1", "yt2"], "the rest of its songs sync, the local one doesn't");
@@ -286,7 +294,7 @@ test("Spotify stays with the account through sign-out and back in; a guest who s
   const h = fixture();
   try {
     await h.invoke("auth:continueGuest");
-    await h.invoke("auth:signUp", "alice", "valid-password-123");
+    await h.invoke("auth:signUp", "alice", "valid-password-123", "Alice");
     assert.deepEqual(h.spotifyCalls, ["moveGuest:A"], "the new account takes the guest's Spotify");
     await h.invoke("auth:signOut");
     await h.invoke("auth:signIn", "alice", "password");
@@ -296,6 +304,18 @@ test("Spotify stays with the account through sign-out and back in; a guest who s
     assert.deepEqual(h.spotifyCalls, ["moveGuest:A"], "signing out, back in, or into an existing account forgets and moves nothing");
     await h.invoke("app:resetData");
     assert.deepEqual(h.spotifyCalls, ["moveGuest:A", "forget"]);
+  } finally { await h.close(); }
+});
+
+test("a room is left before every sign-in, sign-out and data reset, while its account can still say so", async () => {
+  const h = fixture();
+  try {
+    await h.invoke("auth:signIn", "alice", "password");
+    assert.equal(h.roomCalls.length, 1, "sign-in");
+    await h.invoke("auth:signOut");
+    assert.equal(h.roomCalls.length, 2, "sign-out");
+    await h.invoke("app:resetData");
+    assert.equal(h.roomCalls.length, 3, "reset");
   } finally { await h.close(); }
 });
 

@@ -124,6 +124,7 @@
     }
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.10",
     "@resvg/resvg-js": "^2.6.2",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^22.10.0",

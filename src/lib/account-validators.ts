@@ -44,6 +44,32 @@ export function passwordProblem(password: string): string | null {
 }
 
 /* ---------------------------------------------------------------------- */
+/* Display name                                                            */
+/* ---------------------------------------------------------------------- */
+
+/**
+ * What people see in Rooms and around the app: any language, emoji, not unique. In step with the
+ * display_names checks in supabase/migrations/0003-display-names.sql: 1-30 characters counted as the
+ * database counts them (code points), no spaces at either end, no control characters.
+ */
+export const DISPLAY_NAME_MAX = 30;
+
+/** Line breaks, tabs and other control characters become spaces, runs of spaces one, then trimmed. */
+export function normalizeDisplayName(name: string): string {
+  return name
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function displayNameProblem(name: string): string | null {
+  const clean = normalizeDisplayName(name);
+  if (!clean) return "Enter a display name.";
+  if ([...clean].length > DISPLAY_NAME_MAX) return `Display names can be up to ${DISPLAY_NAME_MAX} characters.`;
+  return null;
+}
+
+/* ---------------------------------------------------------------------- */
 /* Availability lookup result → UI state                                   */
 /* ---------------------------------------------------------------------- */
 

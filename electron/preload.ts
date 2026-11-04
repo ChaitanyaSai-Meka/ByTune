@@ -1,8 +1,8 @@
 /** Preload — exposes a minimal, typed API to the renderer via contextBridge. */
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
-  DownloadProgress, ImportedPlaylist, ImportSong, MoodPage, PodcastPage, PodcastShelf, RadioPage, SearchSuggestion, SpotifyPlaylistInfo,
-  SpotifyStatus, Track,
+  DownloadProgress, ImportedPlaylist, ImportSong, MoodPage, PodcastPage, PodcastShelf, RadioPage, RoomChange, RoomView, SearchSuggestion,
+  SpotifyPlaylistInfo, SpotifyStatus, Track,
 } from "../src/types";
 import type { LocalTrack } from "./local-library";
 
@@ -163,6 +163,30 @@ const api = {
   spotifyPlaylist: (id: string): Promise<ImportedPlaylist> => ipcRenderer.invoke("spotify:playlist", id),
   /** The YouTube Music song a song from elsewhere is, or null. */
   matchSong: (song: ImportSong, prefer: string): Promise<Track | null> => ipcRenderer.invoke("match:song", song, prefer),
+  /** Rooms (electron/rooms.ts): listen together, signed in. */
+  roomCurrent: (): Promise<RoomView> => ipcRenderer.invoke("room:current"),
+  roomCreate: (): Promise<RoomView> => ipcRenderer.invoke("room:create"),
+  roomJoin: (code: string): Promise<RoomView> => ipcRenderer.invoke("room:join", code),
+  roomLeave: (): Promise<RoomView> => ipcRenderer.invoke("room:leave"),
+  roomUpdate: (change: RoomChange): Promise<RoomView> => ipcRenderer.invoke("room:update", change),
+  roomHostOnly: (on: boolean): Promise<RoomView> => ipcRenderer.invoke("room:hostOnly", on),
+  roomMakeHost: (userId: string): Promise<RoomView> => ipcRenderer.invoke("room:makeHost", userId),
+  roomRemove: (userId: string): Promise<RoomView> => ipcRenderer.invoke("room:remove", userId),
+  /** The listener's own queue, set aside while in a room, and taken back (once). */
+  roomStash: (snapshot: unknown): Promise<void> => ipcRenderer.invoke("room:stash", snapshot),
+  roomUnstash: (): Promise<unknown> => ipcRenderer.invoke("room:unstash"),
+  /** An invite link opened (bytune://room/CODE), once. */
+  roomTakeInvite: (): Promise<string | null> => ipcRenderer.invoke("room:takeInvite"),
+  onRoomState: (cb: (view: RoomView) => void): (() => void) => {
+    const listener = (_e: unknown, view: RoomView): void => cb(view);
+    ipcRenderer.on("room:state", listener as never);
+    return () => ipcRenderer.removeListener("room:state", listener as never);
+  },
+  onRoomInvite: (cb: () => void): (() => void) => {
+    const listener = (): void => cb();
+    ipcRenderer.on("room:invite", listener);
+    return () => ipcRenderer.removeListener("room:invite", listener);
+  },
   /** Replay's share card: save the PNG through the native dialog, or copy it as an image. */
   saveReplayImage: (png: Uint8Array, name: string): Promise<{ path?: string; cancelled?: boolean }> =>
     ipcRenderer.invoke("replay:saveImage", png, name),
@@ -176,14 +200,16 @@ const api = {
 
   // Accounts (Supabase) + cloud backup
   authGetSession: () => ipcRenderer.invoke("auth:getSession"),
-  authSignUp: (username: string, password: string) => ipcRenderer.invoke("auth:signUp", username, password),
+  authSignUp: (username: string, password: string, displayName: string) =>
+    ipcRenderer.invoke("auth:signUp", username, password, displayName),
   authSignIn: (username: string, password: string) => ipcRenderer.invoke("auth:signIn", username, password),
   authSignInGoogle: () => ipcRenderer.invoke("auth:signInGoogle"),
-  authContinueGuest: () => ipcRenderer.invoke("auth:continueGuest"),
+  authContinueGuest: (displayName?: string) => ipcRenderer.invoke("auth:continueGuest", displayName),
   authClearGuestProfile: () => ipcRenderer.invoke("auth:clearGuestProfile"),
   authUsernameAvailable: (username: string) => ipcRenderer.invoke("auth:usernameAvailable", username),
-  authSetUsername: (username: string) => ipcRenderer.invoke("auth:setUsername", username),
-  authSkipUsername: () => ipcRenderer.invoke("auth:skipUsername"),
+  authSetUsername: (username: string, displayName?: string) => ipcRenderer.invoke("auth:setUsername", username, displayName),
+  authSkipUsername: (displayName?: string) => ipcRenderer.invoke("auth:skipUsername", displayName),
+  authSetDisplayName: (name: string) => ipcRenderer.invoke("auth:setDisplayName", name),
   authSignOut: () => ipcRenderer.invoke("auth:signOut"),
   onAuthChanged: (cb: (info: { mode: string | null; userId: string | null; username: string | null; freshInstall?: boolean }) => void): (() => void) => {
     const listener = (_e: unknown, info: { mode: string | null; userId: string | null; username: string | null; freshInstall?: boolean }): void => cb(info);

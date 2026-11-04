@@ -100,8 +100,8 @@ export interface UIState {
   pendingScroll: number | null;
   searchQuery: string;
   searchFilter: SearchFilter;
-  /** Right panel mode: song details (default) or the Queue sheet. */
-  rightPanel: "details" | "queue";
+  /** Right panel mode: song details (default), the Queue sheet, or Rooms. */
+  rightPanel: "details" | "queue" | "room";
   /** Synced lyrics rendered in the centre pane over the current view. */
   lyricsCenter: boolean;
   nowPlayingOpen: boolean;
@@ -130,6 +130,7 @@ export interface UIState {
   setSearchQuery(q: string): void;
   setSearchFilter(f: SearchFilter): void;
   toggleQueue(): void;
+  toggleRoom(): void;
   toggleLyrics(): void;
   toggleNowPlaying(): void;
   setOsFullscreen(fs: boolean): void;
@@ -189,7 +190,7 @@ export const useUI = create<UIState>((set, get) => ({
   pendingScroll: null,
   searchQuery: "",
   searchFilter: "all",
-  rightPanel: "details" as "details" | "queue",
+  rightPanel: "details" as "details" | "queue" | "room",
   lyricsCenter: false,
   nowPlayingOpen: false,
   osFullscreen: false,
@@ -263,6 +264,10 @@ export const useUI = create<UIState>((set, get) => ({
 
   toggleQueue() {
     set({ rightPanel: get().rightPanel === "queue" ? "details" : "queue" });
+  },
+
+  toggleRoom() {
+    set({ rightPanel: get().rightPanel === "room" ? "details" : "room" });
   },
 
   toggleLyrics() {

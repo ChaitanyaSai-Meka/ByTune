@@ -225,6 +225,52 @@ export interface SpotifyStatus {
   problem?: string;
 }
 
+/** A room: people listening to the same song at the same moment (supabase/migrations/0002-rooms.sql). */
+export interface RoomState {
+  id: string;
+  /** what people type to join: 6 characters, no look-alikes */
+  code: string;
+  hostId: string;
+  /** only the host may play, pause, skip, seek or change the queue */
+  hostOnly: boolean;
+  track: Track | null;
+  /** where `track` is at `anchorMs` (the server's clock) */
+  positionMs: number;
+  anchorMs: number;
+  playing: boolean;
+  /** up next, at most 25 songs */
+  queue: Track[];
+  activity: { atMs: number; text: string }[];
+  members: { userId: string; name: string; lastSeenMs: number }[];
+  /** bumps on every change; an update names the seq it was based on */
+  seq: number;
+}
+
+/** What the page knows of its room: the state, who it is, and this computer's clock offset to the server's. */
+export interface RoomView {
+  state: RoomState | null;
+  /** the signed-in user's id */
+  me: string | null;
+  /** server clock − this computer's clock, ms */
+  offsetMs: number;
+  /** why the last room action failed, or why the room ended ("You were removed from the room") */
+  problem?: string;
+}
+
+/** A change to what's playing, as the page asks for it. */
+export interface RoomChange {
+  /** the seq the change was based on */
+  baseSeq: number;
+  track: Track | null;
+  positionMs: number;
+  playing: boolean;
+  queue: Track[];
+  /** a start or a seek: everyone starts together, 600 ms from now */
+  lead: boolean;
+  /** "played Yellow", for the activity list ("" = no line) */
+  note: string;
+}
+
 export interface DownloadProgress {
   id: string;
   downloaded: number;

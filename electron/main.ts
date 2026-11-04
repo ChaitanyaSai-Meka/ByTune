@@ -1,5 +1,5 @@
 /** ByTune desktop — Electron main process. */
-import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, nativeImage, protocol, session, shell } from "electron";
+import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, nativeImage, powerMonitor, protocol, session, shell } from "electron";
 import type { NativeImage } from "electron";
 import { pathToFileURL } from "url";
 import * as fs from "fs";
@@ -14,7 +14,10 @@ import * as locallib from "./local-library";
 import * as mediaControls from "./media-controls";
 import * as persist from "./persist";
 import * as pip from "./pip";
+import * as rooms from "./rooms";
 import * as spotify from "./spotify";
+import { roomCodeIn } from "../src/lib/roomSync";
+import { displayNameProblem, normalizeDisplayName } from "../src/lib/account-validators";
 import * as stats from "./stats";
 import { proxyUrlFor, proxyUrlForLocalTrack, setDownloadedFileLookup, startStreamProxy } from "./stream-proxy";
 import * as auth from "./supabase";
@@ -57,6 +60,8 @@ let drainStarted = false;
  * re-create the buckets the reset just deleted (and quit would persist them).
  */
 let dataResetActive = false;
+/** A room invite link opened before the page took it (bytune://room/CODE). */
+let pendingRoomInvite: string | null = null;
 
 function iconPath(): string | undefined {
   // Windows: give the window the multi-size .ico so the shell can pick
@@ -483,6 +488,60 @@ function registerIpc(): void {
   });
 
   // Spotify (electron/spotify.ts): the session stays in main; the page only gets playlists and songs.
+  // Rooms (electron/rooms.ts): Supabase stays here; the page gets the room's state.
+  rooms.onRoomChange((view) => {
+    try {
+      mainWindow?.webContents.send("room:state", view);
+    } catch {
+      /* window gone */
+    }
+  });
+  const uuid = (v: unknown): string => {
+    if (typeof v !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) throw new Error("Not a member");
+    return v;
+  };
+  ipc.handle("room:current", () => rooms.roomView());
+  ipc.handle("room:create", () => rooms.createRoom());
+  ipc.handle("room:join", (_e, code: unknown) => {
+    const c = typeof code === "string" && code.length <= 100 ? roomCodeIn(code) : null;
+    if (!c) throw new Error("That isn't a room code.");
+    return rooms.joinRoom(c);
+  });
+  ipc.handle("room:leave", () => rooms.leaveRoom());
+  ipc.handle("room:update", (_e, change: unknown) => {
+    const c = change as Record<string, unknown> | null;
+    const ok =
+      !!c && typeof c === "object" &&
+      typeof c.baseSeq === "number" && Number.isSafeInteger(c.baseSeq) && c.baseSeq >= 0 &&
+      (c.track === null || (typeof c.track === "object" && !Array.isArray(c.track))) &&
+      typeof c.positionMs === "number" && Number.isFinite(c.positionMs) && c.positionMs >= 0 && c.positionMs <= 86_400_000 &&
+      typeof c.playing === "boolean" && typeof c.lead === "boolean" &&
+      Array.isArray(c.queue) && c.queue.length <= 200 &&
+      typeof c.note === "string" && c.note.length <= 200;
+    if (!ok) throw new Error("Not a room change");
+    return rooms.updateRoom(c as unknown as Parameters<typeof rooms.updateRoom>[0]);
+  });
+  ipc.handle("room:hostOnly", (_e, on: unknown) => {
+    if (typeof on !== "boolean") throw new Error("Not a setting");
+    return rooms.setHostOnly(on);
+  });
+  ipc.handle("room:makeHost", (_e, userId: unknown) => rooms.makeHost(uuid(userId)));
+  ipc.handle("room:remove", (_e, userId: unknown) => rooms.removeMember(uuid(userId)));
+  // The listener's own queue, set aside while in a room: theirs, up to YouTube's playlist size.
+  ipc.handle("room:stash", (_e, snapshot: unknown) => {
+    const s = snapshot as { queue?: unknown } | null;
+    if (!s || typeof s !== "object" || !Array.isArray(s.queue) || s.queue.length > 5000 || JSON.stringify(s).length > 5_000_000) {
+      throw new Error("Not a queue");
+    }
+    return rooms.stash(s);
+  });
+  ipc.handle("room:unstash", () => rooms.unstash());
+  ipc.handle("room:takeInvite", () => {
+    const code = pendingRoomInvite;
+    pendingRoomInvite = null;
+    return code;
+  });
+
   ipc.handle("spotify:status", () => spotify.spotifyStatus());
   ipc.handle("spotify:connect", () => spotify.connectSpotify(mainWindow));
   ipc.handle("spotify:disconnect", async () => {
@@ -585,6 +644,7 @@ function registerIpc(): void {
   ipc.handle("app:resetData", () => transition.serializeData(async () => {
     dataResetActive = true;
     try {
+      await rooms.leaveRoom().catch(() => undefined);
       transition.invalidateResetDocuments();
       sync.resetSyncState();
       await auth.signOut();
@@ -734,6 +794,8 @@ function registerIpc(): void {
    */
   const signIn = (authenticate: () => Promise<auth.SessionInfo>) => transition.serializeData(async () => {
     await persist.drainWrites();
+    // A room belongs to the account in it: leave while that account can still say so.
+    await rooms.leaveRoom().catch(() => undefined);
     const previous = transition.currentOwner();
     const info = await authenticate();
     const migrateGuest = previous === "guest" && info.isNewAccount === true;
@@ -744,6 +806,8 @@ function registerIpc(): void {
     }
     // Spotify is kept per owner (electron/spotify.ts); a guest's goes along with their library.
     if (migrateGuest && info.userId) await spotify.moveGuestSpotify(info.userId);
+    // The account's display name comes from the server (or one saved here while it couldn't take it goes up).
+    await auth.syncDisplayName();
     await sync.syncNowExclusive().catch((err) => {
       console.error("[bytune] login sync failed (account data not pulled):", err instanceof Error ? err.message : err);
       sync.noteSyncFailure(err);
@@ -751,14 +815,20 @@ function registerIpc(): void {
     mainWindow?.webContents.reload();
     return info;
   });
-  ipc.handle("auth:signUp", (_e, username: string, password: string) => signIn(() => auth.signUp(username, password)));
+  const text = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
+  ipc.handle("auth:signUp", (_e, username: string, password: string, displayName: unknown) =>
+    signIn(() => auth.signUp(username, password, text(displayName) ?? "")));
   ipc.handle("auth:signIn", (_e, username: string, password: string) => signIn(() => auth.signIn(username, password)));
   ipc.handle("auth:signInGoogle", () => signIn(() => auth.signInGoogle()));
-  ipc.handle("auth:continueGuest", () => transition.serializeData(async () => {
+  ipc.handle("auth:continueGuest", (_e, displayName: unknown) => transition.serializeData(async () => {
+    // Checked before anything switches: a name that can't be kept stops the whole step.
+    const name = normalizeDisplayName(text(displayName) ?? "");
+    const problem = name ? displayNameProblem(name) : null;
+    if (problem) throw new Error(problem);
     await transition.changeOwner("guest", false);
     sync.resetSyncState();
     stats.reloadStore();
-    const info = await auth.continueAsGuest();
+    const info = await auth.continueAsGuest(name || undefined);
     mainWindow?.webContents.reload();
     return info;
   }));
@@ -777,14 +847,16 @@ function registerIpc(): void {
       return { available: null, reason: err instanceof Error ? err.message : "Network error" };
     }
   });
-  ipc.handle("auth:setUsername", (_e, username: string) => auth.setUsername(username));
-  ipc.handle("auth:skipUsername", () => auth.skipUsernameClaim());
+  ipc.handle("auth:setUsername", (_e, username: string, displayName: unknown) => auth.setUsername(username, text(displayName)));
+  ipc.handle("auth:skipUsername", (_e, displayName: unknown) => auth.skipUsernameClaim(text(displayName)));
+  ipc.handle("auth:setDisplayName", (_e, name: unknown) => auth.setDisplayName(text(name) ?? ""));
   ipc.handle("auth:signOut", () => transition.serializeData(async () => {
     await persist.drainWrites();
     await sync.syncNowExclusive().catch((err) => {
       console.error("[bytune] logout backup failed:", err instanceof Error ? err.message : err);
       sync.noteSyncFailure(err);
     });
+    await rooms.leaveRoom().catch(() => undefined);
     const info = await auth.signOut();
     await transition.changeOwner("guest", false);
     sync.resetSyncState();
@@ -900,6 +972,18 @@ if (!gotLock) {
   let oauthReady = false;
   let pendingOAuthUrl: string | undefined;
   const oauthFromUrl = (url: string): void => {
+    // A room invite (bytune://room/CODE) goes to the page, which asks before joining.
+    if (/^bytune:\/\/room\//i.test(url)) {
+      const code = roomCodeIn(url);
+      if (!code) return;
+      pendingRoomInvite = code;
+      try {
+        mainWindow?.webContents.send("room:invite");
+      } catch {
+        /* the page takes it when it starts (room:takeInvite) */
+      }
+      return;
+    }
     if (!oauthReady) {
       pendingOAuthUrl = url;
       return;
@@ -970,7 +1054,19 @@ if (!gotLock) {
       // pull anything newer (covers offline edits made while signed out of
       // the network, not the guest flow, which never syncs).
       if (auth.sessionInfo().mode === "account") void sync.syncNow().catch(() => undefined);
+      // The account's display name: another device may have changed it, or one saved here goes up now.
+      void auth.syncDisplayName().then((changed) => {
+        try {
+          if (changed) mainWindow?.webContents.send("auth:changed", auth.sessionInfo());
+        } catch {
+          /* window gone */
+        }
+      });
+      // A room ByTune quit or crashed in is left; the page puts the listener's queue back.
+      void rooms.recover().catch(() => undefined);
     });
+    // Back from sleep in a room: measure the clock again and catch up.
+    powerMonitor.on("resume", () => rooms.resync());
     void downloads.defaultDownloadDir().then(approveDir);
     try {
       approveDir(downloads.exportDownloadDir());
@@ -1015,6 +1111,8 @@ if (!gotLock) {
       pip.savePipRect();
       // A download cut off by the quit leaves no partial file behind; it restarts from the Downloads list.
       downloads.abandonDownloads();
+      // Say "left" to a room while the drain below holds the quit; if it doesn't arrive, the next start does.
+      void rooms.leaveRoom().catch(() => undefined);
       // Kick off a final push, then persist sync-meta synchronously: quit
       // cannot await the push, but the meta must record any un-synced local
       // edits (changedAt > syncedAt) so the next boot pushes them instead of

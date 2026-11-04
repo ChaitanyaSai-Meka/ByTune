@@ -53,6 +53,7 @@ import { upgradeArtwork } from "./artwork";
 import { shortTitle } from "./format";
 import { createMediaKeyTap } from "./media-key-tap";
 import { useSleepTimer } from "./sleepTimer";
+import { inRoom, useRoom } from "../stores/room";
 import {
   deviceChoices,
   outputChangeAction,
@@ -117,9 +118,17 @@ let settling = false;
 function transitioning(): boolean {
   return fade !== null || armed !== null;
 }
+/**
+ * The playback settings in force. A room plays every song as it is, at normal speed, one after
+ * another, so every computer in it stays at the same moment (lib/rooms).
+ */
+function playbackSettings(): { smartFade: boolean; skipSilence: boolean; crossfadeSeconds: number; playbackSpeed: number } {
+  return inRoom() ? { smartFade: false, skipSilence: false, crossfadeSeconds: 0, playbackSpeed: 1 } : useSettings.getState();
+}
+
 /** A song's silent edges, when Skip silence wants them trimmed. */
 function silenceEdges(trackId: string | undefined): TrackAnalysis | null {
-  return trackId && useSettings.getState().skipSilence ? peekAnalysis(trackId) : null;
+  return trackId && playbackSettings().skipSilence ? peekAnalysis(trackId) : null;
 }
 /** Songs whose loudness leveling waits on a measurement: Piped streams (YouTube
     reported none) and local files without ReplayGain. */
@@ -321,7 +330,7 @@ function levelLocal(track: Track): void {
  * to the song if it is the one playing.
  */
 function analyse(track: Track): void {
-  const s = useSettings.getState();
+  const s = playbackSettings();
   if (!s.smartFade && !s.skipSilence && !needsMeasuring.has(track.id)) return;
   // A song listed without its length (Home cards, podcast episodes) waits for its deck to know it.
   const duration = track.duration || (loadedId === track.id && Number.isFinite(el().duration) ? el().duration : 0);
@@ -459,7 +468,7 @@ function applyElementVolumes(mainGain: number, standbyGain: number): void {
 
 function applySpeed(): void {
   if (!elements) return;
-  const rate = useSettings.getState().playbackSpeed || 1;
+  const rate = playbackSettings().playbackSpeed || 1;
   for (const e of elements) {
     try {
       e.playbackRate = rate;
@@ -693,7 +702,7 @@ function onTimeUpdate(): void {
 /* ============================ transitions ============================ */
 
 function fadeMsForNext(): number {
-  const s = useSettings.getState();
+  const s = playbackSettings();
   // Automix owns transitions, so it works out of the box: no crossfade
   // duration set means a sensible 6s blend rather than no transition at all.
   const fallback = s.smartFade ? 6 : 0;
@@ -737,7 +746,7 @@ export function planBlend(
 
 /** Blends use the songs' real edges with Automix or Skip silence on. */
 const blendEdges = (): boolean => {
-  const s = useSettings.getState();
+  const s = playbackSettings();
   return s.smartFade || s.skipSilence;
 };
 
@@ -806,7 +815,7 @@ async function beginFade(nextTrack: Track, fadeMs: number): Promise<void> {
       peekAnalysis(nextTrack.id),
       fadeMs / 1000,
       edges,
-      useSettings.getState().smartFade
+      playbackSettings().smartFade
     );
     stand.src = url;
     stand.currentTime = plan.inAt;
@@ -1329,6 +1338,12 @@ export function initAudioEngine(): void {
 
   // Playback speed lives in settings — re-apply whenever they change.
   useSettings.subscribe(() => applySpeed());
+  // Entering or leaving a room changes the speed and blends in force (playbackSettings).
+  useRoom.subscribe((s, prev) => {
+    if (!s.view.state === !prev.view.state) return;
+    applySpeed();
+    if (s.view.state && (fade || armed)) abortFade(false);
+  });
   // Same for the chosen output device.
   useSettings.subscribe(() => applySink());
   applyEq();

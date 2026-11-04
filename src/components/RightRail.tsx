@@ -17,6 +17,8 @@ import { useUI, type MenuItem } from "../stores/ui";
 import { dontPlay, useAutoplayInfo } from "../lib/autoplay";
 import { confirmClearHistory, historyMenuItems, trackMenuItems } from "../lib/trackActions";
 import { Artwork, EqBars, IconBtn, Switch } from "./primitives";
+import { RoomPanel } from "./RoomPanel";
+import { useRoom } from "../stores/room";
 import { upgradeArtwork, wideArtwork } from "../lib/artwork";
 import { useDrag, useTrackDrop } from "../lib/dnd";
 import { useSortable, type SortableRowProps } from "../lib/useSortable";
@@ -160,6 +162,8 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
   const playTrack = usePlayer((s) => s.playTrack);
   const autoplay = useSettings((s) => s.autoplay);
   const setAutoplay = useSettings((s) => s.setAutoplay);
+  /** In a room the queue is everyone's, and AutoPlay sits out. */
+  const inRoom = useRoom((s) => s.view.state !== null);
   const { seedTitle, loading } = useAutoplayInfo();
   const liked = useLibrary((s) => s.liked);
   const toggleLike = useLibrary((s) => s.toggleLike);
@@ -221,7 +225,9 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
   }, [tab, hasCurrent]);
   const built = (p: number): boolean => (p >= inView.first && p <= inView.last) || p === sortable.dragging;
   const standIn = (key: string, p: number) => <div key={key} aria-hidden className="h-12" style={sortable.styleFor(p)} />;
-  const note = suggestions.length
+  const note = inRoom
+    ? "Everyone in the room hears this queue"
+    : suggestions.length
     ? `Suggested by AutoPlay${seedTitle ? ` \u00b7 similar to ${seedTitle}` : ""}`
     : !autoplay
       ? "AutoPlay is off: the music stops after your last song"
@@ -379,7 +385,7 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
           {current && (
             <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-2 pb-3">
               <div className="flex items-center gap-3 px-2 pt-2 pb-1.5">
-                <h2 className="flex-1 text-[15px] font-bold tracking-[-0.2px] text-ink-hi">Up next</h2>
+                <h2 className="flex-1 text-[15px] font-bold tracking-[-0.2px] text-ink-hi">{inRoom ? "Up next in the room" : "Up next"}</h2>
                 {own.length > 0 && (
                   <button
                     onClick={() => usePlayer.getState().clearUpcoming()}
@@ -389,10 +395,14 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
                     Clear
                   </button>
                 )}
-                <span aria-hidden className="text-[12.5px] font-semibold text-ink-hi/70">
-                  AutoPlay
-                </span>
-                <Switch checked={autoplay} onChange={setAutoplay} label="AutoPlay" />
+                {!inRoom && (
+                  <>
+                    <span aria-hidden className="text-[12.5px] font-semibold text-ink-hi/70">
+                      AutoPlay
+                    </span>
+                    <Switch checked={autoplay} onChange={setAutoplay} label="AutoPlay" />
+                  </>
+                )}
               </div>
               {own.length === 0 && suggestions.length === 0 && (
                 <div className="px-2 pb-1 text-[13px] text-ink-hi/45">Your queue is empty.</div>
@@ -596,7 +606,7 @@ export function RightRail() {
       className="w-[328px] shrink-0 flex flex-col glass-pill rounded-2xl overflow-hidden"
       aria-label="Now playing panel"
     >
-      {mode === "queue" ? <QueuePanel onClose={closeQueue} /> : <DetailsBody />}
+      {mode === "queue" ? <QueuePanel onClose={closeQueue} /> : mode === "room" ? <RoomPanel onClose={closeQueue} /> : <DetailsBody />}
     </aside>
   );
 }

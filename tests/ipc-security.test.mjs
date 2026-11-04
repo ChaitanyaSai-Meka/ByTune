@@ -6,6 +6,7 @@ import vm from "node:vm";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { transform } from "esbuild";
+import { srcModule } from "./helpers/src-module.mjs";
 const require = createRequire(import.meta.url);
 const root = fileURLToPath(new URL("../electron/", import.meta.url));
 
@@ -57,6 +58,16 @@ async function harness({ legacyStores = false } = {}) {
         publicPlaylist: (link) => { calls.push(["publicPlaylist", link]); return { name: "x", songs: [], total: 0 }; },
         matchSong: (song, prefer) => { calls.push(["match", JSON.parse(JSON.stringify(song)), prefer]); return null; },
       };
+      if (name === "./rooms") return {
+        onRoomChange() {},
+        joinRoom: (code) => { calls.push(["join", code]); return {}; },
+        updateRoom: (change) => { calls.push(["update", JSON.parse(JSON.stringify(change))]); return {}; },
+        setHostOnly: (on) => { calls.push(["hostOnly", on]); return {}; },
+        makeHost: (id) => { calls.push(["makeHost", id]); return {}; },
+        removeMember: (id) => { calls.push(["remove", id]); return {}; },
+        stash: (s) => { calls.push(["stash", JSON.parse(JSON.stringify(s)).queue.length]); },
+      };
+      if (name.startsWith("../src/")) return srcModule(name);
       if (name.startsWith("./")) return {};
       return require(name);
     },
@@ -205,4 +216,41 @@ test("match:song passes on only a clean song: known fields, bounded text, a real
   ]);
   assert.equal(({}).polluted, undefined);
   await assert.rejects(h.invoke("match:song", { title: "Yellow", artist: "" }, false), /Untrusted IPC sender/);
+});
+
+test("room channels: codes, changes, member ids and the set-aside queue are checked before the room sees them", async () => {
+  const h = await harness();
+  for (const code of [null, 42, {}, "", "ABC", "ABCDE0", "x".repeat(101), "https://evil.example/ABC234"]) {
+    await assert.rejects(h.call("room:join", code), /isn't a room code/, JSON.stringify(code));
+  }
+  await h.call("room:join", " abc-234 ");
+  await h.call("room:join", "bytune://room/HJK789");
+  const good = { baseSeq: 3, track: { id: "dQw4w9WgXcQ" }, positionMs: 1000, playing: true, queue: [], lead: true, note: "played x" };
+  for (const bad of [
+    null, "x", { ...good, baseSeq: -1 }, { ...good, baseSeq: 1.5 }, { ...good, positionMs: -1 }, { ...good, positionMs: 1e12 },
+    { ...good, playing: "yes" }, { ...good, lead: 1 }, { ...good, queue: "x" }, { ...good, queue: Array(201).fill({}) },
+    { ...good, track: [good.track] }, { ...good, note: "n".repeat(201) },
+  ]) {
+    await assert.rejects(h.call("room:update", bad), /Not a room change/, JSON.stringify(bad)?.slice(0, 60));
+  }
+  await h.call("room:update", good);
+  await h.call("room:update", { ...good, track: null });
+  await assert.rejects(h.call("room:hostOnly", "true"), /Not a setting/);
+  await h.call("room:hostOnly", true);
+  for (const id of [null, "", "u1", "../x", "8d2f2a44-0000-4000-8000-00000000000"]) {
+    await assert.rejects(h.call("room:makeHost", id), /Not a member/);
+    await assert.rejects(h.call("room:remove", id), /Not a member/);
+  }
+  const member = "8d2f2a44-0000-4000-8000-000000000001";
+  await h.call("room:makeHost", member);
+  await h.call("room:remove", member);
+  for (const s of [null, [], { queue: "x" }, { queue: Array(5001).fill({ id: "a" }) }]) {
+    await assert.rejects(h.call("room:stash", s), /Not a queue/);
+  }
+  await h.call("room:stash", { queue: [{ id: "local:abc" }, { id: "dQw4w9WgXcQ" }], index: 0 });
+  assert.deepEqual(h.calls, [
+    ["join", "ABC234"], ["join", "HJK789"], ["update", good], ["update", { ...good, track: null }], ["hostOnly", true],
+    ["makeHost", member], ["remove", member], ["stash", 2],
+  ]);
+  await assert.rejects(h.invoke("room:join", "ABC234", false), /Untrusted IPC sender/);
 });

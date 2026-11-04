@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import {
   Activity,
   AppWindow,
+  AtSign,
   BarChart3,
   Check,
   ChevronRight,
@@ -41,7 +42,8 @@ import {
   STREAM_QUALITY_LABEL,
   useSettings,
 } from "../stores/settings";
-import { useSession } from "../lib/session";
+import { shownName, useSession } from "../lib/session";
+import { displayNameProblem, normalizeDisplayName } from "../lib/account-validators";
 import { connectSpotify, useSpotify } from "../lib/spotify";
 import { SpotifyIcon } from "../components/SpotifyIcon";
 import { MATCH_LANGUAGES, type MatchLanguage } from "../../electron/track-match";
@@ -641,6 +643,43 @@ function CloudAccountGroup() {
     });
   };
 
+  const changeDisplayName = (): void => {
+    openDialog({
+      title: session.displayName ? "Change display name" : "Add a display name",
+      body:
+        session.mode === "account"
+          ? "What people see in rooms and around ByTune. Up to 30 characters."
+          : "Shown around ByTune on this PC. Up to 30 characters.",
+      initialValue: session.displayName ?? "",
+      placeholder: "Display name",
+      confirmLabel: "Save",
+      onConfirm: (value) => {
+        if (normalizeDisplayName(value) === session.displayName) return;
+        const problem = displayNameProblem(value);
+        if (problem) {
+          toast(problem, "error");
+          return;
+        }
+        void run(async () => {
+          await window.bytune?.authSetDisplayName(value);
+          await useSession.getState().refresh();
+        }, "Display name saved");
+      },
+    });
+  };
+
+  const rowButton = (label: string, onClick: () => void): ReactNode => (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className="h-7 px-2.5 rounded-md bg-ink-hi/[0.08] hover:bg-ink-hi/[0.14] text-[12px] font-semibold text-ink-hi transition-colors"
+    >
+      {label}
+    </button>
+  );
+
   const signedIn = session.mode === "account";
   const subtitle = !session.loaded
     ? "…"
@@ -669,23 +708,20 @@ function CloudAccountGroup() {
     >
       <SettingsRow
         icon={signedIn ? UserRound : User}
-        title={signedIn ? (session.username ?? "Account") : session.mode === "guest" ? "Guest" : "No account"}
+        title={shownName(session) ?? (signedIn ? "Account" : session.mode === "guest" ? "Guest" : "No account")}
         subtitle={subtitle}
         badge={session.mode === "guest" ? "Guest" : undefined}
-        trailing={
-          signedIn ? (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                changeUsername();
-              }}
-              className="h-7 px-2.5 rounded-md bg-ink-hi/[0.08] hover:bg-ink-hi/[0.14] text-[12px] font-semibold text-ink-hi transition-colors"
-            >
-              Change
-            </button>
-          ) : undefined
-        }
+        trailing={session.mode ? rowButton(session.displayName ? "Edit name" : "Add name", changeDisplayName) : undefined}
       />
+      {/* The username shows here only: everywhere else it's the display name. */}
+      {signedIn && (
+        <SettingsRow
+          icon={AtSign}
+          title={`@${session.username ?? ""}`}
+          subtitle="Username"
+          trailing={rowButton("Change", changeUsername)}
+        />
+      )}
       <div className="px-4 pb-3 flex flex-wrap gap-2">
         {signedIn ? (
           <>

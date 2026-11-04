@@ -23,7 +23,7 @@ const { outputFiles } = await build({
     b.onLoad({ filter: /.*/, namespace: "seam" }, a => ({
       contents: a.path.endsWith("TopBar")
         ? "exports.CaptionButtons = () => null;"
-        : "exports.useSession = { getState: () => ({ refresh: () => globalThis.__refresh() }) };",
+        : "exports.useSession = { getState: () => ({ ...globalThis.__session, refresh: () => globalThis.__refresh() }) };",
       loader: "js",
     }));
   }}],
@@ -32,7 +32,8 @@ const module = { exports: {} };
 new Function("require", "module", "exports", outputFiles[0].text)(require, module, module.exports);
 const { Onboarding } = module.exports;
 
-async function mount(initial, api) {
+async function mount(initial, api, session = {}) {
+  globalThis.__session = session;
   const dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
   globalThis.window = dom.window;
   globalThis.document = dom.window.document;
@@ -44,6 +45,22 @@ async function mount(initial, api) {
   await act(async () => root.render(React.createElement(Onboarding, { initial })));
   return {
     button: text => [...document.querySelectorAll("button")].find(b => b.textContent.trim() === text),
+    field: label => document.querySelector(`input[aria-label="${label}"]`),
+    /** Types into a field the way React sees typing (its value setter, then an input event). */
+    type: async (label, value) => {
+      const input = document.querySelector(`input[aria-label="${label}"]`);
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      await act(async () => {
+        setter.call(input, value);
+        input.dispatchEvent(new window.Event("input", { bubbles: true }));
+      });
+    },
+    click: async text => {
+      await act(async () => {
+        [...document.querySelectorAll("button")].find(b => b.textContent.trim() === text).click();
+        await new Promise(r => setTimeout(r, 10));
+      });
+    },
     refreshes: () => refreshes,
     close: async () => { await act(async () => root.unmount()); dom.window.close(); },
   };
@@ -79,3 +96,72 @@ for (const [initial, label, method] of [
     } finally { await h.close(); }
   });
 }
+
+/* ---------------- display names ---------------- */
+
+test("continuing as a guest asks for a name first: Continue sends it, Skip sends none", async () => {
+  const sent = [];
+  const h = await mount("choose", { authContinueGuest: async (name) => { sent.push(name); } });
+  try {
+    await h.click("Continue as guest");
+    assert.equal(sent.length, 0, "not entered yet");
+    assert.match(document.querySelector("h2")?.textContent ?? "", /What should we call you/);
+    assert.equal(h.button("Continue").disabled, true, "nothing typed: Continue waits, Skip is there");
+    await h.type("Display name", "  Rishi  ");
+    await h.click("Continue");
+    assert.deepEqual(sent, ["  Rishi  "], "main tidies it");
+    assert.equal(h.refreshes(), 1);
+  } finally { await h.close(); }
+
+  const skipped = [];
+  const s = await mount("choose", { authContinueGuest: async (...args) => { skipped.push(args); } });
+  try {
+    await s.click("Continue as guest");
+    await s.click("Skip for now");
+    assert.deepEqual(skipped, [[undefined]]);
+  } finally { await s.close(); }
+});
+
+test("creating an account asks for a display name, separate from the username", async () => {
+  const calls = [];
+  const h = await mount("signup", {
+    authSignUp: async (...args) => { calls.push(args); },
+    authUsernameAvailable: async () => ({ available: true }),
+    syncNow: async () => undefined,
+  });
+  try {
+    await h.type("Username", "rishi");
+    await h.type("Password", "password1");
+    await h.type("Confirm password", "password1");
+    assert.equal(h.button("Create account").disabled, true, "no display name yet");
+    await h.type("Display name", "x".repeat(31));
+    assert.equal(h.button("Create account").disabled, true, "too long");
+    assert.match(document.body.textContent, /Up to 30 characters/);
+    await h.type("Display name", "Rishi Teja");
+    await h.click("Create account");
+    assert.deepEqual(calls, [["rishi", "password1", "Rishi Teja"]]);
+  } finally { await h.close(); }
+});
+
+test("a guest creating an account finds their name already filled in", async () => {
+  const h = await mount("signup", { authUsernameAvailable: async () => ({ available: true }) }, { mode: null, suggestedDisplayName: "Guesty" });
+  try {
+    assert.equal(h.field("Display name").value, "Guesty");
+  } finally { await h.close(); }
+});
+
+test("a new Google account: the display name comes filled in and goes with the username", async () => {
+  const calls = [];
+  const h = await mount(
+    "pickusername",
+    { authSetUsername: async (...args) => { calls.push(args); }, authUsernameAvailable: async () => ({ available: true }), syncNow: async () => undefined },
+    { mode: "account", needsUsername: true, suggestedDisplayName: "Rishi Teja Thabeti" }
+  );
+  try {
+    assert.equal(h.field("Display name").value, "Rishi Teja Thabeti");
+    await h.type("Username", "rishi_t");
+    await act(async () => { await new Promise(r => setTimeout(r, 500)); }); // the availability check
+    await h.click("Continue");
+    assert.deepEqual(calls, [["rishi_t", "Rishi Teja Thabeti"]]);
+  } finally { await h.close(); }
+});

@@ -17,6 +17,7 @@ import { setAmbientFromArtwork } from "./lib/ambient";
 import { listenForDownloadProgress } from "./lib/downloads";
 import { listenForOpenedFiles } from "./lib/openedFiles";
 import { watchSpotify } from "./lib/spotify";
+import { listenForRooms } from "./lib/rooms";
 import { FileDropOverlay } from "./components/FileDropOverlay";
 import { LYRICS_NUDGE_STEP, useLyricsNudge } from "./lib/lyricsOffset";
 import { watchMenuCommands } from "./lib/menuCommands";
@@ -119,7 +120,7 @@ function useKeyboardShortcuts(): void {
       const ui = useUI.getState();
       if (e.key === "Escape") {
         if (ui.nowPlayingOpen) ui.toggleNowPlaying();
-        else if (ui.rightPanel === "queue" || ui.lyricsCenter) ui.closePanels();
+        else if (ui.rightPanel === "queue" || ui.rightPanel === "room" || ui.lyricsCenter) ui.closePanels();
         return;
       }
 
@@ -341,6 +342,7 @@ export default function App() {
   // Audio files opened with ByTune or dropped on the window play at once.
   useEffect(() => listenForOpenedFiles(), []);
   useEffect(() => watchSpotify(), []);
+  useEffect(() => listenForRooms(), []);
 
   // Native miniplayer bridge: push playback snapshots to the PiP window and
   // execute transport commands coming back from it.
