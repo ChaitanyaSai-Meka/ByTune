@@ -12,7 +12,7 @@ import { trackMenuItems } from "../lib/trackActions";
 import { useDrag } from "../lib/dnd";
 import { fmtTime, shortTitle, titleStep } from "../lib/format";
 import { FitText } from "../components/FitText";
-import { useArtworkPalette } from "../lib/palette";
+import { pageColors, useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
 import { useLibrary } from "../stores/library";
 import { usePlayer, useTrackPlayback } from "../stores/player";
@@ -164,7 +164,7 @@ export function ArtistView({ artistId }: { artistId: string }) {
   const [nonce, setNonce] = useState(0);
   const playQueue = usePlayer((s) => s.playQueue);
 
-  useArtworkPalette(state?.artist.thumb ?? null);
+  const pagePalette = useArtworkPalette(state?.artist.thumb ?? null);
 
   useEffect(() => {
     let cancelled = false;
@@ -242,7 +242,7 @@ export function ArtistView({ artistId }: { artistId: string }) {
   };
 
   return (
-    <div className="page-tint -mt-5">
+    <div className="page-tint -mt-5" style={pageColors(pagePalette)}>
       {/* Hero — full-bleed photo, scrim dissolving into the page, name and
           stat chips over the lower edge, exactly the mobile artist header. */}
       <div className="relative -mx-10 overflow-hidden">

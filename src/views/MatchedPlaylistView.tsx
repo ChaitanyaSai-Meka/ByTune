@@ -15,7 +15,7 @@ import { useDrag } from "../lib/dnd";
 import { downloadAll } from "../lib/downloads";
 import { fmtTime, shortTitle } from "../lib/format";
 import { pendingImport } from "../lib/importSongs";
-import { useArtworkPalette } from "../lib/palette";
+import { pageColors, useArtworkPalette } from "../lib/palette";
 import { ipcMessage } from "../lib/spotify";
 import { trackMenuItems } from "../lib/trackActions";
 import { useSongMatches, type MatchState } from "../lib/useSongMatches";
@@ -133,7 +133,7 @@ export function MatchedPlaylistView({ spotifyId, importId = "" }: { spotifyId: s
   }, [spotifyId, importId, reload]);
 
   const states = useSongMatches(playlist?.songs ?? null, prefer, attempt);
-  useArtworkPalette(playlist?.thumb ?? null);
+  const pagePalette = useArtworkPalette(playlist?.thumb ?? null);
 
   if (error) {
     return <ErrorState title="Couldn't load this playlist" body={error} onRetry={() => setReload((n) => n + 1)} className="pt-10" />;
@@ -191,7 +191,7 @@ export function MatchedPlaylistView({ spotifyId, importId = "" }: { spotifyId: s
       }.`;
 
   return (
-    <div className="page-tint -mt-5">
+    <div className="page-tint -mt-5" style={pageColors(pagePalette)}>
       <PlaylistHero
         thumb={playlist.thumb}
         title={playlist.name}

@@ -22,7 +22,7 @@ import { FileDropOverlay } from "./components/FileDropOverlay";
 import { LYRICS_NUDGE_STEP, useLyricsNudge } from "./lib/lyricsOffset";
 import { watchMenuCommands } from "./lib/menuCommands";
 import { usePanelDrop } from "./lib/panelDrop";
-import { useArtworkPalette } from "./lib/palette";
+import { CoverGlow } from "./components/CoverGlow";
 import { watchSession, useSession } from "./lib/session";
 import { watchSyncRestores } from "./lib/syncRestore";
 import { createSwipeNav, scrollsSideways } from "./lib/swipeNav";
@@ -48,32 +48,6 @@ import { PodcastsView } from "./views/PodcastsView";
 import { MoodView } from "./views/MoodView";
 import { SearchView } from "./views/SearchView";
 import { SettingsView } from "./views/SettingsView";
-
-/**
- * The middle panel's artwork wash — the morphing gradient at the top of the
- * content pane, on every view except the artist page (its hero carries its
- * own full-bleed artwork treatment). At rest it wears the playing track's
- * colour; hovering any song / album / artist / playlist card borrows that
- * artwork's colour instead (cards feed `tintThumb` via tintHoverHandlers).
- * The colour itself is the ArtworkPalette background, crossfaded by the
- * registered `--home-tint` custom property.
- */
-function TintWash() {
-  const viewName = useUI((s) => s.view.name);
-  const tintThumb = useUI((s) => s.tintThumb);
-  const playingThumb = usePlayer((s) => s.queue[s.index]?.thumb ?? null);
-  const palette = useArtworkPalette(tintThumb ?? playingThumb);
-  const washRef = useRef<HTMLDivElement | null>(null);
-
-  // The colour lives on <main> (not the wash div) so the search filter bar's
-  // stuck backdrop reads the same morphing value — see `main` in index.css.
-  useEffect(() => {
-    washRef.current?.closest("main")?.style.setProperty("--home-tint", `rgb(${palette.elevated})`);
-  }, [palette]);
-
-  if (viewName === "artist" || viewName === "settings") return null;
-  return <div aria-hidden ref={washRef} className="home-tint pointer-events-none absolute inset-x-0 top-0 h-[332px]" />;
-}
 
 function useKeyboardShortcuts(): void {
   useEffect(() => {
@@ -441,7 +415,7 @@ export default function App() {
               panelDrop.hovering ? "opacity-100" : "opacity-0"
             }`}
           />
-          <TintWash />
+          <CoverGlow />
           {lyricsCenter ? (
             <LyricsCenter />
           ) : (
@@ -451,7 +425,7 @@ export default function App() {
                     view so its data effects re-run — that is the Refresh button's
                     mechanism everywhere except Home (which re-orchestrates its
                     feed without a remount). */}
-                <div key={`${viewReloadNonce}:${viewName}`} className="animate-rise-in px-10 pt-5 pb-6">
+                <div key={`${viewReloadNonce}:${viewName}`} className="view-page animate-rise-in px-10 pt-5 pb-6">
                   <ErrorBoundary>
                     <CurrentView />
                   </ErrorBoundary>

@@ -14,7 +14,7 @@ import { copyLink, youtubeAlbumLink } from "../lib/playlistShare";
 import { useDrag } from "../lib/dnd";
 import { fmtTime, PAGE_TITLE_SIZE, shortTitle, titleSource, titleStep } from "../lib/format";
 import { FitText } from "../components/FitText";
-import { useArtworkPalette } from "../lib/palette";
+import { pageColors, useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
 import { queueAlbum } from "../lib/album";
 import { usePlayer, useTrackPlayback } from "../stores/player";
@@ -38,7 +38,7 @@ export function AlbumView({ albumId }: { albumId: string }) {
   // The whole page wears the artwork's colour: page-tint paints the host with
   // the per-page ArtworkPalette CSS variables, then the hero gradients read
   // from the same wash + accent.
-  useArtworkPalette(data?.album.thumb ?? null);
+  const pagePalette = useArtworkPalette(data?.album.thumb ?? null);
 
   useEffect(() => {
     let cancelled = false;
@@ -100,7 +100,7 @@ export function AlbumView({ albumId }: { albumId: string }) {
   };
 
   return (
-    <div className="page-tint -mt-5">
+    <div className="page-tint -mt-5" style={pageColors(pagePalette)}>
       {/* Hero — the cover full-bleed, credit + metadata over its lower edge. */}
       <div className="relative -mx-10 overflow-hidden">
         <div className="absolute inset-0">

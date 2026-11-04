@@ -11,6 +11,7 @@ import * as canvas from "./canvas";
 import * as music from "./music-service";
 import { backupExport, backupImport } from "./backup";
 import * as locallib from "./local-library";
+import { remoteArtBytes } from "./remote-art";
 import * as mediaControls from "./media-controls";
 import * as persist from "./persist";
 import * as pip from "./pip";
@@ -486,6 +487,9 @@ function registerIpc(): void {
     const art = locallib.readLocalArtThumb(String(thumb ?? ""));
     return art ? art.data : null;
   });
+  // The same for YouTube's thumbnail host (playlist covers, video thumbnails), which sends no CORS
+  // header: shown fine, but their colours can't be read. That host only (electron/remote-art).
+  ipc.handle("art:remoteBytes", (_e, url: unknown) => remoteArtBytes(typeof url === "string" ? url : ""));
 
   // Spotify (electron/spotify.ts): the session stays in main; the page only gets playlists and songs.
   // Rooms (electron/rooms.ts): Supabase stays here; the page gets the room's state.

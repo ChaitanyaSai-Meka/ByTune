@@ -67,18 +67,22 @@ export async function setAmbientFromArtwork(url: string | undefined | null): Pro
  *
  * Online covers load with crossOrigin="anonymous" (their hosts send ACAO).
  * Local covers (localart://) can never load CORS-clean — Chromium blocks
- * CORS-mode requests to custom schemes at the scheme level — so their bytes
- * come over IPC and are decoded from a same-origin blob URL instead. Either
- * way the canvas stays untainted and getImageData keeps working.
+ * CORS-mode requests to custom schemes at the scheme level — and YouTube's
+ * thumbnail host (i.ytimg.com: playlist covers, video thumbnails) sends no
+ * ACAO, so their bytes come over IPC and are decoded from a same-origin blob
+ * URL instead. Either way the canvas stays untainted and getImageData works.
  */
+const NO_CORS_HOST = /^https:\/\/i\d?\.ytimg\.com\//i;
+
 export async function loadArtworkImage(
   url: string
 ): Promise<{ image: HTMLImageElement; cleanup: () => void } | null> {
   let src = url;
   let revoke: string | null = null;
-  if (url.startsWith("localart://")) {
+  const local = url.startsWith("localart://");
+  if (local || NO_CORS_HOST.test(url)) {
     try {
-      const bytes = (await window.bytune?.localArtBytes(url)) as unknown;
+      const bytes = (await (local ? window.bytune?.localArtBytes(url) : window.bytune?.remoteArtBytes(url))) as unknown;
       const u8 =
         bytes instanceof Uint8Array
           ? bytes

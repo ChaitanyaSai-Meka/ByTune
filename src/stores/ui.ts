@@ -151,19 +151,26 @@ export interface UIState {
 
 let toastSeq = 1;
 
+/** Leaving a card waits this long before the wash goes back to the playing track: crossing the gap to
+ *  the next card goes straight to its colour, without a flash of the playing track's in between. */
+const TINT_LET_GO_MS = 160;
+let tintLetGo: ReturnType<typeof setTimeout> | undefined;
+
 /**
  * Spread onto any card or row that represents playable art (song, album,
- * artist, playlist): while the pointer is over it, the middle panel's wash
- * borrows that artwork's colour (see TintWash in App.tsx). Leaving the card
- * hands the wash back to the playing track.
+ * artist, playlist): while the pointer is over it, the middle panel's glow
+ * shows that artwork (see components/CoverGlow). Leaving the card hands the
+ * glow back to the playing track.
  */
 export function tintHoverHandlers(thumb: string | null | undefined) {
   return {
     onMouseEnter: (): void => {
+      clearTimeout(tintLetGo);
       useUI.getState().setTintThumb(thumb ?? null);
     },
     onMouseLeave: (): void => {
-      useUI.getState().setTintThumb(null);
+      clearTimeout(tintLetGo);
+      tintLetGo = setTimeout(() => useUI.getState().setTintThumb(null), TINT_LET_GO_MS);
     },
   };
 }

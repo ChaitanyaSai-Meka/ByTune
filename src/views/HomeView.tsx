@@ -28,8 +28,8 @@ import { tintHoverHandlers, useUI } from "../stores/ui";
 import type { Track } from "../types";
 
 /** Quick-resume tiles — the compact 2×3 grid straight from history. Hovering
-    a tile borrows its artwork colour for the panel wash (TintWash in App),
-    and every tile is a drag source for the library. */
+    a tile shows its artwork in the panel's glow (components/CoverGlow), and
+    every tile is a drag source for the library. */
 function QuickTile({ track }: { track: Track }) {
   const playQueue = usePlayer((s) => s.playQueue);
   const drag = useDrag({ track });
@@ -173,9 +173,9 @@ function SectionView({ section }: { section: HomeSection }) {
 
 export function HomeView() {
   const { sections, profile } = useHomeFeed();
-  // The wash at the top of the pane is global now (TintWash in App.tsx): at
-  // rest it wears the playing track's colour, and hovering any card on any
-  // view borrows that card's artwork colour.
+  // The glow at the top of the pane is global (components/CoverGlow): at rest
+  // it shows the playing track's cover, and hovering any card on any view
+  // shows that card's artwork instead.
 
   return (
     <div className="relative">

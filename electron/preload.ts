@@ -72,6 +72,7 @@ const api = {
   libraryFolderStatuses: () => ipcRenderer.invoke("library:folderStatuses"),
   localTrackUrl: (id: string) => ipcRenderer.invoke("library:trackurl", id),
   localArtBytes: (thumb: string) => ipcRenderer.invoke("library:artbytes", thumb),
+  remoteArtBytes: (url: string) => ipcRenderer.invoke("art:remoteBytes", url),
   getCanvas: (q: { title: string; artist: string; album?: string }) =>
     ipcRenderer.invoke("canvas:get", q),
 

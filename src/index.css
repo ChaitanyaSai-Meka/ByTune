@@ -169,34 +169,45 @@ body {
   background: linear-gradient(180deg, rgba(0, 0, 0, 0.92), rgba(0, 0, 0, 0.55) 45%, transparent);
 }
 
-/* Page tint — every content host inherits the per-page ArtworkPalette here.
-   Set by <PagePalette artwork={...}> via lib/palette.ts. */
+/* Page tint — an album, playlist or artist page wearing its cover's colours.
+   The page sets its palette here (style={pageColors(...)}, lib/palette.ts).
+   Its header (the first child: the cover full-bleed) dissolves into
+   --page-bg at its foot; that colour then carries on below the header and
+   fades into the panel, behind the page's content. The page reaches to the
+   panel's bottom edge (the view wrapper's 1.5rem padding is taken over), and
+   clips the fade there, so a short page is never lengthened or cut off by it. */
 .page-tint {
-  background: rgb(var(--page-bg));
   color: rgb(var(--page-on));
-  transition: background 260ms ease, color 260ms ease;
+  isolation: isolate;
+  overflow: visible clip;
+  margin-bottom: -1.5rem;
+  padding-bottom: 1.5rem;
 }
-html.reduce-motion .page-tint,
-html.reduce-motion .page-tint * {
-  transition: none !important;
+.page-tint > :first-child {
+  overflow: clip visible;
+}
+.page-tint > :first-child::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 360px;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgb(var(--page-bg)), rgb(var(--page-bg) / 0.55) 45%, rgb(var(--page-bg) / 0));
+}
+/* The view wrapper of such a page fills the panel, so the page can too. */
+.view-page:has(> .page-tint) {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.view-page > .page-tint {
+  flex: 1 0 auto;
 }
 
-/* Home top wash — a deep, artwork-derived tint that fades down into the page.
-   `--home-tint` is a registered custom property, so hovering a quick-pick
-   morphs the wash to that artwork's colour smoothly instead of snapping
-   between two gradients. */
-@property --home-tint {
-  syntax: "<color>";
-  inherits: true;
-  initial-value: rgb(18 18 22);
-}
-
-/* The tint variable lives on <main> (set by TintWash) so any descendant can
-   read it — the wash, and the search filter bar's stuck backdrop, always
-   wear the same morphing colour. The transition is declared here, on the
-   element whose value changes, so every consumer inherits the animation. */
 main {
-  transition: --home-tint 600ms ease;
   /* Hoist the view scroller's scroll timeline so the search band — which
      lives outside the scroller — can animate to the same scroll position. */
   timeline-scope: --view-scroll;
@@ -207,16 +218,43 @@ main {
   scroll-timeline-name: --view-scroll;
 }
 
-.home-tint {
-  /* Spotify's wash: strong at the very top, fully gone by ~⅓ of the pane —
-     never a tall smudge reaching down the page. The noise dither (banding
-     fix) and the gradient fade out together through the mask, so nothing
-     ever ends on a hard horizontal edge. */
-  background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.035 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E") repeat,
-    linear-gradient(180deg, var(--home-tint) 0%, transparent 85%);
-  -webkit-mask-image: linear-gradient(to bottom, black 30%, transparent 96%);
-  mask-image: linear-gradient(to bottom, black 30%, transparent 96%);
+/* The middle panel's glow (components/CoverGlow): the cover blurred into light
+   across the top, fading down into the panel. The mask carries the fade (and
+   the grain with it), so nothing ever ends on a hard horizontal edge. */
+.cover-glow {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, rgb(0 0 0 / 0.78) 30%, rgb(0 0 0 / 0.36) 62%, transparent 100%);
+  mask-image: linear-gradient(to bottom, black 0%, rgb(0 0 0 / 0.78) 30%, rgb(0 0 0 / 0.36) 62%, transparent 100%);
+}
+/* Stretched to the band rather than cropped: blurred this far, all of a
+   cover's colours show, each where it sits on the cover. Bigger than the band
+   so the blur's soft edge stays out of sight. The filter is inline: its
+   brightness follows the cover. */
+.cover-glow-art {
+  position: absolute;
+  inset: -30%;
+  background-position: center;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  opacity: 0.9;
+  animation: cover-glow-in 600ms ease both;
+}
+.cover-glow-out {
+  animation: cover-glow-out 600ms ease both;
+}
+@keyframes cover-glow-in {
+  from { opacity: 0; }
+  to { opacity: 0.9; }
+}
+@keyframes cover-glow-out {
+  from { opacity: 0.9; }
+  to { opacity: 0; }
+}
+/* Fine grain over the glow: no banding in its long, dark fade. */
+.cover-glow-grain {
+  position: absolute;
+  inset: 0;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.035 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E") repeat;
 }
 
 /* Frosted search band — rendered by App at panel level (see App.tsx for why
@@ -248,8 +286,12 @@ html.reduce-motion .search-band {
   opacity: 1;
 }
 
-html.reduce-motion .home-tint {
-  transition: none !important;
+/* Reduce motion: a new cover's glow is just there, and one leaving just goes. */
+html.reduce-motion .cover-glow-art {
+  animation: none;
+}
+html.reduce-motion .cover-glow-out {
+  opacity: 0;
 }
 
 /* Drop feedback — a ring that blooms out of the row it landed on. */

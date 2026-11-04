@@ -14,7 +14,7 @@ import { copyLink, youtubePlaylistLink } from "../lib/playlistShare";
 import { useDrag } from "../lib/dnd";
 import { fmtTime, shortTitle } from "../lib/format";
 import { FitText } from "../components/FitText";
-import { useArtworkPalette } from "../lib/palette";
+import { pageColors, useArtworkPalette } from "../lib/palette";
 import { usePlayer, useTrackPlayback } from "../stores/player";
 import { useUI } from "../stores/ui";
 import type { RemotePlaylistPage, Track } from "../types";
@@ -103,7 +103,7 @@ export function RemotePlaylistView({ playlistId }: { playlistId: string }) {
   const playQueue = usePlayer((s) => s.playQueue);
   const toast = useUI((s) => s.toast);
 
-  useArtworkPalette(page?.thumb ?? null);
+  const pagePalette = useArtworkPalette(page?.thumb ?? null);
 
   useEffect(() => {
     let cancelled = false;
@@ -153,7 +153,7 @@ export function RemotePlaylistView({ playlistId }: { playlistId: string }) {
   };
 
   return (
-    <div className="page-tint -mt-5">
+    <div className="page-tint -mt-5" style={pageColors(pagePalette)}>
       <PlaylistHero thumb={page.thumb} title={page.title} credit={page.credit} meta={page.meta}>
         <button onClick={() => play(true)} disabled={!tracks.length} title="Shuffle" aria-label="Shuffle" className={HERO_ROUND}>
           <Shuffle className="w-[18px] h-[18px]" />

@@ -15,7 +15,7 @@ import { useDrag } from "../lib/dnd";
 import { useSortable, type SortableDragProps } from "../lib/useSortable";
 import { fmtTime, fmtTotal, PAGE_TITLE_SIZE, plural, shortTitle, titleStep } from "../lib/format";
 import { FitText } from "../components/FitText";
-import { useArtworkPalette } from "../lib/palette";
+import { pageColors, useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
 import { useLibrary, type Playlist } from "../stores/library";
 import { isLocalSong, staysOnDevice } from "../lib/devicePlaylists";
@@ -32,7 +32,7 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
   // Artist-imported playlists wear the artist's photo, not a song cover —
   // the page tint and the hero read from that same artwork.
   const coverThumb = playlist?.artistThumb ?? playlist?.tracks[0]?.thumb ?? null;
-  useArtworkPalette(coverThumb);
+  const pagePalette = useArtworkPalette(coverThumb);
 
   // Dropping songs onto this page is handled panel-wide in App (usePanelDrop);
   // its own songs move within the list instead (useSortable).
@@ -118,7 +118,7 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
   };
 
   return (
-    <div className="page-tint -mt-5">
+    <div className="page-tint -mt-5" style={pageColors(pagePalette)}>
       {/* Hero — the playlist cover full-bleed, name + metadata over its lower edge. */}
       <div className="relative -mx-10 overflow-hidden">
         <div className="absolute inset-0">
