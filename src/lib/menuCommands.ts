@@ -49,7 +49,7 @@ function runCommand(command: string): void {
       void window.bytune?.pipToggle();
       break;
     case "settings":
-      ui.navigate({ name: "settings" });
+      ui.openSettings();
       break;
     case "focus-search": {
       const el = document.getElementById("global-search") as HTMLInputElement | null;

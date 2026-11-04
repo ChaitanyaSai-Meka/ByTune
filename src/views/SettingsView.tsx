@@ -1,382 +1,393 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+/**
+ * Settings: how ByTune plays, sounds and keeps your library.
+ *
+ * Composition: a rail of categories on the left, where the sidebar's open-row light marks the one
+ * you're in and slides as you move; one category at a time on the right, its title and one line,
+ * then groups of rows in quiet cards. A row is a glyph tile, the setting and what it does, and its
+ * control: a switch, a picker, buttons, or under the text a slider or a choice whose thumb slides.
+ * Searching shows every category's matches at once. The colour comes from the music, as everywhere
+ * in ByTune: the page sits over the playing song's glow, the account card is made of your own
+ * covers, and the equalizer draws its curve live. Styles: index.css, "settings".
+ *
+ * The category lives in the view's param, swapped in place (useUI.replaceView): Back and the profile
+ * button leave Settings in one step, coming back from a page opened here lands on the category you
+ * left, and a fresh open lands on Account.
+ */
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   Activity,
   AppWindow,
-  AtSign,
+  AudioLines,
   BarChart3,
   Check,
   ChevronRight,
+  ChevronsUpDown,
+  CirclePlay,
+  Clapperboard,
   CloudDownload,
   CloudUpload,
+  Database,
   Download,
   Droplets,
   ExternalLink,
-  Globe,
-  Search,
-  Timer,
   FileDown,
+  FileMusic,
   FileUp,
+  Filter,
+  FolderDown,
   FolderOpen,
+  FolderPlus,
   Gauge,
-  HardDrive,
+  Globe,
   Image,
   Infinity as InfinityIcon,
+  Info,
   Languages,
+  Library,
   ListMusic,
+  LogOut,
   Maximize2,
-  Music4,
+  MicVocal,
+  Palette,
   RefreshCw,
+  Repeat2,
+  Search,
   SlidersHorizontal,
   SlidersVertical,
-  Speaker,
   Sparkles,
+  Speaker,
+  Timer,
   Trash2,
-  User,
   UserRound,
+  Volume2,
   VolumeX,
   Wifi,
+  X,
 } from "lucide-react";
-import {
-  DOWNLOAD_QUALITY_LABEL,
-  LOUDNESS_LABEL,
-  STREAM_QUALITY_LABEL,
-  useSettings,
-} from "../stores/settings";
+import { DOWNLOAD_QUALITY_LABEL, LOUDNESS_LABEL, STREAM_QUALITY_LABEL, useSettings } from "../stores/settings";
+import { useLibrary } from "../stores/library";
 import { shownName, useSession } from "../lib/session";
 import { displayNameProblem, normalizeDisplayName } from "../lib/account-validators";
 import { connectSpotify, useSpotify } from "../lib/spotify";
 import { SpotifyIcon } from "../components/SpotifyIcon";
 import { MATCH_LANGUAGES, type MatchLanguage } from "../../electron/track-match";
-import { describeLyricsShift } from "../lib/lyricsOffset";
+import { LYRICS_NUDGE_STEP, describeLyricsShift } from "../lib/lyricsOffset";
 import { setOnboardingIntent } from "../lib/onboardingIntent";
 import { GuestDeleteModal } from "../components/AccountModals";
 import { Switch } from "../components/primitives";
 import { useUI, type MenuItem } from "../stores/ui";
 import { EQ_BANDS, listOutputDevices } from "../lib/audio";
 import type { OutputDeviceChoice } from "../lib/audio-output";
+import { avatarFor } from "../lib/avatar";
+import { wallCovers } from "../lib/collection";
+import { upgradeArtwork } from "../lib/artwork";
+import { EQ_RANGE, eqY } from "../lib/eqScale";
+import brandLogo from "../assets/brand/bytune-logo.svg";
+import brandText from "../assets/brand/bytune-Text.svg";
 
-/* ============================================================ settings chrome
-   Settings are inset cards of rows: an uppercase group header, a
-   rounded card, glyph + title + optional subtitle on the left, a value/switch
-   or chevron on the right, and hairline dividers inset to the text column. */
+type Glyph = React.ComponentType<{ className?: string }>;
 
-const GROUP_INSET = "px-0"; // page padding comes from the view container
-const ROW_INSET = "px-4";
-const TEXT_INSET = "pl-[52px]"; // icon (22) + gap (14) + row inset (16)
+/* ============================================================ categories */
 
-function SettingsGroup({
-  header,
-  footer,
-  children,
-}: {
-  header?: string;
-  footer?: string;
-  children: ReactNode;
-}) {
+const CATEGORIES = [
+  { id: "account", label: "Account", icon: UserRound, lede: "Your name, your backup and the services you've connected" },
+  { id: "playback", label: "Playback", icon: CirclePlay, lede: "How songs start, end and follow each other" },
+  { id: "sound", label: "Sound", icon: AudioLines, lede: "Quality, loudness, where it plays and how it's shaped" },
+  { id: "lyrics", label: "Lyrics", icon: MicVocal, lede: "How lyrics follow the song" },
+  { id: "display", label: "Display", icon: Palette, lede: "Motion, glass and how covers show" },
+  { id: "library", label: "Library", icon: Library, lede: "Your music folders and downloads" },
+  { id: "data", label: "Your data", icon: Database, lede: "Your listening, your backups and a fresh start" },
+  { id: "about", label: "About", icon: Info, lede: "The version you're running and where ByTune lives" },
+] as const;
+type CategoryId = (typeof CATEGORIES)[number]["id"];
+
+const isCategory = (id: string | undefined): id is CategoryId => CATEGORIES.some((c) => c.id === id);
+const indexOf = (id: CategoryId): number => CATEGORIES.findIndex((c) => c.id === id);
+
+/* ============================================================ the pieces */
+
+/** A group of rows in a card: a short title over it, a note under it. The search reads data-setting-*. */
+function Group({ title, note, children }: { title?: string; note?: ReactNode; children: ReactNode }) {
   return (
-    <section data-setting-group className="animate-slide-up">
-      {header && (
-        <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-dim px-5 pt-7 pb-2">
-          {header}
-        </h2>
+    <section data-setting-group className="st-group">
+      {title && (
+        <h3 data-setting-header className="st-group-title">
+          {title}
+        </h3>
       )}
-      {!header && <div className="pt-7" />}
-      <div className={`mx-4 rounded-[14px] bg-panel overflow-hidden ${GROUP_INSET}`}>{children}</div>
-      {footer && <p className="text-[12.5px] text-ink-dim px-5 pt-2 leading-relaxed">{footer}</p>}
+      <div className="st-card">{children}</div>
+      {note && <p className="st-note">{note}</p>}
     </section>
   );
 }
 
-function Divider() {
-  return <div data-setting-divider className={`h-px bg-ink-hi/[0.08] ${TEXT_INSET}`} />;
-}
-
-function Chevron() {
-  return <ChevronRight className="w-5 h-5 text-ink-dim/70 shrink-0" />;
-}
-
-function Badge({ children }: { children: ReactNode }) {
+/**
+ * One setting: a glyph tile, its name and what it does, and its control on the right.
+ * - `toggle`: a switch; the whole row flips it (the switch is what the keyboard reaches).
+ * - `onClick`: the row itself is the control (a page, a picker, a folder dialog), reachable by Tab
+ *   and pressed with Enter or Space.
+ * - `children` sit under the text, in its column (a slider, a choice); `wide` spans the whole row.
+ */
+function Row({
+  icon: Icon,
+  title,
+  note,
+  badge,
+  toggle,
+  onClick,
+  onPointerDown,
+  control,
+  children,
+  wide,
+  disabled,
+  danger,
+}: {
+  icon: Glyph;
+  title: string;
+  note?: ReactNode;
+  badge?: string;
+  toggle?: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean };
+  onClick?: (row: HTMLElement) => void;
+  /** pickers keep an open menu alive until the click, so the same row closes it again */
+  onPointerDown?: (e: React.PointerEvent) => void;
+  control?: ReactNode;
+  children?: ReactNode;
+  wide?: ReactNode;
+  disabled?: boolean;
+  danger?: boolean;
+}) {
+  const off = disabled || toggle?.disabled;
+  const press = onClick && !disabled ? onClick : undefined;
+  const flip = toggle && !off ? () => toggle.onChange(!toggle.checked) : undefined;
+  const stop = (e: React.MouseEvent): void => e.stopPropagation();
   return (
-    <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-ink-hi/90 rounded-[5px] bg-ink-hi/[0.16] px-1.5 py-0.5">
+    <div
+      data-setting-row
+      role={press ? "button" : undefined}
+      tabIndex={press ? 0 : undefined}
+      aria-disabled={disabled || undefined}
+      onPointerDown={onPointerDown}
+      onClick={press ? (e) => press(e.currentTarget) : flip}
+      onKeyDown={
+        press
+          ? (e) => {
+              if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+                e.preventDefault();
+                press(e.currentTarget);
+              }
+            }
+          : undefined
+      }
+      className={`st-row${press || flip ? " is-action" : ""}${off ? " is-off" : ""}${danger ? " is-danger" : ""}`}
+    >
+      <span className="st-row-icon" aria-hidden>
+        <Icon className="w-[18px] h-[18px]" />
+      </span>
+      <div className="st-row-text">
+        <div className="st-row-title">
+          <span className="truncate">{title}</span>
+          {badge && <span className="st-badge">{badge}</span>}
+        </div>
+        {note && <div className="st-row-note">{note}</div>}
+      </div>
+      {(control || toggle) && (
+        <div className="st-row-control">
+          {control}
+          {toggle && <Switch checked={toggle.checked} onChange={toggle.onChange} disabled={off} label={title} />}
+        </div>
+      )}
+      {children && (
+        <div className="st-row-body" onClick={stop}>
+          {children}
+        </div>
+      )}
+      {wide && (
+        <div className="st-row-wide" onClick={stop}>
+          {wide}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A small button: plain, the page's one white one, or a danger one. */
+function Button({
+  kind = "plain",
+  children,
+  onClick,
+  disabled,
+}: {
+  kind?: "plain" | "primary" | "danger";
+  children: ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={`st-btn${kind === "primary" ? " is-primary" : kind === "danger" ? " is-danger" : ""}`}
+    >
       {children}
+    </button>
+  );
+}
+
+/** A picker's current value, with the up-down chevrons that say it opens a list. */
+function Pick({ children }: { children: ReactNode }) {
+  return (
+    <span className="st-pick">
+      <span className="truncate">{children}</span>
+      <ChevronsUpDown className="w-4 h-4 shrink-0" />
     </span>
   );
 }
 
-function SettingsRow({
-  icon: Icon,
-  title,
-  subtitle,
+/** A few options side by side; the thumb slides to the one picked. Arrow keys move along it. */
+function Choice<T extends string>({
+  label,
   value,
-  badge,
-  disabled,
-  onClick,
-  onPointerDown,
-  trailing,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-  subtitle?: string;
-  value?: string;
-  badge?: string;
-  disabled?: boolean;
-  /** receives the event so rows can anchor a dropdown to themselves */
-  onClick?: (e: React.MouseEvent) => void;
-  /** dropdown rows stop the press here — the open menu survives until the
-      click, letting the same row toggle it closed (playbar "+" pattern) */
-  onPointerDown?: (e: React.PointerEvent) => void;
-  trailing?: ReactNode;
-}) {
-  const interactive = onClick && !disabled;
-  return (
-    <div
-      data-setting-row
-      onPointerDown={onPointerDown}
-      onClick={interactive ? (e) => onClick(e) : undefined}
-      className={`flex items-center min-h-[52px] py-3 ${ROW_INSET} ${
-        interactive ? "cursor-pointer hover:bg-ink-hi/[0.04] active:bg-ink-hi/[0.07] transition-colors" : ""
-      } ${disabled ? "opacity-45" : ""}`}
-    >
-      <Icon className="w-[22px] h-[22px] shrink-0 text-ink-hi" />
-      <div className="flex-1 min-w-0 ml-[14px]">
-        <div className="flex items-center">
-          <span className="text-[14px] text-ink-hi truncate">{title}</span>
-          {badge && <Badge>{badge}</Badge>}
-        </div>
-        {subtitle && <div className="text-[12.5px] text-ink-dim mt-0.5 leading-snug">{subtitle}</div>}
-      </div>
-      <div className="flex items-center gap-1 shrink-0 ml-3">
-        {trailing ?? (
-          <>
-            {value && <span className="text-[14px] text-ink-dim">{value}</span>}
-            {onClick && <Chevron />}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** A toggle that reads as part of the option above it — no glyph, no divider. */
-function SettingsSubRow({
-  title,
-  checked,
+  options,
+  labels,
   onChange,
-  badge,
 }: {
-  title: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  badge?: string;
+  label: string;
+  value: T;
+  options: readonly T[];
+  labels: Record<T, string>;
+  onChange: (v: T) => void;
 }) {
+  const at = Math.max(0, options.indexOf(value));
+  const refs = useRef<Array<HTMLButtonElement | null>>([]);
+  const go = (k: number): void => {
+    const to = (k + options.length) % options.length;
+    onChange(options[to]);
+    refs.current[to]?.focus();
+  };
   return (
-    <div
-      onClick={() => onChange(!checked)}
-      className={`flex items-center ${ROW_INSET} pb-2.5 -mt-1 cursor-pointer`}
-    >
-      <div className="flex-1 flex items-center min-w-0">
-        <span className="text-[14px] text-ink-hi truncate">{title}</span>
-        {badge && <Badge>{badge}</Badge>}
-      </div>
-      <Switch checked={checked} onChange={onChange} />
+    <div role="radiogroup" aria-label={label} className="st-choice" style={{ ["--n" as string]: options.length, ["--i" as string]: at } as CSSProperties}>
+      <span aria-hidden className="st-choice-thumb" />
+      {options.map((o, k) => (
+        <button
+          key={o}
+          ref={(el) => {
+            refs.current[k] = el;
+          }}
+          type="button"
+          role="radio"
+          aria-checked={k === at}
+          tabIndex={k === at ? 0 : -1}
+          onClick={() => onChange(o)}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+              e.preventDefault();
+              go(k + 1);
+            } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+              e.preventDefault();
+              go(k - 1);
+            }
+          }}
+          className="st-choice-option"
+        >
+          {labels[o]}
+        </button>
+      ))}
     </div>
   );
 }
 
-/** Thumb width of the .slider CSS — the fill is computed so it ends exactly
-    at the thumb's centre (the native input insets the thumb by half its
-    width at both ends of the range). */
+/** Thumb width of the .slider CSS: the fill ends exactly at the thumb's centre (the native input
+    insets the thumb by half its width at both ends of the range). */
 const SLIDER_THUMB_PX = 13;
 
-function SliderRow({
-  icon: Icon,
-  title,
-  subtitle,
-  value,
+/** A slider under a row's text: the stops it rests on ruled under the bar (one every `step`, taller
+    every `major`, tallest at `origin`, the one it's on lit), then what its two ends mean. The bar fills
+    from `origin` to the thumb: the low end, or the middle of a two-sided slider. */
+function Range({
+  label,
+  valueText,
   min,
   max,
   step,
-  current,
+  value,
   onChange,
+  ends,
+  disabled,
+  origin = min,
+  major,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-  subtitle?: string;
-  value: string;
+  label: string;
+  valueText: string;
   min: number;
   max: number;
   step: number;
-  current: number;
+  value: number;
   onChange: (v: number) => void;
+  ends: [string, string];
+  disabled?: boolean;
+  origin?: number;
+  major: number;
 }) {
-  const frac = max > min ? Math.min(1, Math.max(0, (current - min) / (max - min))) : 0;
+  // A value's place on the bar: where the native thumb's centre is, half a thumb in from either end.
+  const at = (v: number): string => {
+    const f = max > min ? Math.min(1, Math.max(0, (v - min) / (max - min))) : 0;
+    return `calc((100% - ${SLIDER_THUMB_PX}px) * ${f} + ${SLIDER_THUMB_PX / 2}px)`;
+  };
+  const lo = Math.min(origin, value);
+  const near = (a: number, b: number): boolean => Math.abs(a - b) < step / 2;
+  const stops = Array.from({ length: Math.round((max - min) / step) + 1 }, (_, k) => Math.round((min + k * step) * 1000) / 1000);
+  const kind = (v: number): string =>
+    near(v, origin) ? "is-origin" : Math.abs(v / major - Math.round(v / major)) < 1e-6 ? "is-major" : "";
   return (
-    <div data-setting-row className={`${ROW_INSET} py-3`}>
-      <div className="flex items-center">
-        <Icon className="w-[22px] h-[22px] shrink-0 text-ink-hi" />
-        <div className="flex-1 min-w-0 ml-[14px]">
-          <div className="text-[14px] text-ink-hi">{title}</div>
-          {subtitle && <div className="text-[12.5px] text-ink-dim mt-0.5">{subtitle}</div>}
-        </div>
-        <span className="text-[14px] text-ink-dim ml-3 shrink-0">{value}</span>
-      </div>
+    <div className="st-range">
       <input
         type="range"
         min={min}
         max={max}
         step={step}
-        value={current}
+        value={value}
+        disabled={disabled}
+        aria-label={label}
+        aria-valuetext={valueText}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="slider slider-dot w-full mt-3 ml-[36px]"
-        style={
-          {
-            width: "calc(100% - 36px)",
-            "--fill": `calc((100% - ${SLIDER_THUMB_PX}px) * ${frac} + ${SLIDER_THUMB_PX / 2}px)`,
-          } as CSSProperties
-        }
+        className="slider slider-dot"
+        style={{ "--from": lo <= min ? "0%" : at(lo), "--fill": at(Math.max(origin, value)) } as CSSProperties}
       />
+      <div className="st-range-marks" aria-hidden>
+        {stops.map((v) => (
+          <i key={v} className={`${kind(v)}${near(v, value) ? " is-on" : ""}`.trim() || undefined} style={{ left: at(v) }} />
+        ))}
+      </div>
+      <div className="st-range-ends" aria-hidden>
+        <span>{ends[0]}</span>
+        <span>{ends[1]}</span>
+      </div>
     </div>
   );
 }
 
-const EQ_PRESETS: Record<string, number[]> = {
-  Flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-  Bass: [6, 5, 4, 2, 0, 0, 0, 0, 0, 0],
-  Treble: [0, 0, 0, 0, 0, 1, 2, 4, 5, 6],
-  Vocal: [-2, -2, -1, 0, 2, 4, 4, 2, 0, -1],
-  Loudness: [5, 4, 2, 0, -1, -1, 0, 2, 4, 5],
-};
-
-const bandLabel = (hz: number): string => (hz >= 1000 ? `${hz / 1000}k` : String(hz));
-
-/** 10-band graphic EQ: switch, presets (built-in + your own), one vertical slider per band (±12 dB). */
-function EqualizerRows() {
-  const enabled = useSettings((st) => st.eqEnabled);
-  const gains = useSettings((st) => st.eqGains);
-  const saved = useSettings((st) => st.eqPresets);
-  const autoHeadroom = useSettings((st) => st.eqAutoHeadroom);
-  const { setEqEnabled, setEqGains, saveEqPreset, renameEqPreset, deleteEqPreset, setEqAutoHeadroom } =
-    useSettings.getState();
-  const same = (curve: number[]): boolean => curve.every((g, i) => g === gains[i]);
-  const builtIn = Object.keys(EQ_PRESETS).find((k) => same(EQ_PRESETS[k]));
-  const mine = saved.find((p) => same(p.gains))?.name;
-  const preset = builtIn ?? mine;
-  const chip = (active: boolean): string =>
-    `text-[12px] rounded-full px-3 py-1 transition-colors ${
-      active ? "bg-primary text-on-primary" : "bg-ink-hi/[0.08] text-ink-hi hover:bg-ink-hi/[0.14]"
-    }`;
-  const askName = (title: string, initialValue: string, confirmLabel: string, done: (name: string) => void, except = ""): void =>
-    useUI.getState().openDialog({
-      title,
-      initialValue,
-      placeholder: "Preset name",
-      confirmLabel,
-      onConfirm: (value) => {
-        const name = value.trim().slice(0, 40);
-        if (!name) return;
-        if (EQ_PRESETS[name]) {
-          useUI.getState().toast(`"${name}" is a built-in preset — pick another name`, "error");
-          return;
-        }
-        if (name !== except && saved.some((p) => p.name === name)) {
-          useUI.getState().toast(`You already have a preset called "${name}"`, "error");
-          return;
-        }
-        done(name);
-      },
-    });
+/** A slider's reading beside its row's title, always as wide as its widest values (`widest`), so the
+    text next to it never re-wraps, and the row never changes height, while the slider moves. */
+function Reading({ text, widest }: { text: string; widest: string[] }) {
   return (
-    <>
-      <SettingsRow
-        icon={SlidersVertical}
-        title="Equalizer"
-        subtitle={enabled ? `10-band, ${preset ?? "Custom"}` : "Shape the sound with a 10-band EQ"}
-        trailing={<Switch checked={enabled} onChange={setEqEnabled} />}
-        onClick={() => setEqEnabled(!enabled)}
-      />
-      {enabled && (
-        <div className={`${TEXT_INSET} pr-4 pb-4`}>
-          <div className="flex flex-wrap gap-1.5 mb-3">
-            {Object.keys(EQ_PRESETS).map((name) => (
-              <button key={name} onClick={() => setEqGains(EQ_PRESETS[name])} className={chip(name === preset)}>
-                {name}
-              </button>
-            ))}
-            {saved.map((p) => (
-              <button
-                key={`mine-${p.name}`}
-                onClick={() => setEqGains(p.gains)}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  useUI.getState().openContextMenu(e.clientX, e.clientY, [
-                    { label: "Rename…", action: () => askName("Rename preset", p.name, "Rename", (to) => renameEqPreset(p.name, to), p.name) },
-                    { label: "Update to current curve", disabled: same(p.gains), action: () => saveEqPreset(p.name, gains) },
-                    { label: "Delete", danger: true, separatorBefore: true, action: () => deleteEqPreset(p.name) },
-                  ]);
-                }}
-                title="Right-click to rename, update or delete"
-                className={chip(p.name === preset)}
-              >
-                {p.name}
-              </button>
-            ))}
-            {!preset && (
-              <button
-                onClick={() => askName("Save preset", "My preset", "Save", (name) => saveEqPreset(name, gains))}
-                className="text-[12px] rounded-full px-3 py-1 border border-dashed border-ink-hi/25 text-ink-hi/80 hover:text-ink-hi hover:border-ink-hi/45 transition-colors"
-              >
-                Save as preset…
-              </button>
-            )}
-          </div>
-          <div className="flex justify-between gap-1 max-w-[520px]">
-            {EQ_BANDS.map((hz, i) => (
-              <label key={hz} className="flex flex-col items-center gap-1.5 min-w-0 flex-1">
-                <span className="text-[11px] tabular-nums text-ink-dim">
-                  {gains[i] > 0 ? `+${gains[i]}` : gains[i]}
-                </span>
-                <input
-                  type="range"
-                  min={-12}
-                  max={12}
-                  step={1}
-                  value={gains[i] ?? 0}
-                  aria-label={`${bandLabel(hz)} Hz`}
-                  onChange={(e) => setEqGains(gains.map((g, j) => (j === i ? Number(e.target.value) : g)))}
-                  onDoubleClick={() => setEqGains(gains.map((g, j) => (j === i ? 0 : g)))}
-                  className="h-[120px] w-5 accent-[rgb(var(--primary))] cursor-pointer"
-                  style={{ writingMode: "vertical-lr", direction: "rtl" }}
-                />
-                <span className="text-[11px] text-ink-dim">{bandLabel(hz)}</span>
-              </label>
-            ))}
-          </div>
-          <label data-setting-row className="mt-4 flex items-center gap-3 max-w-[520px] cursor-pointer">
-            <span className="flex-1 min-w-0">
-              <span className="block text-[13px] text-ink-hi">Prevent clipping</span>
-              <span className="block text-[12px] text-ink-dim">
-                Lowers the level only when your boosts would distort at the current volume
-              </span>
-            </span>
-            <Switch checked={autoHeadroom} onChange={setEqAutoHeadroom} label="Prevent clipping" />
-          </label>
-        </div>
-      )}
-    </>
+    <span className="st-reading">
+      {widest.map((w) => (
+        <span key={w} aria-hidden className="st-value st-reading-size">
+          {w}
+        </span>
+      ))}
+      <span className="st-value">{text}</span>
+    </span>
   );
 }
 
-/* ============================================================ view */
-
-/** Builds the option list for the quality dropdowns. Every row carries the
-    check glyph — filled on the current value, invisible on the rest so the
-    labels keep their alignment — and picking one commits it immediately. */
-function qualityMenu<T extends string>(
-  order: T[],
-  labels: Record<T, string>,
-  current: T,
-  onPick: (q: T) => void,
-): MenuItem[] {
+/** The list for a picker: every option carries the check glyph, filled on the current one and
+    invisible on the rest so the labels keep their alignment; picking one commits it. */
+function choiceMenu<T extends string>(order: readonly T[], labels: Record<T, string>, current: T, onPick: (q: T) => void): MenuItem[] {
   return order.map((q) => ({
     label: labels[q],
     icon: Check,
@@ -385,214 +396,55 @@ function qualityMenu<T extends string>(
   }));
 }
 
-/** Opens the row's dropdown, right-aligned under the row's value — and
-    toggles it closed when one is already open. Same contract as the playbar
-    "+": the row's pointerdown keeps an open menu alive until this click (see
-    SettingsRow's onPointerDown), so the click itself can close it. */
-function toggleDropdownAt(e: React.MouseEvent, items: MenuItem[]): void {
-  e.stopPropagation();
+/** Where a picker's list opens: right-aligned under its value. */
+function menuAnchor(row: HTMLElement): DOMRect {
+  return (row.querySelector<HTMLElement>(".st-pick") ?? row).getBoundingClientRect();
+}
+
+/** Opens a picker's list, or closes it when one is already open. Same contract as the playbar "+":
+    the row's pointerdown keeps an open menu alive until this click, so the click itself can close it. */
+function toggleMenuAt(row: HTMLElement, items: MenuItem[]): void {
   const ui = useUI.getState();
   if (ui.contextMenu) {
     ui.closeContextMenu();
     return;
   }
-  const rect = e.currentTarget.getBoundingClientRect();
+  const rect = menuAnchor(row);
   ui.openContextMenu(rect.right, rect.bottom + 6, items, { alignRight: true });
 }
+const keepMenu = (e: React.PointerEvent): void => e.stopPropagation();
 
-/** Output device — routes playback to a specific speaker/headset via
-    setSinkId. Chromium hides device labels until the page has held capture
-    permission once, so the first menu open asks for it on explicit intent;
-    failure degrades to generic "Speaker N" names. */
-function OutputDeviceGroup() {
-  const sinkId = useSettings((st) => st.audioSinkId);
-  const [devices, setDevices] = useState<OutputDeviceChoice[] | null>(null);
-  useEffect(() => {
-    let alive = true;
-    const refresh = (): void => {
-      void listOutputDevices().then((list) => {
-        if (alive) setDevices(list);
-      });
-    };
-    refresh();
-    // Plugging or unplugging a device must update the row and the menu live.
-    const md = typeof navigator !== "undefined" ? navigator.mediaDevices : undefined;
-    md?.addEventListener?.("devicechange", refresh);
-    return () => {
-      alive = false;
-      md?.removeEventListener?.("devicechange", refresh);
-    };
-  }, []);
-  const current = devices?.find((d) => d.deviceId === sinkId);
-  // Where sound is going RIGHT NOW: the pinned device, or — when following
-  // the system default — whichever physical endpoint the OS currently routes
-  // "default" to. Resolving this is what makes the row move when Windows
-  // hands the default to a newly connected headset.
-  const active = devices?.find((d) => d.deviceId !== "" && d.activeDefault);
-  const value = sinkId ? (current?.label ?? "System default") : active ? active.label : "System default";
-  const itemsFor = (list: OutputDeviceChoice[]): MenuItem[] =>
-    list.map((d) => ({
-      label: d.deviceId === "" && active ? `System default — ${active.label}` : d.label,
-      icon: Check,
-      iconClassName: d.deviceId === sinkId ? "text-accent" : "opacity-0",
-      action: () => useSettings.getState().setAudioSinkId(d.deviceId),
-    }));
-  return (
-    <SettingsGroup
-      header="Audio output"
-      footer="Playback follows the device you pick. If it disappears (headset unplugged, Bluetooth dropped), playback pauses and the setting falls back to the system default."
-    >
-      <SettingsRow
-        icon={Speaker}
-        title="Output device"
-        subtitle={sinkId ? "Pinned to this device" : "Following the system default"}
-        value={devices ? value : "System default"}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          // Same toggle contract as the quality rows: a click on the row
-          // closes the open menu; otherwise the list resolves (async) and the
-          // menu opens anchored to the row. The rect is captured
-          // synchronously — React nulls currentTarget after the handler.
-          const rect = e.currentTarget.getBoundingClientRect();
-          const ui = useUI.getState();
-          if (ui.contextMenu) {
-            ui.closeContextMenu();
-            return;
-          }
-          void listOutputDevices().then((list) => {
-            setDevices(list);
-            ui.openContextMenu(rect.right, rect.bottom + 6, itemsFor(list), { alignRight: true });
-          });
-        }}
-      />
-    </SettingsGroup>
-  );
-}
+/* ============================================================ account */
 
-const MATCH_LANGUAGE_LABEL: Record<MatchLanguage | "", string> = {
-  "": "Any",
-  telugu: "Telugu",
-  tamil: "Tamil",
-  hindi: "Hindi",
-  kannada: "Kannada",
-  malayalam: "Malayalam",
-  english: "English",
-};
+type SyncState = "idle" | "syncing" | "pending" | "error";
 
 /**
- * Connect Spotify: the listener's own Spotify playlists and Liked Songs in the sidebar, matched
- * to YouTube Music. The session stays in main (electron/spotify.ts), sealed, never uploaded.
- * The language row applies to every import too.
+ * ByTune account: the cloud layer above the YouTube cookie. Guests keep everything local; signed-in
+ * users get automatic cloud backup of library, playlists, history and settings. Backups always run on
+ * top of the local copy: restoring never deletes anything without writing a local backup first
+ * (userData/data/backups).
  */
-function ConnectedServicesGroup() {
-  const status = useSpotify((s) => s.status);
-  const connecting = useSpotify((s) => s.connecting);
-  const language = useSettings((s) => s.matchLanguage);
-  const ui = useUI.getState();
-  const connect = (): void => void connectSpotify();
-  return (
-    <SettingsGroup
-      header="Connected services"
-      footer="Connect Spotify signs in to Spotify in a window of its own; ByTune keeps that session on this computer for this ByTune account, encrypted, and never uploads it. It reads your playlists the way Spotify's web player does, which isn't an official Spotify feature: it may stop working, and it isn't allowed by Spotify's terms. Songs are found on YouTube Music to play."
-    >
-      <SettingsRow
-        icon={SpotifyIcon}
-        title="Spotify"
-        subtitle={
-          status.connected
-            ? status.problem ?? (status.name ? `Connected as ${status.name}` : "Connected")
-            : connecting
-              ? "Finish signing in in the Spotify window"
-              : "Your playlists and Liked Songs, in your library"
-        }
-        trailing={
-          status.connected ? (
-            <div className="flex items-center gap-2">
-              {status.problem && (
-                <button onClick={connect} className="h-8 px-3.5 rounded-full text-[13px] font-semibold bg-ink-hi/[0.08] text-ink-hi hover:bg-ink-hi/[0.14] transition-colors">
-                  Reconnect
-                </button>
-              )}
-              <button
-                onClick={() =>
-                  ui.openDialog({
-                    title: "Disconnect Spotify?",
-                    body: "ByTune forgets your Spotify session and its playlists here. Playlists you saved to your library stay.",
-                    confirmLabel: "Disconnect",
-                    danger: true,
-                    onConfirm: () => void useSpotify.getState().disconnect().then(() => ui.toast("Spotify disconnected")),
-                  })
-                }
-                className="h-8 px-3.5 rounded-full text-[13px] font-semibold bg-ink-hi/[0.08] text-ink-hi hover:bg-ink-hi/[0.14] transition-colors"
-              >
-                Disconnect
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={connect}
-              disabled={connecting}
-              className="h-8 px-3.5 rounded-full text-[13px] font-semibold bg-accent text-on-primary hover:brightness-110 transition disabled:opacity-50"
-            >
-              {connecting ? "Connecting…" : "Connect"}
-            </button>
-          )
-        }
-      />
-      <Divider />
-      <SettingsRow
-        icon={Languages}
-        title="Song versions"
-        subtitle="When a song has versions in several languages, imports and Spotify playlists pick this one"
-        value={MATCH_LANGUAGE_LABEL[language]}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) =>
-          toggleDropdownAt(
-            e,
-            qualityMenu(["", ...MATCH_LANGUAGES] as (MatchLanguage | "")[], MATCH_LANGUAGE_LABEL, language, (l) =>
-              useSettings.getState().setMatchLanguage(l)
-            )
-          )
-        }
-      />
-    </SettingsGroup>
-  );
-}
-
-/**
- * ByTune account — the cloud layer above the YouTube cookie. Guests keep
- * everything local; signed-in users get automatic cloud backup of library,
- * playlists, history and settings. Backups always run on top of the local
- * copy: restoring never deletes anything without writing a local backup
- * first (userData/data/backups).
- */
-function CloudAccountGroup() {
+function AccountPane() {
   const toast = useUI((st) => st.toast);
   const openDialog = useUI((st) => st.openDialog);
   const session = useSession();
-  const [status, setStatus] = useState<{
-    lastSyncAt: number | null;
-    state: "idle" | "syncing" | "pending" | "error";
-    lastError: string | null;
-  } | null>(null);
+  const [status, setStatus] = useState<{ lastSyncAt: number | null; state: SyncState; lastError: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Keep the sync-status line honest: poll while mounted (cheap local IPC),
-  // plus refresh after every mode change.
+  // Keep the sync line honest: poll while mounted (cheap local IPC), and after every mode change.
   useEffect(() => {
     let cancelled = false;
     const poll = (): void => {
       void window.bytune
         ?.syncStatus()
         .then((st) => {
-          if (!cancelled) {
-            const s = st as { lastSyncAt: number | null; state?: string; lastError?: string | null } | undefined;
-            setStatus({
-              lastSyncAt: s?.lastSyncAt ?? null,
-              state: (s?.state as "idle" | "syncing" | "pending" | "error") ?? "idle",
-              lastError: s?.lastError ?? null,
-            });
-          }
+          if (cancelled) return;
+          const s = st as { lastSyncAt: number | null; state?: string; lastError?: string | null } | undefined;
+          setStatus({
+            lastSyncAt: s?.lastSyncAt ?? null,
+            state: (s?.state as SyncState) ?? "idle",
+            lastError: s?.lastError ?? null,
+          });
         })
         .catch(() => undefined);
     };
@@ -668,150 +520,708 @@ function CloudAccountGroup() {
     });
   };
 
-  const rowButton = (label: string, onClick: () => void): ReactNode => (
-    <button
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      className="h-7 px-2.5 rounded-md bg-ink-hi/[0.08] hover:bg-ink-hi/[0.14] text-[12px] font-semibold text-ink-hi transition-colors"
-    >
-      {label}
-    </button>
-  );
+  // Guests upgrade by re-running onboarding; their local data stays and merges into the account on
+  // the first sync.
+  const join = async (): Promise<void> => {
+    if (session.mode === "guest") {
+      try {
+        await window.bytune?.authClearGuestProfile();
+      } catch {
+        toast("Couldn't open onboarding. Try again.", "error");
+        return;
+      }
+    }
+    void useSession.getState().refresh();
+  };
 
   const signedIn = session.mode === "account";
-  const subtitle = !session.loaded
-    ? "…"
+  const sync: { text: string; tone: "good" | "busy" | "bad" | "local" } = !session.loaded
+    ? { text: "…", tone: "local" }
     : signedIn
       ? status?.state === "syncing"
-        ? "Syncing…"
+        ? { text: "Syncing…", tone: "busy" }
         : status?.state === "error"
-          ? `Sync error, will retry${status.lastError ? "" : ""}`
+          ? { text: "Sync error, will retry", tone: "bad" }
           : status?.state === "pending"
-            ? "Pending changes"
+            ? { text: "Pending changes", tone: "busy" }
             : status?.lastSyncAt
-              ? `Synced ${new Date(status.lastSyncAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-              : "Signed in, backing up automatically"
+              ? { text: `Synced ${new Date(status.lastSyncAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`, tone: "good" }
+              : { text: "Signed in, backing up automatically", tone: "good" }
       : session.mode === "guest"
-        ? "Your data is stored only on this device"
-        : "Not signed in";
+        ? { text: "Your data is stored only on this device", tone: "local" }
+        : { text: "Not signed in", tone: "local" };
 
   return (
-    <SettingsGroup
-      header="ByTune account"
-      footer={
-        signedIn
-          ? "Backup runs automatically. Changes upload within seconds. Restore replaces this device's copy with the cloud version (a local backup is kept first)."
-          : "Create an account to keep your library safe even if this PC's app data is wiped."
-      }
-    >
-      <SettingsRow
-        icon={signedIn ? UserRound : User}
-        title={shownName(session) ?? (signedIn ? "Account" : session.mode === "guest" ? "Guest" : "No account")}
-        subtitle={subtitle}
-        badge={session.mode === "guest" ? "Guest" : undefined}
-        trailing={session.mode ? rowButton(session.displayName ? "Edit name" : "Add name", changeDisplayName) : undefined}
-      />
-      {/* The username shows here only: everywhere else it's the display name. */}
-      {signedIn && (
-        <SettingsRow
-          icon={AtSign}
-          title={`@${session.username ?? ""}`}
-          subtitle="Username"
-          trailing={rowButton("Change", changeUsername)}
-        />
+    <>
+      <IdentityCard sync={sync} onEditName={changeDisplayName} onChangeUsername={changeUsername} />
+      {signedIn ? (
+        <Group title="Backup">
+          <Row
+            icon={CloudUpload}
+            title="Cloud backup"
+            note="On. Changes upload within seconds"
+            control={
+              <Button disabled={busy} onClick={() => void run(async () => { await window.bytune?.syncBackupNow(); }, "Backup complete")}>
+                Back up now
+              </Button>
+            }
+          />
+          <Row
+            icon={CloudDownload}
+            title="Restore from the cloud"
+            note="Replaces this device's copy with the cloud's. A local backup is kept first"
+            control={
+              <Button disabled={busy} onClick={() => void run(async () => { await window.bytune?.syncRestoreNow(); }, "Restored from cloud")}>
+                Restore
+              </Button>
+            }
+          />
+        </Group>
+      ) : (
+        <Group title="Backup">
+          <Row
+            icon={CloudUpload}
+            title="Back up your library"
+            note="With an account it stays safe even if this PC's app data is wiped"
+            control={
+              <Button kind="primary" onClick={() => void join()}>
+                {session.mode === "guest" ? "Create account or sign in" : "Sign in or create account"}
+              </Button>
+            }
+          />
+        </Group>
       )}
-      <div className="px-4 pb-3 flex flex-wrap gap-2">
-        {signedIn ? (
-          <>
-            <button
-              onClick={() => void run(async () => { await window.bytune?.syncBackupNow(); }, "Backup complete")}
-              disabled={busy}
-              className="h-9 px-3.5 rounded-lg bg-ink-hi/[0.08] hover:bg-ink-hi/[0.14] text-[13px] font-semibold text-ink-hi transition-colors disabled:opacity-40 inline-flex items-center gap-1.5"
-            >
-              <CloudUpload className="w-4 h-4" /> Back up now
-            </button>
-            <button
-              onClick={() => void run(async () => { await window.bytune?.syncRestoreNow(); }, "Restored from cloud")}
-              disabled={busy}
-              className="h-9 px-3.5 rounded-lg bg-ink-hi/[0.08] hover:bg-ink-hi/[0.14] text-[13px] font-semibold text-ink-hi transition-colors disabled:opacity-40 inline-flex items-center gap-1.5"
-            >
-              <CloudDownload className="w-4 h-4" /> Restore from cloud
-            </button>
-            <button
-              onClick={signOutWithConfirm}
-              disabled={busy}
-              className="h-9 px-3.5 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 text-[13px] font-semibold transition-colors disabled:opacity-40"
-            >
-              Sign out
-            </button>
-          </>
-        ) : (
-          <button
-            onClick={async () => {
-              // Guests upgrade by re-running onboarding; their local data
-              // stays and merges into the account on the first sync.
-              if (session.mode === "guest") {
-                try {
-                  await window.bytune?.authClearGuestProfile();
-                } catch {
-                  useUI.getState().toast("Couldn't open onboarding. Try again.", "error");
-                  return;
-                }
-              }
-              void useSession.getState().refresh();
-            }}
-            className="h-9 px-3.5 rounded-lg bg-accent text-[13px] font-semibold text-on-primary hover:brightness-110"
-          >
-            {session.mode === "guest" ? "Create account / sign in" : "Sign in or create account"}
-          </button>
-        )}
-      </div>
-    </SettingsGroup>
+      <ConnectedServices />
+      {signedIn && (
+        <Group title="Session">
+          <Row
+            icon={LogOut}
+            title="Sign out"
+            note="Your library stays backed up, ready for when you sign in again"
+            control={
+              <Button kind="danger" disabled={busy} onClick={signOutWithConfirm}>
+                Sign out
+              </Button>
+            }
+          />
+        </Group>
+      )}
+    </>
   );
 }
 
-export function SettingsView() {
+/**
+ * Who you are, at the top of Settings: the avatar from the top bar's profile button, your name and
+ * how your backup stands, over a slow wall of your own covers (the collection pages' wall, small).
+ */
+function IdentityCard({
+  sync,
+  onEditName,
+  onChangeUsername,
+}: {
+  sync: { text: string; tone: "good" | "busy" | "bad" | "local" };
+  onEditName: () => void;
+  onChangeUsername: () => void;
+}) {
+  const session = useSession();
+  const liked = useLibrary((s) => s.liked);
+  const history = useLibrary((s) => s.history);
+  const covers = useMemo(() => wallCovers([...liked, ...history].map((t) => upgradeArtwork(t.thumb)), 36), [liked, history]);
+  const signedIn = session.mode === "account";
+  const shown = shownName(session);
+  const name = shown ?? (signedIn ? "Account" : session.mode === "guest" ? "Guest" : "No account");
+  const { color, letter } = avatarFor(session.mode, session.username, shown);
+  return (
+    <section data-setting-group className="st-group">
+      <div data-setting-row className="st-id">
+        {covers.length > 0 && (
+          <div aria-hidden className="st-id-wall">
+            {[0, 1, 2].map((r) => {
+              const row = covers.slice(r * 12, r * 12 + 12);
+              return (
+                <div
+                  key={r}
+                  className="st-id-wall-row"
+                  style={{ animationDuration: `${110 + r * 30}s`, animationDirection: r % 2 ? "reverse" : "normal" }}
+                >
+                  {[...row, ...row].map((src, i) => (
+                    <span key={i} className="st-id-tile" style={{ backgroundImage: `url(${JSON.stringify(src)})` }} />
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <span aria-hidden className="st-id-avatar" style={{ backgroundColor: color }}>
+          {letter}
+        </span>
+        <div className="st-id-text">
+          <div className="st-id-name">
+            <span className="truncate">{name}</span>
+            {/* A guest with a name of their own says they're a guest; one without is already called "Guest". */}
+            {session.mode === "guest" && shown && <span className="st-badge">Guest</span>}
+          </div>
+          {/* The username shows here only: everywhere else it's the display name. */}
+          {signedIn && <div className="st-id-user">@{session.username ?? ""}</div>}
+          <div className={`st-id-sync is-${sync.tone}`}>{sync.text}</div>
+        </div>
+        <div className="st-id-actions">
+          {session.mode && <Button onClick={onEditName}>{session.displayName ? "Edit name" : "Add name"}</Button>}
+          {signedIn && <Button onClick={onChangeUsername}>Change username</Button>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+const MATCH_LANGUAGE_LABEL: Record<MatchLanguage | "", string> = {
+  "": "Any",
+  telugu: "Telugu",
+  tamil: "Tamil",
+  hindi: "Hindi",
+  kannada: "Kannada",
+  malayalam: "Malayalam",
+  english: "English",
+};
+
+/**
+ * Connect Spotify: the listener's own Spotify playlists and Liked Songs in the sidebar, matched to
+ * YouTube Music. The session stays in main (electron/spotify.ts), sealed, never uploaded. The language
+ * row applies to every import too.
+ */
+function ConnectedServices() {
+  const status = useSpotify((s) => s.status);
+  const connecting = useSpotify((s) => s.connecting);
+  const language = useSettings((s) => s.matchLanguage);
+  const ui = useUI.getState();
+  const connect = (): void => void connectSpotify();
+  return (
+    <Group
+      title="Connected services"
+      note="Connecting signs in to Spotify in a window of its own. ByTune keeps that session on this computer for this ByTune account, encrypted, and never uploads it. It reads your playlists the way Spotify's web player does, which isn't an official Spotify feature: it may stop working, and it isn't allowed by Spotify's terms. Songs are found on YouTube Music to play."
+    >
+      <Row
+        icon={SpotifyIcon}
+        title="Spotify"
+        note={
+          status.connected
+            ? status.problem ?? (status.name ? `Connected as ${status.name}` : "Connected")
+            : connecting
+              ? "Finish signing in in the Spotify window"
+              : "Your playlists and Liked Songs, in your library"
+        }
+        control={
+          status.connected ? (
+            <>
+              {status.problem && <Button onClick={connect}>Reconnect</Button>}
+              <Button
+                onClick={() =>
+                  ui.openDialog({
+                    title: "Disconnect Spotify?",
+                    body: "ByTune forgets your Spotify session and its playlists here. Playlists you saved to your library stay.",
+                    confirmLabel: "Disconnect",
+                    danger: true,
+                    onConfirm: () => void useSpotify.getState().disconnect().then(() => ui.toast("Spotify disconnected")),
+                  })
+                }
+              >
+                Disconnect
+              </Button>
+            </>
+          ) : (
+            <Button kind="primary" onClick={connect} disabled={connecting}>
+              {connecting ? "Connecting…" : "Connect"}
+            </Button>
+          )
+        }
+      />
+      <Row
+        icon={Languages}
+        title="Song versions"
+        note="When a song has versions in several languages, imports and Spotify playlists pick this one"
+        control={<Pick>{MATCH_LANGUAGE_LABEL[language]}</Pick>}
+        onPointerDown={keepMenu}
+        onClick={(row) =>
+          toggleMenuAt(
+            row,
+            choiceMenu(["", ...MATCH_LANGUAGES] as (MatchLanguage | "")[], MATCH_LANGUAGE_LABEL, language, (l) =>
+              useSettings.getState().setMatchLanguage(l)
+            )
+          )
+        }
+      />
+    </Group>
+  );
+}
+
+/* ============================================================ playback */
+
+function PlaybackPane() {
+  const s = useSettings();
+  // At 0 the crossfade is also the Automix blend length, so it stays visible: Automix picks 6s then.
+  const fade = s.crossfadeSeconds === 0 ? (s.smartFade ? "Auto" : "Off") : `${s.crossfadeSeconds}s`;
+  const speed = `${s.playbackSpeed.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1")}x`;
+  return (
+    <>
+      <Group title="Transitions">
+        <Row icon={Activity} title="Crossfade" note="Blend the end of one track into the next" control={<Reading text={fade} widest={["Auto", "12s"]} />}>
+          <Range
+            label="Crossfade"
+            valueText={fade}
+            min={0}
+            max={12}
+            step={1}
+            value={s.crossfadeSeconds}
+            onChange={s.setCrossfadeSeconds}
+            ends={[s.smartFade ? "Auto" : "Off", "12s"]}
+            major={3}
+          />
+        </Row>
+        <Row
+          icon={Sparkles}
+          title="Automix"
+          note={s.smartFade ? "Blends where the music really ends and lines up beats when tempos match" : "Off: blends use the crossfade length above"}
+          toggle={{ checked: s.smartFade, onChange: s.setSmartFade }}
+        />
+        <Row
+          icon={VolumeX}
+          title="Skip silence"
+          note="Skip the silence at the start and end of songs"
+          toggle={{ checked: s.skipSilence, onChange: s.setSkipSilence }}
+        />
+      </Group>
+      <Group title="Suggestions">
+        <Row
+          icon={InfinityIcon}
+          title="Autoplay"
+          note="When your songs run out, keep playing music like them"
+          toggle={{ checked: s.autoplay, onChange: s.setAutoplay }}
+        />
+        <Row
+          icon={Repeat2}
+          title="Don't repeat suggestions"
+          note="Keep recently played tracks out of the home feed"
+          toggle={{ checked: s.dontRepeatSuggestions, onChange: s.setDontRepeatSuggestions }}
+        />
+      </Group>
+      <Group title="Speed">
+        <Row icon={Gauge} title="Playback speed" note="Pitch-preserving tempo for everything you play" control={<Reading text={speed} widest={["1.75x"]} />}>
+          <Range
+            label="Playback speed"
+            valueText={speed}
+            min={0.5}
+            max={2}
+            step={0.05}
+            value={s.playbackSpeed}
+            onChange={s.setPlaybackSpeed}
+            ends={["0.5x", "2x"]}
+            origin={1}
+            major={0.25}
+          />
+        </Row>
+      </Group>
+    </>
+  );
+}
+
+/* ============================================================ sound */
+
+function SoundPane() {
+  const s = useSettings();
+  return (
+    <>
+      <Group title="Streaming">
+        <Row icon={Wifi} title="Streaming quality" note="The highest quality ByTune streams">
+          <Choice
+            label="Streaming quality"
+            value={s.streamingQuality}
+            options={["low", "medium", "high", "lossless"] as const}
+            labels={STREAM_QUALITY_LABEL}
+            onChange={s.setStreamingQuality}
+          />
+        </Row>
+      </Group>
+      <Group title="Loudness">
+        <Row icon={Volume2} title="Volume leveling" note="Bring every song to a similar loudness">
+          <Choice
+            label="Volume leveling"
+            value={s.loudnessLevel}
+            options={["off", "quiet", "normal", "loud"] as const}
+            labels={LOUDNESS_LABEL}
+            onChange={s.setLoudnessLevel}
+          />
+        </Row>
+      </Group>
+      <OutputDevice />
+      <Group title="Equalizer">
+        <Equalizer />
+      </Group>
+    </>
+  );
+}
+
+/**
+ * Output device: routes playback to a specific speaker or headset via setSinkId. Chromium hides device
+ * labels until the page has held capture permission once, so the first menu open asks for it on
+ * explicit intent; failure degrades to generic "Speaker N" names.
+ */
+function OutputDevice() {
+  const sinkId = useSettings((st) => st.audioSinkId);
+  const [devices, setDevices] = useState<OutputDeviceChoice[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const refresh = (): void => {
+      void listOutputDevices().then((list) => {
+        if (alive) setDevices(list);
+      });
+    };
+    refresh();
+    // Plugging or unplugging a device must update the row and the menu live.
+    const md = typeof navigator !== "undefined" ? navigator.mediaDevices : undefined;
+    md?.addEventListener?.("devicechange", refresh);
+    return () => {
+      alive = false;
+      md?.removeEventListener?.("devicechange", refresh);
+    };
+  }, []);
+  const current = devices?.find((d) => d.deviceId === sinkId);
+  // Where sound is going right now: the pinned device, or, when following the system default,
+  // whichever physical endpoint the OS currently routes "default" to. Resolving this is what makes
+  // the row move when Windows hands the default to a newly connected headset.
+  const active = devices?.find((d) => d.deviceId !== "" && d.activeDefault);
+  const value = sinkId ? (current?.label ?? "System default") : active ? active.label : "System default";
+  const itemsFor = (list: OutputDeviceChoice[]): MenuItem[] =>
+    list.map((d) => ({
+      label: d.deviceId === "" && active ? `System default (${active.label})` : d.label,
+      icon: Check,
+      iconClassName: d.deviceId === sinkId ? "text-accent" : "opacity-0",
+      action: () => useSettings.getState().setAudioSinkId(d.deviceId),
+    }));
+  return (
+    <Group title="Output" note="If the device disappears (a headset unplugged, Bluetooth dropped), playback pauses and goes back to the system default.">
+      <Row
+        icon={Speaker}
+        title="Output device"
+        note={sinkId ? "Pinned to this device" : "Following the system default"}
+        control={<Pick>{devices ? value : "System default"}</Pick>}
+        onPointerDown={keepMenu}
+        onClick={(row) => {
+          // Same toggle contract as the other pickers: a click on the row closes the open menu;
+          // otherwise the list resolves (async) and the menu opens anchored to the row. The anchor is
+          // measured now: the row may re-render before the list arrives.
+          const rect = menuAnchor(row);
+          const ui = useUI.getState();
+          if (ui.contextMenu) {
+            ui.closeContextMenu();
+            return;
+          }
+          void listOutputDevices().then((list) => {
+            setDevices(list);
+            ui.openContextMenu(rect.right, rect.bottom + 6, itemsFor(list), { alignRight: true });
+          });
+        }}
+      />
+    </Group>
+  );
+}
+
+const EQ_PRESETS: Record<string, number[]> = {
+  Flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  Bass: [6, 5, 4, 2, 0, 0, 0, 0, 0, 0],
+  Treble: [0, 0, 0, 0, 0, 1, 2, 4, 5, 6],
+  Vocal: [-2, -2, -1, 0, 2, 4, 4, 2, 0, -1],
+  Loudness: [5, 4, 2, 0, -1, -1, 0, 2, 4, 5],
+};
+
+const bandLabel = (hz: number): string => (hz >= 1000 ? `${hz / 1000}k` : String(hz));
+const dB = (g: number): string => `${g > 0 ? "+" : ""}${g} dB`;
+
+/** A band's gain as it reads over the band: +3, 0, −2 (a real minus). */
+const gainText = (g: number): string => (g > 0 ? `+${g}` : g < 0 ? `−${-g}` : "0");
+
+/** The bands' sliders and the thumb they travel with, px (index.css .st-eq-band input), and the
+    board's rules, dB. */
+const EQ_H = 160;
+const EQ_THUMB = 16;
+const EQ_RULES = [12, 6, 0, -6, -12];
+
+/**
+ * 10-band graphic EQ, a line per band: each a real vertical slider (±12 dB, double-click for 0) with
+ * its gain over it and its frequency under it, on a board ruled every 6 dB, so the keyboard and screen
+ * readers get real sliders. Presets above it (built in, and your own: right-click to rename, update or
+ * delete), "Prevent clipping" under it. Off, it stays on view, dimmed. Nothing in it changes size while
+ * a band moves, so a drag never shifts it under the pointer: Save as preset is always there (off while
+ * the curve is a preset), and the note doesn't name the preset.
+ */
+function Equalizer() {
+  const enabled = useSettings((st) => st.eqEnabled);
+  const gains = useSettings((st) => st.eqGains);
+  const saved = useSettings((st) => st.eqPresets);
+  const autoHeadroom = useSettings((st) => st.eqAutoHeadroom);
+  const { setEqEnabled, setEqGains, saveEqPreset, renameEqPreset, deleteEqPreset, setEqAutoHeadroom } = useSettings.getState();
+  const eqRef = useRef<HTMLDivElement>(null);
+  const same = (curve: number[]): boolean => curve.every((g, i) => g === gains[i]);
+  const builtIn = Object.keys(EQ_PRESETS).find((k) => same(EQ_PRESETS[k]));
+  const mine = saved.find((p) => same(p.gains))?.name;
+  const preset = builtIn ?? mine;
+  const zero = eqY(0, EQ_H, EQ_THUMB);
+  const setBand = (i: number, g: number): void => setEqGains(gains.map((v, j) => (j === i ? g : v)));
+
+  // While a band is dragged, its knob and fill follow the pointer without easing; a preset eases.
+  const hold = (): void => {
+    const eq = eqRef.current;
+    if (!eq) return;
+    eq.classList.add("is-dragging");
+    const done = (): void => {
+      eq.classList.remove("is-dragging");
+      window.removeEventListener("pointerup", done);
+      window.removeEventListener("pointercancel", done);
+    };
+    window.addEventListener("pointerup", done);
+    window.addEventListener("pointercancel", done);
+  };
+
+  const askName = (title: string, initialValue: string, confirmLabel: string, done: (name: string) => void, except = ""): void =>
+    useUI.getState().openDialog({
+      title,
+      initialValue,
+      placeholder: "Preset name",
+      confirmLabel,
+      onConfirm: (value) => {
+        const name = value.trim().slice(0, 40);
+        if (!name) return;
+        if (EQ_PRESETS[name]) {
+          useUI.getState().toast(`"${name}" is a built-in preset. Pick another name`, "error");
+          return;
+        }
+        if (name !== except && saved.some((p) => p.name === name)) {
+          useUI.getState().toast(`You already have a preset called "${name}"`, "error");
+          return;
+        }
+        done(name);
+      },
+    });
+
+  return (
+    <Row
+      icon={SlidersVertical}
+      title="Equalizer"
+      note="Shape the sound with 10 bands"
+      toggle={{ checked: enabled, onChange: setEqEnabled }}
+      wide={
+        <div ref={eqRef} className={`st-eq${enabled ? "" : " is-off"}`}>
+          <div className="st-eq-presets">
+            {Object.keys(EQ_PRESETS).map((name) => (
+              <button
+                key={name}
+                type="button"
+                disabled={!enabled}
+                aria-pressed={name === preset}
+                onClick={() => setEqGains(EQ_PRESETS[name])}
+                className="st-chip"
+              >
+                {name}
+              </button>
+            ))}
+            {saved.map((p) => (
+              <button
+                key={`mine-${p.name}`}
+                type="button"
+                disabled={!enabled}
+                aria-pressed={p.name === preset}
+                onClick={() => setEqGains(p.gains)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  useUI.getState().openContextMenu(e.clientX, e.clientY, [
+                    { label: "Rename…", action: () => askName("Rename preset", p.name, "Rename", (to) => renameEqPreset(p.name, to), p.name) },
+                    { label: "Update to current curve", disabled: same(p.gains), action: () => saveEqPreset(p.name, gains) },
+                    { label: "Delete", danger: true, separatorBefore: true, action: () => deleteEqPreset(p.name) },
+                  ]);
+                }}
+                title="Right-click to rename, update or delete"
+                className="st-chip"
+              >
+                {p.name}
+              </button>
+            ))}
+            <button
+              type="button"
+              disabled={!enabled || preset !== undefined}
+              onClick={() => askName("Save preset", "My preset", "Save", (name) => saveEqPreset(name, gains))}
+              className="st-chip is-new"
+            >
+              Save as preset
+            </button>
+          </div>
+          <div className="st-eq-board" onPointerDown={hold}>
+            <div className="st-eq-bands">
+              <div aria-hidden className="st-eq-rules" style={{ height: EQ_H }}>
+                {EQ_RULES.map((g) => (
+                  <span key={g} className={g === 0 ? "is-zero" : undefined} style={{ top: eqY(g, EQ_H, EQ_THUMB) }}>
+                    <b>{gainText(g)}</b>
+                  </span>
+                ))}
+              </div>
+              {EQ_BANDS.map((hz, i) => {
+                const g = gains[i] ?? 0;
+                const y = eqY(g, EQ_H, EQ_THUMB);
+                const place = { height: EQ_H, "--y": `${y}px`, "--top": `${Math.min(y, zero)}px`, "--len": `${Math.abs(y - zero)}px` };
+                return (
+                  <label key={hz} className={`st-eq-band${g ? " is-set" : ""}`} onDoubleClick={() => enabled && setBand(i, 0)}>
+                    <span aria-hidden className="st-eq-gain">
+                      {gainText(g)}
+                    </span>
+                    <span className="st-eq-rail" style={place as CSSProperties}>
+                      <input
+                        type="range"
+                        min={-EQ_RANGE}
+                        max={EQ_RANGE}
+                        step={1}
+                        value={g}
+                        disabled={!enabled}
+                        aria-label={`${bandLabel(hz)} Hz`}
+                        aria-valuetext={dB(g)}
+                        // In px, not 100%: a vertical slider's percentage height resolves against the
+                        // window, which would stretch its travel far past the rail and the knob.
+                        style={{ height: EQ_H }}
+                        onChange={(e) => setBand(i, Number(e.target.value))}
+                      />
+                      <span aria-hidden className="st-eq-fill" />
+                      <span aria-hidden className="st-eq-knob" />
+                    </span>
+                    <span aria-hidden className="st-eq-hz">
+                      {bandLabel(hz)}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+          <div className="st-eq-clip">
+            <span className="st-eq-clip-text">
+              <span className="st-eq-clip-title">Prevent clipping</span>
+              <span className="st-eq-clip-note">Lowers the level only when your boosts would distort at the current volume</span>
+            </span>
+            <Switch checked={autoHeadroom} onChange={setEqAutoHeadroom} disabled={!enabled} label="Prevent clipping" />
+          </div>
+        </div>
+      }
+    />
+  );
+}
+
+/* ============================================================ lyrics */
+
+/** The options under Synced lyrics stay on view while it's off, dimmed: the page keeps its shape and
+    the search still finds them. */
+function LyricsPane() {
+  const s = useSettings();
+  const off = !s.syncedLyrics;
+  const shift = describeLyricsShift(s.lyricsOffset);
+  return (
+    <Group note={off ? "Blur, romanized lyrics and timing work while synced lyrics are on." : undefined}>
+      <Row icon={ListMusic} title="Synced lyrics" note="Highlight the current line and auto-scroll" toggle={{ checked: s.syncedLyrics, onChange: s.setSyncedLyrics }} />
+      <Row
+        icon={Droplets}
+        title="Blur unfocused lyrics"
+        note="Keep the spotlight on the current line"
+        toggle={{ checked: s.blurUnfocusedLyrics, onChange: s.setBlurUnfocusedLyrics, disabled: off }}
+      />
+      <Row
+        icon={Languages}
+        title="Romanized lyrics"
+        note="Show a Latin-letters reading under lyrics in other scripts, like Hindi, Telugu or Korean"
+        toggle={{ checked: s.romanizeLyrics, onChange: s.setRomanizeLyrics, disabled: off }}
+      />
+      <Row
+        icon={Timer}
+        title="Lyrics timing"
+        note="On this device, for headphones that lag. [ and ] adjust one song while lyrics are open"
+        control={<Reading text={shift} widest={["2.75 s earlier"]} />}
+        disabled={off}
+      >
+        <Range
+          label="Lyrics timing"
+          valueText={shift}
+          min={-3}
+          max={3}
+          step={LYRICS_NUDGE_STEP}
+          value={s.lyricsOffset}
+          onChange={s.setLyricsOffset}
+          ends={["3 s earlier", "3 s later"]}
+          disabled={off}
+          origin={0}
+          major={1}
+        />
+      </Row>
+    </Group>
+  );
+}
+
+/* ============================================================ display */
+
+function DisplayPane() {
+  const s = useSettings();
+  return (
+    <>
+      <Group title="Motion and glass">
+        <Row
+          icon={AppWindow}
+          title="Reduce animation"
+          note="Cut crossfades and motion through the app"
+          toggle={{ checked: s.reduceAnimation, onChange: s.setReduceAnimation }}
+        />
+        <Row
+          icon={Droplets}
+          title="Reduce dynamic blur"
+          note="Fill glass surfaces solid instead of blurring"
+          toggle={{ checked: s.reduceDynamicBlur, onChange: s.setReduceDynamicBlur }}
+        />
+        <Row
+          icon={Sparkles}
+          title="Liquid glass"
+          note={s.reduceDynamicBlur ? "Off while dynamic blur is reduced" : "Refractive glass on the floating chrome"}
+          toggle={{ checked: s.liquidGlass, onChange: s.setLiquidGlass, disabled: s.reduceDynamicBlur }}
+        />
+      </Group>
+      <Group title="Now playing">
+        <Row
+          icon={Maximize2}
+          title="Full-screen cover art"
+          note="Let the artwork bleed behind the status area"
+          toggle={{ checked: s.fullBleedArtwork, onChange: s.setFullBleedArtwork }}
+        />
+        <Row
+          icon={Clapperboard}
+          title="Animated cover art"
+          note="Play canvas clips in place of the still cover"
+          toggle={{ checked: s.animatedCanvas, onChange: s.setAnimatedCanvas }}
+        />
+        <Row
+          icon={Image}
+          title="Legacy mesh gradient"
+          note="Use the older drifting-blob player backdrop"
+          toggle={{ checked: s.legacyMeshGradient, onChange: s.setLegacyMeshGradient }}
+        />
+      </Group>
+      <Group title="Player bar">
+        <Row
+          icon={SlidersHorizontal}
+          title="Hide volume bar"
+          note="Keep the player bar free of the volume slider"
+          toggle={{ checked: s.hideVolumeBar, onChange: s.setHideVolumeBar }}
+        />
+      </Group>
+    </>
+  );
+}
+
+/* ============================================================ library */
+
+function LibraryPane() {
   const s = useSettings();
   const toast = useUI((st) => st.toast);
-  const openDialog = useUI((st) => st.openDialog);
-  const versions = window.bytune?.versions;
-  const session = useSession();
-  const [guestDeleteOpen, setGuestDeleteOpen] = useState(false);
   const [folderSummary, setFolderSummary] = useState<string | null>(null);
-  const [filter, setFilter] = useState("");
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  // "Search settings": show the rows whose words match (a group header match
-  // shows its whole group), after every render so conditional rows follow.
-  // Inline display, not [hidden]: utility display classes outrank [hidden].
-  useLayoutEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-    const q = filter.trim().toLowerCase();
-    const hits = (el: Element | null): boolean => !!el && (el.textContent ?? "").toLowerCase().includes(q);
-    const show = (el: HTMLElement, on: boolean): void => {
-      el.style.display = on ? "" : "none";
-    };
-    root.querySelectorAll<HTMLElement>("[data-setting-divider]").forEach((d) => show(d, !q));
-    let anyGroup = false;
-    root.querySelectorAll<HTMLElement>("[data-setting-group]").forEach((group) => {
-      const rows = [...group.querySelectorAll<HTMLElement>("[data-setting-row]")];
-      const headerHit = !!q && hits(group.querySelector("h2"));
-      let anyRow = false;
-      for (const row of rows) {
-        const on = !q || headerHit || hits(row);
-        show(row, on);
-        anyRow ||= on;
-      }
-      const on = !q || (rows.length ? anyRow : hits(group));
-      show(group, on);
-      anyGroup ||= on;
-    });
-    const empty = root.querySelector<HTMLElement>("[data-settings-empty]");
-    if (empty) show(empty, !!q && !anyGroup);
-  });
 
   const refreshFolderSummary = async (): Promise<void> => {
     const lib = await window.bytune?.localLibrary();
@@ -873,6 +1283,80 @@ export function SettingsView() {
     }
   };
 
+  return (
+    <>
+      <Group title="Local music">
+        <Row
+          icon={FolderOpen}
+          title="Local music folders"
+          note={folderSummary ?? "Your imported collections"}
+          control={<ChevronRight className="st-go" />}
+          onClick={() => useUI.getState().navigate({ name: "local" })}
+        />
+        <Row
+          icon={FolderPlus}
+          title="Add a folder"
+          note="Import music folders. A parent folder brings its music subfolders along"
+          control={<ChevronRight className="st-go" />}
+          onClick={() => void chooseMusicFolder()}
+        />
+        <Row
+          icon={RefreshCw}
+          title="Rescan library"
+          note="Re-read tags and artwork from every imported folder"
+          control={<ChevronRight className="st-go" />}
+          onClick={() => void rescanMusic()}
+        />
+        <Row
+          icon={Filter}
+          title="Filter non-music audio"
+          note="Hide clips, recordings and voice notes (applies on rescan)"
+          toggle={{
+            checked: s.filterNonMusicAudio,
+            onChange: (v) => {
+              s.setFilterNonMusicAudio(v);
+              void rescanMusic();
+            },
+          }}
+        />
+      </Group>
+      <Group title="Downloads">
+        <Row
+          icon={FolderDown}
+          title="Download folder"
+          note={s.downloadDir ?? "Default: your system Downloads folder / ByTune"}
+          control={<ChevronRight className="st-go" />}
+          onClick={() => void browse()}
+        />
+        <Row icon={Download} title="Download quality" note="What a saved track costs on disk">
+          <Choice
+            label="Download quality"
+            value={s.downloadQuality}
+            options={["standard", "high", "lossless"] as const}
+            labels={DOWNLOAD_QUALITY_LABEL}
+            onChange={s.setDownloadQuality}
+          />
+        </Row>
+        <Row
+          icon={FileMusic}
+          title="Export compatible downloads"
+          note="Also save them into your Music library (Music/ByTune), so other players can use the files. Otherwise downloads stay in the folder above"
+          badge={s.exportDownloads ? "Music/ByTune" : undefined}
+          toggle={{ checked: s.exportDownloads, onChange: s.setExportDownloads }}
+        />
+      </Group>
+    </>
+  );
+}
+
+/* ============================================================ your data */
+
+function DataPane() {
+  const toast = useUI((st) => st.toast);
+  const openDialog = useUI((st) => st.openDialog);
+  const session = useSession();
+  const [guestDeleteOpen, setGuestDeleteOpen] = useState(false);
+
   const exportData = async (): Promise<void> => {
     if (!window.bytune) return;
     try {
@@ -888,10 +1372,7 @@ export function SettingsView() {
     try {
       const res = await window.bytune.backupImport();
       if (res?.restored) {
-        toast(
-          `Backup restored${typeof res.months === "number" && res.months > 0 ? ` (${res.months} months of history)` : ""}. Reloading…`,
-          "success"
-        );
+        toast(`Backup restored${typeof res.months === "number" && res.months > 0 ? ` (${res.months} months of history)` : ""}. Reloading…`, "success");
         window.setTimeout(() => window.location.reload(), 900);
       }
     } catch (err) {
@@ -902,8 +1383,8 @@ export function SettingsView() {
   const resetAppData = async (): Promise<void> => {
     if (!window.bytune) return;
     try {
-      // Main-process wipe: every store, history buckets and derived caches.
-      // Downloaded audio files are the user's files and stay on disk.
+      // Main-process wipe: every store, history buckets and derived caches. Downloaded audio files are
+      // the user's files and stay on disk.
       await window.bytune.resetData();
       window.location.reload();
     } catch {
@@ -911,310 +1392,58 @@ export function SettingsView() {
     }
   };
 
+  const reset = (): void => {
+    // Guests have no cloud backup: deletion is unrecoverable, so route through the dedicated
+    // protection modal instead.
+    if (session.mode === "guest") {
+      setGuestDeleteOpen(true);
+      return;
+    }
+    openDialog({
+      title: "Reset local data?",
+      body: "Your local ByTune data will be removed from this device. Your account and cloud backup won't be deleted. Sign in again and everything restores. Downloaded audio files are not touched.",
+      confirmLabel: "Reset local data",
+      danger: true,
+      onConfirm: () => void resetAppData(),
+    });
+  };
+
+  const toOnboarding = async (intent: "signin" | "signup"): Promise<void> => {
+    setGuestDeleteOpen(false);
+    try {
+      await window.bytune?.authClearGuestProfile();
+    } catch {
+      useUI.getState().toast("Couldn't open onboarding. Try again.", "error");
+      return;
+    }
+    setOnboardingIntent(intent);
+    void useSession.getState().refresh();
+  };
+
   return (
-    <div ref={rootRef} className="max-w-2xl pb-14">
-      <h1 className="font-display text-[34px] font-extrabold tracking-[-0.03em] text-ink-hi px-5 pt-2 pb-3.5">
-        Settings
-      </h1>
-      <div className="mx-4 relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-dim pointer-events-none" />
-        <input
-          id="settings-filter"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape" && filter) {
-              e.stopPropagation();
-              setFilter("");
-            }
-          }}
-          placeholder="Search settings"
-          aria-label="Search settings"
-          className="w-full h-10 rounded-full bg-panel pl-9 pr-4 text-[14px] text-ink-hi placeholder:text-ink-dim outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
-        />
-      </div>
-      <p data-settings-empty style={{ display: "none" }} className="px-5 pt-8 text-[14px] text-ink-dim">
-        No settings match “{filter.trim()}”.
-      </p>
-
-      <div data-setting-group>
-        <CloudAccountGroup />
-      </div>
-
-      <ConnectedServicesGroup />
-
-      <SettingsGroup header="Audio quality">
-        <SettingsRow
-          icon={Wifi}
-          title="Streaming quality"
-          subtitle="Ceiling for streamed audio"
-          value={STREAM_QUALITY_LABEL[s.streamingQuality]}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) =>
-            toggleDropdownAt(
-              e,
-              qualityMenu(
-                ["low", "medium", "high", "lossless"],
-                STREAM_QUALITY_LABEL,
-                s.streamingQuality,
-                s.setStreamingQuality
-              )
-            )
-          }
-        />
-      </SettingsGroup>
-
-      <SettingsGroup header="Volume">
-        <SettingsRow
-          icon={Gauge}
-          title="Volume leveling"
-          subtitle="Bring every song to a similar loudness"
-          value={LOUDNESS_LABEL[s.loudnessLevel]}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) =>
-            toggleDropdownAt(e, qualityMenu(["off", "quiet", "normal", "loud"], LOUDNESS_LABEL, s.loudnessLevel, s.setLoudnessLevel))
-          }
-        />
-      </SettingsGroup>
-
-      <OutputDeviceGroup />
-
-      <SettingsGroup
-        header="Downloads"
-        footer="Export compatible saves into your Music library (Music/ByTune) so other players can use the files; otherwise downloads stay in the folder above."
-      >
-        <SettingsRow
-          icon={FolderOpen}
-          title="Download folder"
-          subtitle={s.downloadDir ?? "Default: your system Downloads folder / ByTune"}
-          onClick={() => void browse()}
-        />
-        <Divider />
-        <SettingsRow
-          icon={Download}
-          title="Download quality"
-          subtitle="What a saved track costs on disk"
-          value={DOWNLOAD_QUALITY_LABEL[s.downloadQuality]}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) =>
-            toggleDropdownAt(
-              e,
-              qualityMenu(
-                ["standard", "high", "lossless"],
-                DOWNLOAD_QUALITY_LABEL,
-                s.downloadQuality,
-                s.setDownloadQuality
-              )
-            )
-          }
-        />
-        <SettingsSubRow
-          title="Export compatible downloads"
-          checked={s.exportDownloads}
-          onChange={s.setExportDownloads}
-          badge={s.exportDownloads ? "Music/ByTune" : undefined}
-        />
-      </SettingsGroup>
-
-      <SettingsGroup header="Playback">
-        {/* Also the Automix blend length, so it stays visible; at 0 Automix picks 6s. */}
-        <SliderRow
-          icon={Activity}
-          title="Crossfade"
-          subtitle="Blend the end of one track into the next"
-          value={s.crossfadeSeconds === 0 ? (s.smartFade ? "Auto" : "Off") : `${s.crossfadeSeconds}s`}
-          min={0}
-          max={12}
-          step={1}
-          current={s.crossfadeSeconds}
-          onChange={s.setCrossfadeSeconds}
-        />
-        <Divider />
-        <SettingsRow
-          icon={Sparkles}
-          title="Automix"
-          subtitle={
-            s.smartFade
-              ? "Blends where the music really ends and lines up beats when tempos match"
-              : "Off: blends use the crossfade length above"
-          }
-          trailing={<Switch checked={s.smartFade} onChange={s.setSmartFade} />}
-          onClick={() => s.setSmartFade(!s.smartFade)}
-        />
-        <Divider />
-        <SettingsRow
-          icon={VolumeX}
-          title="Skip silence"
-          subtitle="Skip the silence at the start and end of songs"
-          trailing={<Switch checked={s.skipSilence} onChange={s.setSkipSilence} />}
-          onClick={() => s.setSkipSilence(!s.skipSilence)}
-        />
-        <Divider />
-        <SettingsRow
-          icon={InfinityIcon}
-          title="Autoplay"
-          subtitle="When your songs run out, keep playing music like them"
-          trailing={<Switch checked={s.autoplay} onChange={s.setAutoplay} />}
-          onClick={() => s.setAutoplay(!s.autoplay)}
-        />
-        <Divider />
-        <SliderRow
-          icon={Gauge}
-          title="Playback speed"
-          subtitle="Pitch-preserving tempo for everything you play"
-          value={`${s.playbackSpeed.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1")}x`}
-          min={0.5}
-          max={2}
-          step={0.05}
-          current={s.playbackSpeed}
-          onChange={s.setPlaybackSpeed}
-        />
-        <Divider />
-        <EqualizerRows />
-      </SettingsGroup>
-
-      <SettingsGroup header="Appearance">
-        <SettingsRow
-          icon={AppWindow}
-          title="Reduce animation"
-          subtitle="Cut crossfades and motion through the app"
-          trailing={<Switch checked={s.reduceAnimation} onChange={s.setReduceAnimation} />}
-          onClick={() => s.setReduceAnimation(!s.reduceAnimation)}
-        />
-        <Divider />
-        <SettingsRow
-          icon={Droplets}
-          title="Reduce dynamic blur"
-          subtitle="Fill glass surfaces solid instead of blurring"
-          trailing={<Switch checked={s.reduceDynamicBlur} onChange={s.setReduceDynamicBlur} />}
-          onClick={() => s.setReduceDynamicBlur(!s.reduceDynamicBlur)}
-        />
-        <Divider />
-        <SettingsRow
-          icon={Sparkles}
-          title="Liquid glass"
-          subtitle="Refractive glass on the floating chrome"
-          trailing={<Switch checked={s.liquidGlass} onChange={s.setLiquidGlass} disabled={s.reduceDynamicBlur} />}
-          onClick={() => s.setLiquidGlass(!s.liquidGlass)}
-        />
-        <Divider />
-        <SettingsRow
-          icon={Maximize2}
-          title="Full-screen cover art"
-          subtitle="Let the artwork bleed behind the status area"
-          trailing={<Switch checked={s.fullBleedArtwork} onChange={s.setFullBleedArtwork} />}
-          onClick={() => s.setFullBleedArtwork(!s.fullBleedArtwork)}
-        />
-        <Divider />
-        <SettingsRow
-          icon={Image}
-          title="Legacy mesh gradient"
-          subtitle="Use the older drifting-blob player backdrop"
-          trailing={<Switch checked={s.legacyMeshGradient} onChange={s.setLegacyMeshGradient} />}
-          onClick={() => s.setLegacyMeshGradient(!s.legacyMeshGradient)}
-        />
-        <Divider />
-        <SettingsRow
-          icon={Music4}
-          title="Animated cover art"
-          subtitle="Play canvas clips in place of the still cover"
-          trailing={<Switch checked={s.animatedCanvas} onChange={s.setAnimatedCanvas} />}
-          onClick={() => s.setAnimatedCanvas(!s.animatedCanvas)}
-        />
-        <Divider />
-        <SettingsRow
-          icon={ListMusic}
-          title="Synced lyrics"
-          subtitle="Highlight the current line and auto-scroll"
-          trailing={<Switch checked={s.syncedLyrics} onChange={s.setSyncedLyrics} />}
-          onClick={() => s.setSyncedLyrics(!s.syncedLyrics)}
-        />
-        {s.syncedLyrics && (
-          <>
-            <Divider />
-            <SettingsRow
-              icon={Droplets}
-              title="Blur unfocused lyrics"
-              subtitle="Keep the spotlight on the current line"
-              trailing={<Switch checked={s.blurUnfocusedLyrics} onChange={s.setBlurUnfocusedLyrics} />}
-              onClick={() => s.setBlurUnfocusedLyrics(!s.blurUnfocusedLyrics)}
-            />
-            <Divider />
-            <SettingsRow
-              icon={Languages}
-              title="Romanized lyrics"
-              subtitle="Show a Latin-letters reading under lyrics in other scripts, like Hindi, Telugu or Korean"
-              trailing={<Switch checked={s.romanizeLyrics} onChange={s.setRomanizeLyrics} />}
-              onClick={() => s.setRomanizeLyrics(!s.romanizeLyrics)}
-            />
-            <Divider />
-            <SliderRow
-              icon={Timer}
-              title="Lyrics timing"
-              subtitle="On this device, for headphones that lag. [ and ] adjust one song while lyrics are open"
-              value={describeLyricsShift(s.lyricsOffset)}
-              min={-3}
-              max={3}
-              step={0.05}
-              current={s.lyricsOffset}
-              onChange={s.setLyricsOffset}
-            />
-          </>
-        )}
-      </SettingsGroup>
-
-      <SettingsGroup header="Local music">
-        <SettingsRow
-          icon={FolderOpen}
-          title="Local music folders"
-          subtitle={folderSummary ?? "Your imported collections"}
-          onClick={() => useUI.getState().navigate({ name: "local" })}
-        />
-        <Divider />
-        <SettingsRow
-          icon={ListMusic}
-          title="Add a folder"
-          subtitle="Import music folders — a parent folder brings its music subfolders along"
-          onClick={() => void chooseMusicFolder()}
-        />
-        <Divider />
-        <SettingsRow
-          icon={RefreshCw}
-          title="Rescan library"
-          subtitle="Re-read tags and artwork from every imported folder"
-          onClick={() => void rescanMusic()}
-        />
-        <Divider />
-        <SettingsRow
-          icon={Music4}
-          title="Filter non-music audio"
-          subtitle="Hide clips, recordings and voice notes (applies on rescan)"
-          trailing={<Switch checked={s.filterNonMusicAudio} onChange={(v) => { s.setFilterNonMusicAudio(v); void rescanMusic(); }} />}
-          onClick={() => { s.setFilterNonMusicAudio(!s.filterNonMusicAudio); void rescanMusic(); }}
-        />
-      </SettingsGroup>
-
-
-
-      <SettingsGroup header="Your data">
-        <SettingsRow
+    <>
+      <Group title="Listening">
+        <Row
           icon={BarChart3}
           title="Replay"
-          subtitle="Your listening wrapped over time"
+          note="Your listening wrapped over time"
+          control={<ChevronRight className="st-go" />}
           onClick={() => useUI.getState().navigate({ name: "replay" })}
         />
-        <Divider />
-        <SettingsRow
+      </Group>
+      <Group title="Backups">
+        <Row
           icon={FileUp}
           title="Export data"
-          subtitle="Write a backup of your library and history"
+          note="Write a backup of your library and history"
+          control={<ChevronRight className="st-go" />}
           onClick={() => void exportData()}
         />
-        <Divider />
-        <SettingsRow
+        <Row
           icon={FileDown}
           title="Import data"
-          subtitle="Restore a backup, replacing what's here"
+          note="Restore a backup, replacing what's here"
+          control={<ChevronRight className="st-go" />}
           onClick={() =>
             openDialog({
               title: "Import a backup?",
@@ -1225,99 +1454,254 @@ export function SettingsView() {
             })
           }
         />
-      </SettingsGroup>
-
-      <SettingsGroup
-        header="Miscellaneous"
-        footer="These apply to this desktop client and are stored locally."
-      >
-        <SettingsRow
-          icon={ListMusic}
-          title="Don't repeat suggestions"
-          subtitle="Keep recently played tracks out of the home feed"
-          trailing={<Switch checked={s.dontRepeatSuggestions} onChange={s.setDontRepeatSuggestions} />}
-          onClick={() => s.setDontRepeatSuggestions(!s.dontRepeatSuggestions)}
-        />
-        <Divider />
-        <SettingsRow
-          icon={VolumeX}
-          title="Hide volume bar"
-          subtitle="Keep the player bar free of the volume slider"
-          trailing={<Switch checked={s.hideVolumeBar} onChange={s.setHideVolumeBar} />}
-          onClick={() => s.setHideVolumeBar(!s.hideVolumeBar)}
-        />
-      </SettingsGroup>
-
-      <SettingsGroup header="About">
-        <SettingsRow
-          icon={Globe}
-          title="ByTune website"
-          subtitle="bytune.space — downloads, news and help"
-          trailing={<ExternalLink className="w-4 h-4 text-ink-dim" />}
-          onClick={() => window.open("https://bytune.space", "_blank", "noopener")}
-        />
-      </SettingsGroup>
-
-
-
-      <SettingsGroup header="Danger zone">
-        <SettingsRow
+      </Group>
+      <Group title="Start over">
+        <Row
+          danger
           icon={Trash2}
           title="Reset app data"
-          subtitle="Erase library, playlists, history and settings on this device"
-          onClick={() => {
-            // Guests have no cloud backup — deletion is unrecoverable, so
-            // route through the dedicated protection modal instead.
-            if (session.mode === "guest") {
-              setGuestDeleteOpen(true);
-              return;
-            }
-            openDialog({
-              title: "Reset local data?",
-              body: "Your local ByTune data will be removed from this device. Your account and cloud backup won't be deleted. Sign in again and everything restores. Downloaded audio files are not touched.",
-              confirmLabel: "Reset local data",
-              danger: true,
-              onConfirm: () => void resetAppData(),
-            });
-          }}
+          note="Erase library, playlists, history and settings on this device"
+          control={
+            <Button kind="danger" onClick={reset}>
+              Reset
+            </Button>
+          }
         />
-      </SettingsGroup>
-
+      </Group>
       {guestDeleteOpen && (
         <GuestDeleteModal
           onClose={() => setGuestDeleteOpen(false)}
-          onSignIn={async () => {
-            setGuestDeleteOpen(false);
-            try {
-              await window.bytune?.authClearGuestProfile();
-            } catch {
-              useUI.getState().toast("Couldn't open onboarding. Try again.", "error");
-              return;
-            }
-            setOnboardingIntent("signin");
-            void useSession.getState().refresh();
-          }}
-          onCreateAccount={async () => {
-            setGuestDeleteOpen(false);
-            try {
-              await window.bytune?.authClearGuestProfile();
-            } catch {
-              useUI.getState().toast("Couldn't open onboarding. Try again.", "error");
-              return;
-            }
-            setOnboardingIntent("signup");
-            void useSession.getState().refresh();
-          }}
+          onSignIn={() => void toOnboarding("signin")}
+          onCreateAccount={() => void toOnboarding("signup")}
           onDeleteAnyway={() => {
             setGuestDeleteOpen(false);
             void resetAppData();
           }}
         />
       )}
+    </>
+  );
+}
 
+/* ============================================================ about */
 
-      <div className="text-center text-[11px] text-ink-dim/80 pt-6 px-5 leading-relaxed">
-        ByTune {versions?.app ?? "1.0.0"} · GPL-3.0
+function AboutPane() {
+  const versions = window.bytune?.versions;
+  return (
+    <>
+      <section data-setting-group className="st-group">
+        {/* The brand's stacked lockup, then the version and the licence, centred. */}
+        <div data-setting-row className="st-about">
+          <img src={brandLogo} alt="" aria-hidden className="st-about-mark" />
+          <img src={brandText} alt="ByTune" className="st-about-word" />
+          <p className="st-about-version">Version {versions?.app ?? "1.0.0"}</p>
+          <p className="st-about-meta">Free and open source under GPL-3.0</p>
+        </div>
+      </section>
+      <Group title="Links">
+        <Row
+          icon={Globe}
+          title="ByTune website"
+          note="bytune.space: downloads, news and help"
+          control={<ExternalLink className="st-go" />}
+          onClick={() => window.open("https://bytune.space", "_blank", "noopener")}
+        />
+      </Group>
+    </>
+  );
+}
+
+const PANES: Record<CategoryId, () => ReactNode> = {
+  account: () => <AccountPane />,
+  playback: () => <PlaybackPane />,
+  sound: () => <SoundPane />,
+  lyrics: () => <LyricsPane />,
+  display: () => <DisplayPane />,
+  library: () => <LibraryPane />,
+  data: () => <DataPane />,
+  about: () => <AboutPane />,
+};
+
+/* ============================================================ view */
+
+export function SettingsView() {
+  const param = useUI((s) => s.view.param);
+  const active: CategoryId = isCategory(param) ? param : "account";
+  const [filter, setFilter] = useState("");
+  const q = filter.trim();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const navRef = useRef<HTMLElement>(null);
+  // Which way the step went, for the pane's entrance: down the list rises, up the list drops.
+  const last = useRef(active);
+  const up = indexOf(active) < indexOf(last.current);
+  useEffect(() => {
+    last.current = active;
+  }, [active]);
+  const category = CATEGORIES[indexOf(active)];
+
+  const pick = (id: CategoryId): void => {
+    setFilter("");
+    useUI.getState().replaceView({ name: "settings", param: id });
+  };
+
+  // The light under the category you're in: placed from the button's own box, so it slides between
+  // categories in the rail and along the strip on a narrow page alike. It arrives without sliding the
+  // first time.
+  const [light, setLight] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [lightMoves, setLightMoves] = useState(false);
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const place = (): void => {
+      const el = nav.querySelector<HTMLElement>(`[data-cat="${active}"]`);
+      if (!el) return;
+      const next = { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight };
+      setLight((prev) => (prev && prev.x === next.x && prev.y === next.y && prev.w === next.w && prev.h === next.h ? prev : next));
+      // On a narrow page the categories scroll sideways: keep the current one in view.
+      if (nav.scrollWidth > nav.clientWidth) {
+        const left = el.offsetLeft - 8;
+        const right = el.offsetLeft + el.offsetWidth + 8;
+        if (left < nav.scrollLeft) nav.scrollLeft = left;
+        else if (right > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = right - nav.clientWidth;
+      }
+    };
+    place();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(place);
+    ro.observe(nav);
+    return () => ro.disconnect();
+  }, [active]);
+  useEffect(() => {
+    if (!light || lightMoves) return;
+    const id = window.requestAnimationFrame(() => setLightMoves(true));
+    return () => window.cancelAnimationFrame(id);
+  }, [light, lightMoves]);
+
+  // Search: every category's rows are on the page; show the rows whose words match (a category's or a
+  // group's title shows all of it), after every render so conditional rows follow. Inline display,
+  // not [hidden]: utility display classes outrank [hidden].
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root || !q) return;
+    const ql = q.toLowerCase();
+    const hits = (el: Element | null): boolean => !!el && (el.textContent ?? "").toLowerCase().includes(ql);
+    const show = (el: HTMLElement, on: boolean): void => {
+      el.style.display = on ? "" : "none";
+    };
+    let any = false;
+    root.querySelectorAll<HTMLElement>("[data-setting-category]").forEach((cat) => {
+      const whole = hits(cat.querySelector("[data-setting-category-title]"));
+      let anyGroup = false;
+      cat.querySelectorAll<HTMLElement>("[data-setting-group]").forEach((group) => {
+        const rows = [...group.querySelectorAll<HTMLElement>("[data-setting-row]")];
+        const all = whole || hits(group.querySelector("[data-setting-header]"));
+        let anyRow = false;
+        for (const row of rows) {
+          const on = all || hits(row);
+          show(row, on);
+          anyRow ||= on;
+        }
+        const on = rows.length ? anyRow : all || hits(group);
+        show(group, on);
+        anyGroup ||= on;
+      });
+      show(cat, anyGroup);
+      any ||= anyGroup;
+    });
+    const empty = root.querySelector<HTMLElement>("[data-settings-empty]");
+    if (empty) show(empty, !any);
+  });
+
+  const onNavKey = (e: React.KeyboardEvent): void => {
+    const step = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : e.key === "ArrowUp" || e.key === "ArrowLeft" ? -1 : 0;
+    if (!step) return;
+    const from = (e.target as HTMLElement).closest<HTMLElement>("[data-cat]")?.dataset.cat;
+    if (!isCategory(from)) return;
+    e.preventDefault();
+    const next = CATEGORIES[(indexOf(from) + step + CATEGORIES.length) % CATEGORIES.length].id;
+    pick(next);
+    navRef.current?.querySelector<HTMLElement>(`[data-cat="${next}"]`)?.focus();
+  };
+
+  return (
+    <div ref={rootRef} className={`st-wrap${q ? " st-searching" : ""}`}>
+      <div className="st-layout">
+        <aside className="st-rail">
+          <h1 className="st-title">Settings</h1>
+          <div className="st-search">
+            <Search aria-hidden className="w-4 h-4" />
+            <input
+              id="settings-filter"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && filter) {
+                  e.stopPropagation();
+                  setFilter("");
+                }
+              }}
+              placeholder="Search settings"
+              aria-label="Search settings"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            {filter && (
+              <button type="button" aria-label="Clear search" onClick={() => setFilter("")} className="st-search-clear">
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          <nav ref={navRef} aria-label="Settings categories" className="st-nav" onKeyDown={onNavKey}>
+            <span
+              aria-hidden
+              className={`st-nav-light${lightMoves ? " is-moving" : ""}${q || !light ? " is-hidden" : ""}`}
+              style={
+                light
+                  ? ({ "--x": `${light.x}px`, "--y": `${light.y}px`, "--w": `${light.w}px`, "--h": `${light.h}px` } as CSSProperties)
+                  : undefined
+              }
+            />
+            {CATEGORIES.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                data-cat={c.id}
+                aria-current={!q && c.id === active ? "page" : undefined}
+                onClick={() => pick(c.id)}
+                className="st-nav-item"
+              >
+                <c.icon aria-hidden className="w-[18px] h-[18px]" />
+                <span>{c.label}</span>
+              </button>
+            ))}
+          </nav>
+        </aside>
+
+        <div className="st-main">
+          {q ? (
+            <div className="st-results">
+              {CATEGORIES.map((c) => (
+                <section key={c.id} data-setting-category className="st-result">
+                  <h2 data-setting-category-title className="st-result-title">
+                    {c.label}
+                  </h2>
+                  {PANES[c.id]()}
+                </section>
+              ))}
+              <p data-settings-empty style={{ display: "none" }} className="st-empty">
+                No settings match “{q}”
+              </p>
+            </div>
+          ) : (
+            <div key={active} className={`st-pane${up ? " is-up" : ""}`}>
+              <header className="st-pane-head">
+                <h2 className="st-pane-title">{category.label}</h2>
+                <p className="st-pane-lede">{category.lede}</p>
+              </header>
+              {PANES[active]()}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

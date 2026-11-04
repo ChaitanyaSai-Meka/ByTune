@@ -127,6 +127,15 @@ export interface UIState {
   viewReloadNonce: number;
 
   navigate(view: View): void;
+  /** Swap the current view in place, with no history step: a Settings category. Back still leaves
+      Settings in one step, and the entry keeps the category for when you come back to it. */
+  replaceView(view: View): void;
+  /** Show Settings, on `section` when given (a Settings category id). Already open: bring it into
+      view (a lyrics overlay may be covering it) without stacking a second Settings entry. */
+  openSettings(section?: string): void;
+  /** The profile button: open Settings, or close it when it's what you're looking at (back to
+      where you were; home when there's nowhere to go back to). */
+  toggleSettings(): void;
   goBack(): void;
   goForward(): void;
   setSearchQuery(q: string): void;
@@ -231,6 +240,31 @@ export const useUI = create<UIState>((set, get) => ({
       // A new page opens at its top; only back/forward return to a left scroll.
       pendingScroll: 0,
     });
+  },
+
+  replaceView(view) {
+    if (sameView(get().view, view)) return;
+    set({ view, pendingScroll: 0, lyricsCenter: false, tintThumb: null });
+  },
+
+  openSettings(section) {
+    const { view } = get();
+    if (view.name !== "settings") {
+      get().navigate(section ? { name: "settings", param: section } : { name: "settings" });
+      return;
+    }
+    set({ lyricsCenter: false });
+    if (section) get().replaceView({ name: "settings", param: section });
+  },
+
+  toggleSettings() {
+    const { view, lyricsCenter, navPast } = get();
+    if (view.name !== "settings" || lyricsCenter) {
+      get().openSettings();
+      return;
+    }
+    if (navPast.length) get().goBack();
+    else get().navigate({ name: "home" });
   },
 
   goBack() {

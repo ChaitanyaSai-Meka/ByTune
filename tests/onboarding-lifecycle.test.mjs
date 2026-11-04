@@ -43,8 +43,13 @@ async function mount(initial, api, session = {}) {
   globalThis.__refresh = async () => { refreshes++; };
   const root = createRoot(document.getElementById("root"));
   await act(async () => root.render(React.createElement(Onboarding, { initial })));
+  /** A button's accessible name: what aria-labelledby points at, else its text. */
+  const nameOf = b => (b.getAttribute("aria-labelledby") ? document.getElementById(b.getAttribute("aria-labelledby"))?.textContent : b.textContent)?.trim();
+  const byName = text => [...document.querySelectorAll("button")].find(b => nameOf(b) === text);
   return {
-    button: text => [...document.querySelectorAll("button")].find(b => b.textContent.trim() === text),
+    button: byName,
+    /** What a button's aria-describedby says about it. */
+    description: text => document.getElementById(byName(text)?.getAttribute("aria-describedby") ?? "")?.textContent ?? "",
     field: label => document.querySelector(`input[aria-label="${label}"]`),
     /** Types into a field the way React sees typing (its value setter, then an input event). */
     type: async (label, value) => {
@@ -57,7 +62,7 @@ async function mount(initial, api, session = {}) {
     },
     click: async text => {
       await act(async () => {
-        [...document.querySelectorAll("button")].find(b => b.textContent.trim() === text).click();
+        byName(text).click();
         await new Promise(r => setTimeout(r, 10));
       });
     },
@@ -96,6 +101,28 @@ for (const [initial, label, method] of [
     } finally { await h.close(); }
   });
 }
+
+/* ---------------- the ways in ---------------- */
+
+test("the first screen lists every way in, each named by its title and saying what it means", async () => {
+  const h = await mount("choose", {});
+  try {
+    for (const [name, says] of [
+      ["Create an account", /sync/i],
+      ["Continue with Google", /browser/i],
+      ["Sign in", /username/i],
+      ["Continue as guest", /stays on this computer/i],
+    ]) {
+      assert.ok(h.button(name), `${name} is there`);
+      assert.match(h.description(name), says, `${name} says what it means`);
+    }
+    await h.click("Create an account");
+    assert.match(document.querySelector("h2")?.textContent ?? "", /Create your account/);
+    assert.ok(h.button("Back"), "a form step leads back to the ways in");
+    await h.click("Back");
+    assert.ok(h.button("Continue with Google"), "and it does");
+  } finally { await h.close(); }
+});
 
 /* ---------------- display names ---------------- */
 
@@ -140,6 +167,23 @@ test("creating an account asks for a display name, separate from the username", 
     await h.type("Display name", "Rishi Teja");
     await h.click("Create account");
     assert.deepEqual(calls, [["rishi", "password1", "Rishi Teja"]]);
+  } finally { await h.close(); }
+});
+
+test("the sign-up boxes keep their words inside: a hint each, and what's known about the text on the box", async () => {
+  const h = await mount("signup", { authUsernameAvailable: async () => ({ available: true }) });
+  const said = label => document.getElementById(h.field(label).getAttribute("aria-describedby"))?.textContent ?? "";
+  try {
+    assert.equal(h.field("Display name").placeholder, "What people see");
+    assert.match(h.field("Username").placeholder, /letters, numbers/i);
+    assert.match(h.field("Password").placeholder, /at least 8 characters/i);
+    await h.type("Username", "ri");
+    assert.match(said("Username"), /at least 3 characters/i);
+    await h.type("Username", "rishi");
+    await act(async () => { await new Promise(r => setTimeout(r, 500)); }); // the availability check
+    assert.match(said("Username"), /available/i);
+    await h.type("Display name", "x".repeat(31));
+    assert.match(said("Display name"), /up to 30 characters/i);
   } finally { await h.close(); }
 });
 

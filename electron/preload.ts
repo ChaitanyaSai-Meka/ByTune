@@ -81,6 +81,8 @@ const api = {
   windowMaximizeToggle: () => ipcRenderer.send("window:maximizeToggle"),
   windowClose: () => ipcRenderer.send("window:close"),
   isMaximized: () => ipcRenderer.invoke("window:isMaximized"),
+  /** Whether the trackpad moves content along with the fingers (null: can't tell). */
+  naturalScrolling: (): Promise<boolean | null> => ipcRenderer.invoke("input:naturalScrolling"),
   setOverlayChrome: (visible: boolean) => ipcRenderer.invoke("window:setOverlayChrome", visible),
   setFullScreen: (fs: boolean) => ipcRenderer.invoke("window:setFullScreen", fs),
   onMaximizeChange: (cb: (maximized: boolean) => void): (() => void) => {

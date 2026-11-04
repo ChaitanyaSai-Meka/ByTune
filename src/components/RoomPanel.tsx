@@ -220,7 +220,7 @@ export function RoomPanel({ onClose }: { onClose: () => void }) {
             <p className="text-[13px] text-ink-dim leading-relaxed">
               Rooms let friends hear the same song at the same moment. They need a ByTune account, so a room knows who's in it.
             </p>
-            <Btn variant="white" size="md" onClick={() => useUI.getState().navigate({ name: "settings" })}>
+            <Btn variant="white" size="md" onClick={() => useUI.getState().openSettings("account")}>
               Sign in or create an account
             </Btn>
           </div>

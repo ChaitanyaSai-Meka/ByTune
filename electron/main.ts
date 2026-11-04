@@ -20,6 +20,7 @@ import * as spotify from "./spotify";
 import { roomCodeIn } from "../src/lib/roomSync";
 import { displayNameProblem, normalizeDisplayName } from "../src/lib/account-validators";
 import * as stats from "./stats";
+import { naturalScrolling } from "./scroll-direction";
 import { proxyUrlFor, proxyUrlForLocalTrack, setDownloadedFileLookup, startStreamProxy } from "./stream-proxy";
 import * as auth from "./supabase";
 import * as sync from "./sync";
@@ -609,6 +610,8 @@ function registerIpc(): void {
   });
   ipc.on("window:close", () => mainWindow?.close());
   ipc.handle("window:isMaximized", () => !!mainWindow?.isMaximized());
+  // Which way the trackpad scrolls, so the onboarding's drum keeps a two-finger roll under the fingers.
+  ipc.handle("input:naturalScrolling", () => naturalScrolling());
   // Windows-only: hide/restore the native caption-button strip while the
   // immersive Now Playing view is open (Spotify hides its chrome there too).
   // There is no supported visibility toggle, so we try to wash the overlay out

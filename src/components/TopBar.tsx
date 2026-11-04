@@ -31,6 +31,7 @@ import { searchPageOnce } from "../lib/searchOnce";
 import { browseMenuItems, trackMenuItems } from "../lib/trackActions";
 import { shownName, useSession } from "../lib/session";
 import { isMac } from "../lib/platform";
+import { avatarFor } from "../lib/avatar";
 import { useUI } from "../stores/ui";
 import { usePlayer } from "../stores/player";
 import { useRecents } from "../stores/recents";
@@ -65,40 +66,18 @@ function BrandHeader() {
   );
 }
 
-/* Palette for the avatar disc. Every tone is mid-saturation and light enough
-   that near-black text stays readable on it. */
-const AVATAR_COLORS = [
-  "#d97757", "#e0a458", "#d4c95a", "#8fc74f", "#5fc9a2",
-  "#59a5d8", "#8f9bf4", "#c58af9", "#e17bb0", "#e06c75",
-];
-
-/* Deterministic per-user colour: a simple FNV-1a hash of the username picks
-   the palette entry, so an account always gets the same colour across
-   launches while different users land on effectively random ones. */
-function avatarColor(seed: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < seed.length; i++) {
-    h ^= seed.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return AVATAR_COLORS[h % AVATAR_COLORS.length];
-}
-
+/** The profile button: opens Settings, and closes it again while it's showing. */
 function Avatar({ onClick, active }: { onClick: () => void; active?: boolean }) {
   const mode = useSession((s) => s.mode);
   const username = useSession((s) => s.username);
   const displayName = useSession((s) => s.displayName);
-  // The first letter of the display name (an account without one yet: its username's); a guest
-  // without a name (and a session not loaded yet) shows "G". By code point, so an emoji stays whole.
-  const name = shownName({ mode, username, displayName });
-  const letter = name ? Array.from(name)[0].toUpperCase() : "G";
-  // The colour stays tied to the account, so it doesn't change with a new display name.
-  const color = avatarColor(mode === "account" && username?.trim() ? username.trim().toLowerCase() : "guest");
+  // The first letter of the display name (an account without one yet: its username's).
+  const { color, letter } = avatarFor(mode, username, shownName({ mode, username, displayName }));
   return (
     <button
       onClick={onClick}
-      title="Settings"
-      aria-label="Settings"
+      title={active ? "Close settings" : "Settings"}
+      aria-label={active ? "Close settings" : "Settings"}
       className={`w-11 h-11 rounded-full grid place-items-center transition-colors select-none ${
         active ? "bg-ink-hi/[0.16]" : "bg-ink-hi/[0.10] hover:bg-ink-hi/[0.16]"
       }`}
@@ -165,6 +144,9 @@ export function TopBar() {
   const goForward = useUI((s) => s.goForward);
   const canBack = useUI((s) => s.navPast.length > 0);
   const canForward = useUI((s) => s.navFuture.length > 0);
+  /** Settings is what you're looking at (not hidden under the lyrics): the profile button closes it. */
+  const settingsShown = useUI((s) => s.view.name === "settings" && !s.lyricsCenter);
+  const toggleSettings = useUI((s) => s.toggleSettings);
   const recents = useRecents((s) => s.searches);
   const removeSearch = useRecents((s) => s.removeSearch);
   const clearSearches = useRecents((s) => s.clearSearches);
@@ -666,7 +648,7 @@ export function TopBar() {
           <StreakChip />
         </div>
         <div className="app-no-drag ml-1 mr-2 flex items-center">
-          <Avatar onClick={() => navigate({ name: "settings" })} active={view.name === "settings"} />
+          <Avatar onClick={toggleSettings} active={settingsShown} />
         </div>
         {!isMac && <CaptionButtons />}
       </div>
