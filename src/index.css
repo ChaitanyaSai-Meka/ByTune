@@ -517,6 +517,18 @@ body.bytune-dragging * {
 .collection-hero .cover-glow-grain {
   z-index: -1;
 }
+/* A service's own colour (Spotify's green on its pages), as light rising from the lower left behind
+   the words. It fades out before the header's foot, so it never meets the page below. */
+.collection-light {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(55% 80% at 10% 82%, color-mix(in srgb, var(--collection-light) 34%, transparent), transparent 72%);
+  mix-blend-mode: screen;
+  -webkit-mask-image: linear-gradient(to top, transparent 0, #000 120px);
+  mask-image: linear-gradient(to top, transparent 0, #000 120px);
+}
 .collection-hero-text > * {
   animation: rise-in 560ms var(--ease-enter) both;
 }

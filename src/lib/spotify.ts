@@ -93,6 +93,23 @@ export async function connectSpotify(): Promise<boolean> {
   return status.connected && !status.problem;
 }
 
+/** A playlist of the connected account on Spotify's web player ("liked": its Liked Songs). */
+export function spotifyUrl(id: string): string {
+  return id === "liked" ? "https://open.spotify.com/collection/tracks" : `https://open.spotify.com/playlist/${encodeURIComponent(id)}`;
+}
+
+/** Disconnect, asking first (Settings › Connected services, and the Spotify page's own menu). */
+export function askToDisconnectSpotify(): void {
+  const ui = useUI.getState();
+  ui.openDialog({
+    title: "Disconnect Spotify?",
+    body: "ByTune forgets your Spotify session and its playlists here. Playlists you saved to your library stay.",
+    confirmLabel: "Disconnect",
+    danger: true,
+    onConfirm: () => void useSpotify.getState().disconnect().then(() => ui.toast("Spotify disconnected")),
+  });
+}
+
 /** The Spotify row while nothing is connected: asks first, then shows the playlists once connected. */
 export function askToConnectSpotify(): void {
   useUI.getState().openDialog({

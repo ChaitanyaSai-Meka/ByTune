@@ -2,7 +2,7 @@
  * Spotify's icon, exactly as Spotify's own embed page draws it, marking what comes from a
  * connected Spotify account. Drawn in Spotify's green on ByTune's dark surfaces, unaltered.
  */
-const SPOTIFY_GREEN = "#1ED760";
+export const SPOTIFY_GREEN = "#1ED760";
 
 export function SpotifyIcon({ className = "" }: { className?: string }) {
   return (

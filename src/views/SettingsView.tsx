@@ -68,7 +68,7 @@ import { DOWNLOAD_QUALITY_LABEL, LOUDNESS_LABEL, STREAM_QUALITY_LABEL, useSettin
 import { useLibrary } from "../stores/library";
 import { shownName, useSession } from "../lib/session";
 import { displayNameProblem, normalizeDisplayName } from "../lib/account-validators";
-import { connectSpotify, useSpotify } from "../lib/spotify";
+import { askToDisconnectSpotify, connectSpotify, useSpotify } from "../lib/spotify";
 import { SpotifyIcon } from "../components/SpotifyIcon";
 import { MATCH_LANGUAGES, type MatchLanguage } from "../../electron/track-match";
 import { LYRICS_NUDGE_STEP, describeLyricsShift } from "../lib/lyricsOffset";
@@ -693,7 +693,6 @@ function ConnectedServices() {
   const status = useSpotify((s) => s.status);
   const connecting = useSpotify((s) => s.connecting);
   const language = useSettings((s) => s.matchLanguage);
-  const ui = useUI.getState();
   const connect = (): void => void connectSpotify();
   return (
     <Group
@@ -714,19 +713,7 @@ function ConnectedServices() {
           status.connected ? (
             <>
               {status.problem && <Button onClick={connect}>Reconnect</Button>}
-              <Button
-                onClick={() =>
-                  ui.openDialog({
-                    title: "Disconnect Spotify?",
-                    body: "ByTune forgets your Spotify session and its playlists here. Playlists you saved to your library stay.",
-                    confirmLabel: "Disconnect",
-                    danger: true,
-                    onConfirm: () => void useSpotify.getState().disconnect().then(() => ui.toast("Spotify disconnected")),
-                  })
-                }
-              >
-                Disconnect
-              </Button>
+              <Button onClick={askToDisconnectSpotify}>Disconnect</Button>
             </>
           ) : (
             <Button kind="primary" onClick={connect} disabled={connecting}>

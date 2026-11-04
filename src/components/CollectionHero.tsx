@@ -2,9 +2,10 @@
  * The header of a collection page (Liked Songs, a folder of playlists): a wall of the collection's own
  * covers, edge to edge, its rows sliding slowly past each other and sinking into the page as it
  * scrolls; the title big over its lower left, the facts under it, the page's buttons below. It has no
- * colour of its own: the covers light it. Motion and shading live in index.css (.collection-hero).
+ * colour of its own: the covers light it. A service's page (Spotify) leads with the service's own mark
+ * and may add a light of its colour. Motion and shading live in index.css (.collection-hero).
  */
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { wallCovers } from "../lib/collection";
 import { upgradeArtwork } from "../lib/artwork";
@@ -22,13 +23,19 @@ export const HERO_PLAY =
 
 export function CollectionHero({
   icon: Icon,
+  mark,
+  light,
   kind,
   title,
   covers,
   facts,
   children,
 }: {
-  icon: LucideIcon;
+  icon?: LucideIcon;
+  /** drawn in place of the icon's chip: a service's own mark, as the service draws it */
+  mark?: ReactNode;
+  /** a light of this colour rising from the lower left, behind the words (a service's own colour) */
+  light?: string;
   /** what the page is, over its title ("Folder", "Liked by you"; a link back to Local Music) */
   kind: ReactNode;
   title: string;
@@ -65,12 +72,16 @@ export function CollectionHero({
         </div>
       </div>
       <div aria-hidden className="cover-wall-shade" />
+      {light && <div aria-hidden className="collection-light" style={{ "--collection-light": light } as CSSProperties} />}
       <div aria-hidden className="cover-glow-grain" />
       <div className="collection-hero-text relative px-10 pt-[184px] pb-8">
         <div className="flex items-center gap-2 text-[13px] font-semibold text-white/80">
-          <span className="w-6 h-6 rounded-full bg-white/[0.14] grid place-items-center">
-            <Icon className="w-3.5 h-3.5" />
-          </span>
+          {mark ??
+            (Icon && (
+              <span className="w-6 h-6 rounded-full bg-white/[0.14] grid place-items-center">
+                <Icon className="w-3.5 h-3.5" />
+              </span>
+            ))}
           {kind}
         </div>
         <h1
