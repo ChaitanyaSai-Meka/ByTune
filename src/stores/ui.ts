@@ -42,16 +42,33 @@ export interface NavEntry {
   scroll: number;
 }
 
+/** What a menu acts on (a song, a playlist, an album, an artist): drawn at its top, lit by its cover. */
+export interface MenuSubject {
+  title: string;
+  subtitle?: string;
+  thumb?: string | null;
+  /** an artist: a round picture */
+  round?: boolean;
+}
+
 export interface MenuItem {
   label?: string;
+  /** a second line under the label; the row then shows its icon in a tile (the Create menu) */
+  note?: string;
   icon?: LucideIcon;
   /** extra classes for the icon (e.g. fill-accent for a filled pin) */
   iconClassName?: string;
   danger?: boolean;
   disabled?: boolean;
+  /** one of a set of choices: true on the chosen one (a check at the right), false on the rest */
+  checked?: boolean;
+  /** `checked` is this row's own on/off, not one choice among the set (a checkbox: several can be on) */
+  toggle?: boolean;
   separatorBefore?: boolean;
   /** section label — rendered as a non-interactive caption */
   header?: boolean;
+  /** what the menu acts on: drawn as the menu's header, above everything else, wherever it sits */
+  subject?: MenuSubject;
   /** nested menu — opens on hover/click, one at a time */
   children?: MenuItem[];
   action?: () => void;
@@ -65,6 +82,8 @@ export interface ContextMenuState {
   above?: boolean;
   /** treat x as the RIGHT edge — the menu right-aligns to it (settings selects) */
   alignRight?: boolean;
+  /** who opened it, so a button can show itself pressed while its menu is up */
+  owner?: string;
 }
 
 export interface Toast {
@@ -149,7 +168,7 @@ export interface UIState {
   toast(message: string, kind?: Toast["kind"], duration?: number): void;
   dismissToast(id: number): void;
   setTintThumb(url: string | null): void;
-  openContextMenu(x: number, y: number, items: MenuItem[], options?: { above?: boolean; alignRight?: boolean }): void;
+  openContextMenu(x: number, y: number, items: MenuItem[], options?: { above?: boolean; alignRight?: boolean; owner?: string }): void;
   closeContextMenu(): void;
   openDialog(req: DialogRequest): void;
   closeDialog(): void;
@@ -346,7 +365,7 @@ export const useUI = create<UIState>((set, get) => ({
   },
 
   openContextMenu(x, y, items, options) {
-    set({ contextMenu: { x, y, items, above: options?.above, alignRight: options?.alignRight } });
+    set({ contextMenu: { x, y, items, above: options?.above, alignRight: options?.alignRight, owner: options?.owner } });
   },
 
   closeContextMenu() {

@@ -135,6 +135,232 @@ body {
   box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.32), 0 24px 64px -16px rgba(0, 0, 0, 0.75);
 }
 
+/* ---------- menus (components/ContextMenu, the Create menu, the search box's lists) ----------
+   ByTune's own: a solid dark sheet, no glass. One light glides under the rows to the one under the
+   pointer or the keyboard (red on a destructive row), the way the Settings rail and the song lists
+   move theirs. Sentence-case captions, hairlines between groups, a check at the right of the chosen
+   option. A menu about a song, a playlist, an album or an artist opens with it on top, lit by its
+   cover. It unfolds from the corner it was opened at; a row's own menu slides out from that row. */
+.menu {
+  --menu-ease: cubic-bezier(0.2, 0.9, 0.3, 1);
+  padding: 6px;
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.035), rgb(255 255 255 / 0) 72px),
+    rgb(24 24 27);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.075),
+    inset 0 1px 0 rgb(255 255 255 / 0.05),
+    0 22px 50px -14px rgb(0 0 0 / 0.78),
+    0 3px 10px rgb(0 0 0 / 0.35);
+  color: rgb(var(--ink-hi));
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.18) transparent;
+  transform-origin: var(--menu-origin, top left);
+  animation: menu-open 170ms var(--menu-ease) both;
+}
+.menu.is-above {
+  animation-name: menu-open-up;
+}
+.menu.menu-sub {
+  animation-name: menu-slide-right;
+}
+.menu.menu-sub.is-flipped {
+  animation-name: menu-slide-left;
+}
+@keyframes menu-open {
+  from { opacity: 0; transform: translateY(-4px) scale(0.965); }
+}
+@keyframes menu-open-up {
+  from { opacity: 0; transform: translateY(4px) scale(0.965); }
+}
+@keyframes menu-slide-right {
+  from { opacity: 0; transform: translateX(-6px); }
+}
+@keyframes menu-slide-left {
+  from { opacity: 0; transform: translateX(6px); }
+}
+.menu-list {
+  position: relative;
+}
+.menu-light {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 0.085);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 190ms var(--menu-ease), height 190ms var(--menu-ease), opacity 150ms ease, background-color 150ms ease;
+}
+.menu-light.is-on {
+  opacity: 1;
+}
+.menu-light.is-danger {
+  background: rgb(229 72 77 / 0.15);
+}
+.menu-row {
+  position: relative;
+  width: 100%;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  border-radius: 10px;
+  text-align: left;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: rgb(var(--ink-hi) / 0.84);
+  transition: color 120ms ease;
+}
+.menu-row:focus-visible {
+  outline: none;
+}
+.menu-row:is(:hover, :focus-visible):not(:disabled),
+.menu-row.is-open,
+.menu-row.is-checked {
+  color: rgb(var(--ink-hi));
+}
+.menu-row:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+.menu-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  opacity: 0.66;
+  transition: opacity 120ms ease;
+}
+.menu-row:is(:hover, :focus-visible):not(:disabled) .menu-icon,
+.menu-row.is-open .menu-icon {
+  opacity: 1;
+}
+.menu-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.menu-label,
+.menu-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A row with a second line: its icon in a tile, the label weightier. */
+.menu-row.is-rich {
+  padding: 7px 10px;
+}
+.menu-tile {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: rgb(var(--ink-hi));
+  background: rgb(255 255 255 / 0.07);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.05);
+  transition: background-color 150ms ease;
+}
+.menu-row.is-rich:is(:hover, :focus-visible) .menu-tile {
+  background: rgb(255 255 255 / 0.11);
+}
+.menu-row.is-rich .menu-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgb(var(--ink-hi));
+}
+.menu-note {
+  margin-top: 1px;
+  font-size: 12px;
+  font-weight: 400;
+  color: rgb(var(--ink-hi) / 0.5);
+}
+.menu-check {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: rgb(var(--ink-hi));
+}
+.menu-more {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-right: -3px;
+  opacity: 0.45;
+}
+.menu-row.is-danger {
+  color: #ff8589;
+}
+.menu-row.is-danger .menu-icon {
+  opacity: 0.9;
+}
+.menu-sep {
+  height: 1px;
+  margin: 6px 10px;
+  background: rgb(255 255 255 / 0.07);
+}
+.menu-caption {
+  padding: 9px 12px 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgb(var(--ink-hi) / 0.45);
+}
+/* What the menu acts on, lit by its cover: the cover blurred into light behind the top of the sheet. */
+.menu-subject {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px 8px;
+}
+.menu-subject::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: -6px;
+  left: -6px;
+  right: -6px;
+  height: 128px;
+  background: var(--light) center / 100% 100% no-repeat;
+  filter: blur(30px) saturate(1.6);
+  opacity: 0.32;
+  -webkit-mask-image: linear-gradient(to bottom, #000 20%, transparent);
+  mask-image: linear-gradient(to bottom, #000 20%, transparent);
+  pointer-events: none;
+}
+.menu-subject-title,
+.menu-subject-sub {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu-subject-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: rgb(var(--ink-hi));
+}
+.menu-subject-sub {
+  margin-top: 1px;
+  font-size: 12.5px;
+  color: rgb(var(--ink-hi) / 0.55);
+}
+@media (prefers-reduced-motion: reduce) {
+  .menu,
+  .menu-light {
+    animation: none;
+    transition: none;
+  }
+}
+
 /* Pill glass — same recipe as .glass, but the radius is part of the chrome
    (sidebar pills, the player bar). Highlight + hairline follow the curve. */
 .glass-pill {

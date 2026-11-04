@@ -19,7 +19,6 @@ import {
   AppWindow,
   AudioLines,
   BarChart3,
-  Check,
   ChevronRight,
   ChevronsUpDown,
   CirclePlay,
@@ -385,13 +384,11 @@ function Reading({ text, widest }: { text: string; widest: string[] }) {
   );
 }
 
-/** The list for a picker: every option carries the check glyph, filled on the current one and
-    invisible on the rest so the labels keep their alignment; picking one commits it. */
+/** The list for a picker: one choice per option, the current one checked; picking one commits it. */
 function choiceMenu<T extends string>(order: readonly T[], labels: Record<T, string>, current: T, onPick: (q: T) => void): MenuItem[] {
   return order.map((q) => ({
     label: labels[q],
-    icon: Check,
-    iconClassName: q === current ? "text-accent" : "opacity-0",
+    checked: q === current,
     action: () => onPick(q),
   }));
 }
@@ -879,9 +876,10 @@ function OutputDevice() {
   const value = sinkId ? (current?.label ?? "System default") : active ? active.label : "System default";
   const itemsFor = (list: OutputDeviceChoice[]): MenuItem[] =>
     list.map((d) => ({
-      label: d.deviceId === "" && active ? `System default (${active.label})` : d.label,
-      icon: Check,
-      iconClassName: d.deviceId === sinkId ? "text-accent" : "opacity-0",
+      // The default names the device it's following on a line of its own, so neither is cut short.
+      label: d.deviceId === "" ? "System default" : d.label,
+      note: d.deviceId === "" && active ? active.label : undefined,
+      checked: d.deviceId === sinkId,
       action: () => useSettings.getState().setAudioSinkId(d.deviceId),
     }));
   return (
@@ -1020,7 +1018,7 @@ function Equalizer() {
                 onContextMenu={(e) => {
                   e.preventDefault();
                   useUI.getState().openContextMenu(e.clientX, e.clientY, [
-                    { label: "Rename…", action: () => askName("Rename preset", p.name, "Rename", (to) => renameEqPreset(p.name, to), p.name) },
+                    { label: "Rename", action: () => askName("Rename preset", p.name, "Rename", (to) => renameEqPreset(p.name, to), p.name) },
                     { label: "Update to current curve", disabled: same(p.gains), action: () => saveEqPreset(p.name, gains) },
                     { label: "Delete", danger: true, separatorBefore: true, action: () => deleteEqPreset(p.name) },
                   ]);

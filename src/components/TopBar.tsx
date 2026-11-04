@@ -39,6 +39,7 @@ import { useRecentItems } from "../stores/recentItems";
 import type { SearchSuggestion } from "../types";
 import { Artwork } from "./primitives";
 import { FitText } from "./FitText";
+import { useMenuLight } from "./ContextMenu";
 import { StreakChip } from "./Streak";
 import brandLogo from "../assets/brand/bytune-logo.svg";
 import brandText from "../assets/brand/bytune-Text.svg";
@@ -172,6 +173,9 @@ export function TopBar() {
   /** the field + both dropdowns — blur is ignored while focus stays inside */
   const searchClusterRef = useRef<HTMLDivElement | null>(null);
   const suggestListRef = useRef<HTMLDivElement | null>(null);
+  /** the dropdowns' lights, as on every menu: one glides to the row under the pointer or the keys */
+  const suggestLight = useMenuLight();
+  const recentLight = useMenuLight();
 
   useEffect(() => {
     const q = query.trim();
@@ -220,10 +224,14 @@ export function TopBar() {
     return () => window.clearTimeout(timer);
   }, [query, fieldFocused]);
 
-  // Arrow keys can walk past the dropdown's fold.
+  // Arrow keys can walk past the dropdown's fold, and the light follows them.
   useEffect(() => {
-    suggestListRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+    const row = suggestListRef.current?.querySelector('[data-active="true"]') ?? null;
+    row?.scrollIntoView({ block: "nearest" });
+    if (activeIdx >= 0) suggestLight.to(row);
   }, [activeIdx]);
+  // New rows: the light would sit on whatever row now holds its old place.
+  useEffect(() => suggestLight.to(null), [suggests]);
 
   const closeDropdown = (): void => {
     suggestSeq.current++;
@@ -452,17 +460,19 @@ export function TopBar() {
           {fieldFocused && suggestOpen && suggests.length > 0 && (
             <div
               ref={suggestListRef}
-              className="absolute left-0 right-0 top-full mt-2 z-50 glass-strong-solid rounded-2xl p-1.5 shadow-float max-h-[min(600px,calc(100vh_-_88px))] overflow-y-auto animate-pop-in"
+              className="menu absolute left-0 right-0 top-full mt-2 z-50 max-h-[min(600px,calc(100vh_-_88px))] overflow-y-auto"
+              style={{ "--menu-origin": "top center" } as React.CSSProperties}
               role="listbox"
               aria-label="Search suggestions"
             >
+              <div className="menu-list" {...suggestLight.track}>
+              {suggestLight.light}
               <button
                 data-active={activeIdx === 0}
+                data-menu-row=""
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => submitSearch(query)}
-                className={`fit-host w-full flex items-center gap-3 px-2.5 h-11 rounded-lg text-left transition-colors ${
-                  activeIdx === 0 ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.06]"
-                }`}
+                className="fit-host relative w-full flex items-center gap-3 px-2.5 h-11 rounded-[10px] text-left"
               >
                 <Search className="w-4 h-4 text-ink-hi/55 shrink-0" />
                 <FitText text={`Search “${query.trim()}”`} className="text-[14px] font-medium text-ink-hi" />
@@ -472,12 +482,11 @@ export function TopBar() {
                   <button
                     key={s.id}
                     data-active={activeIdx === i + 1}
+                    data-menu-row=""
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => openSuggestion(s)}
                     onContextMenu={(e) => openSuggestionMenu(e, s)}
-                    className={`fit-host w-full flex items-center gap-3 px-2.5 h-14 rounded-lg text-left transition-colors ${
-                      activeIdx === i + 1 ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.06]"
-                    }`}
+                    className="fit-host relative w-full flex items-center gap-3 px-2.5 h-14 rounded-[10px] text-left"
                   >
                     <Artwork
                       src={s.thumb}
@@ -495,12 +504,11 @@ export function TopBar() {
                   <div
                     key={`t:${s.text}`}
                     data-active={activeIdx === i + 1}
+                    data-menu-row=""
                     /* Whole row is the click target, as in Recent searches. */
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => submitSearch(s.text)}
-                    className={`fit-host w-full flex cursor-pointer items-center gap-3 pl-2.5 pr-1.5 h-11 rounded-lg transition-colors ${
-                      activeIdx === i + 1 ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.06]"
-                    }`}
+                    className="fit-host relative w-full flex cursor-pointer items-center gap-3 pl-2.5 pr-1.5 h-11 rounded-[10px]"
                   >
                     <button
                       onMouseDown={(e) => e.preventDefault()}
@@ -528,6 +536,7 @@ export function TopBar() {
                   </div>
                 )
               )}
+              </div>
             </div>
           )}
           {/* Recent searches — BitChord mobile's model: an empty focused field
@@ -535,25 +544,27 @@ export function TopBar() {
               per-row ✕. Choosing a row runs that search. */}
           {historyOpen && (
             <div
-              className="absolute left-0 right-0 top-full mt-2 z-50 glass-strong-solid rounded-2xl p-1.5 shadow-float max-h-[420px] overflow-y-auto animate-pop-in"
+              className="menu absolute left-0 right-0 top-full mt-2 z-50 max-h-[420px] overflow-y-auto"
+              style={{ "--menu-origin": "top center" } as React.CSSProperties}
               role="listbox"
               aria-label="Recent searches"
             >
               <div className="flex items-center justify-between pl-3 pr-1.5 h-9">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-hi/45">
-                  Recent searches
-                </span>
+                <span className="text-[12px] font-semibold text-ink-hi/45">Recent searches</span>
                 <button
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={clearSearches}
-                  className="px-2 h-6 rounded-full text-[11.5px] text-ink-hi/55 hover:text-ink-hi hover:bg-ink-hi/[0.08] transition-colors"
+                  className="px-2.5 h-7 rounded-full text-[12px] font-medium text-ink-hi/55 hover:text-ink-hi hover:bg-ink-hi/[0.08] transition-colors"
                 >
                   Clear all
                 </button>
               </div>
+              <div className="menu-list" {...recentLight.track}>
+              {recentLight.light}
               {recents.map((q) => (
                 <div
                   key={q}
+                  data-menu-row=""
                   /* Whole row is the click target: the inner button only spans
                      its content height, so the rest of the highlighted row
                      showed the arrow cursor and ate clicks. */
@@ -570,7 +581,7 @@ export function TopBar() {
                       { label: "Remove from recent searches", icon: X, separatorBefore: true, action: () => removeSearch(q) },
                     ]);
                   }}
-                  className="fit-host group w-full flex cursor-pointer items-center gap-3 pl-2.5 pr-1.5 h-11 rounded-lg hover:bg-ink-hi/[0.06] transition-colors"
+                  className="fit-host group relative w-full flex cursor-pointer items-center gap-3 pl-2.5 pr-1.5 h-11 rounded-[10px]"
                 >
                   <button
                     onMouseDown={(e) => e.preventDefault()}
@@ -597,6 +608,7 @@ export function TopBar() {
                   </button>
                 </div>
               ))}
+              </div>
             </div>
           )}
           {/* Spotify's right side of the field: clear (once there's text), a

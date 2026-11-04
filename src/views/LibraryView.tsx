@@ -231,7 +231,7 @@ export function LibraryView() {
           <EmptyState
             icon={ListMusic}
             title="No playlists yet"
-            body='Use Create above to make a playlist or a folder, or right-click any song and choose "New playlist…" to start one from a song you like.'
+            body='Use Create above to make a playlist or a folder, or right-click any song and choose "New playlist" to start one from a song you like.'
           />
         )}
       </Shelf>

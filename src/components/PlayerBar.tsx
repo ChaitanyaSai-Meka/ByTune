@@ -23,7 +23,7 @@
  *    / miniplayer / fullscreen — 16px icons white @70% → white on hover
  */
 import { useEffect, useRef, useState } from "react";
-import { Check, Heart, ListMusic, ListPlus, Loader2, Moon, Users } from "lucide-react";
+import { Heart, ListMusic, ListPlus, Loader2, Moon, Users } from "lucide-react";
 import { useRoom } from "../stores/room";
 import {
   SpCheck,
@@ -164,7 +164,7 @@ function SleepTimerButton() {
         },
       },
       {
-        label: "Custom…",
+        label: "Custom",
         action: () =>
           ui.openDialog({
             title: "Sleep timer",
@@ -241,11 +241,13 @@ export function PlayerBar() {
         label: "Add to playlist",
         icon: ListMusic,
         children: [
-          ...lib.playlists.map((p) => {
+          // Each playlist on or off: checked when it holds the song, and choosing it adds or removes.
+          ...lib.playlists.map((p): MenuItem => {
             const inList = p.tracks.some((t) => t.id === track.id);
             return {
-              icon: inList ? Check : undefined,
-              label: inList ? `Remove from "${p.name}"` : `Add to "${p.name}"`,
+              label: p.name,
+              checked: inList,
+              toggle: true,
               action: () => {
                 if (inList) {
                   useLibrary.getState().removeFromPlaylist(p.id, track.id);
@@ -280,6 +282,7 @@ export function PlayerBar() {
           },
         ],
       },
+      { subject: { title: track.title, subtitle: track.artist, thumb: track.thumb } },
     ];
     const rect = addToPlaylistRef.current?.getBoundingClientRect();
     // The playbar hugs the window bottom — the menu hangs ABOVE the button.

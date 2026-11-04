@@ -130,8 +130,12 @@ test("Create opens the create menu", async () => {
   const h = await mount();
   try {
     await h.click("Create playlist or folder");
-    assert.match(document.body.textContent, /Create a playlist with songs/);
-    assert.match(document.body.textContent, /Organize your playlists/);
+    const items = useUI.getState().contextMenu?.items ?? [];
+    assert.deepEqual(items.map((i) => i.label), ["Playlist", "Folder", "Import from Spotify or a list", "Import a file"]);
+    assert.match(items[0].note, /Create a playlist with songs/);
+    assert.match(items[1].note, /Organize your playlists/);
+    await h.click("Create playlist or folder");
+    assert.equal(useUI.getState().contextMenu, null, "the same button closes it");
   } finally {
     await h.close();
   }

@@ -26,7 +26,7 @@ export function formatSleepLeft(ms: number): string {
   return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 }
 
-/** Minutes typed into "Custom…": "90", "1:30" or "1h 30m". Null when it isn't a time. */
+/** Minutes typed into "Custom": "90", "1:30" or "1h 30m". Null when it isn't a time. */
 export function parseSleepMinutes(input: string): number | null {
   const t = input.trim().toLowerCase();
   const clock = /^(\d{1,2}):(\d{2})$/.exec(t);

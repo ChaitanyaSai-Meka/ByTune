@@ -96,7 +96,7 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
         },
       },
       { label: "Download all", icon: Download, action: () => downloadAll(tracks, `"${playlist.name}"`) },
-      { label: "Export playlist…", icon: FileDown, action: () => void exportPlaylist(playlist.name, tracks) },
+      { label: "Export playlist", icon: FileDown, action: () => void exportPlaylist(playlist.name, tracks) },
       { ...renameItem, separatorBefore: true },
       deleteItem,
     ]);

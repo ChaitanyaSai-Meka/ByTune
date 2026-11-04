@@ -17,6 +17,7 @@ import {
   ArrowUp,
 } from "lucide-react";
 import { downloadAll, startDownload } from "./downloads";
+import { plural } from "./format";
 import { playAlbum } from "./album";
 import { playPlaylist } from "./playlist";
 import { copyLink, youtubeAlbumLink, youtubePlaylistLink } from "./playlistShare";
@@ -76,13 +77,13 @@ export function trackMenuItems(track: Track): MenuItem[] {
   }
   if (lib.playlists.length > 1) {
     items.push({
-      label: "Add to playlists…",
+      label: "Add to playlists",
       icon: ListPlus,
       action: () => useUI.getState().openPlaylistPicker([track]),
     });
   }
   items.push({
-    label: "New playlist…",
+    label: "New playlist",
     icon: ListMusic,
     action: () => {
       // Name it before it exists — cancel creates nothing and the track
@@ -150,6 +151,9 @@ export function trackMenuItems(track: Track): MenuItem[] {
     });
   }
 
+  // The song itself, drawn at the menu's top (ContextMenu lifts it there): last here, so menus that
+  // put their own rows before these keep them first.
+  items.push({ subject: { title: track.title, subtitle: track.artist, thumb: track.thumb } });
   return items;
 }
 
@@ -222,18 +226,31 @@ export function playlistHeaderItems(playlist: Playlist): MenuItem[] {
         });
       },
     },
+    // Drawn at the menu's top; last here because PlaylistView takes Rename and Delete by position.
+    {
+      subject: {
+        title: playlist.name,
+        subtitle: `Playlist · ${plural(playlist.tracks.length, "song", "songs")}`,
+        thumb: playlist.artistThumb ?? playlist.tracks[0]?.thumb,
+      },
+    },
   ];
 }
 
 /** File a playlist into a library folder (or back out to the top level). */
 export function playlistFolderItems(playlist: Playlist): MenuItem[] {
   const folders = useLibrary.getState().folders;
-  const items: MenuItem[] = folders.map((f, i) => ({
-    label: f.id === playlist.folderId ? `✓ ${f.name}` : `Move to “${f.name}”`,
-    icon: FolderOpen,
-    separatorBefore: i === 0,
-    action: () => useLibrary.getState().setPlaylistFolder(playlist.id, f.id),
-  }));
+  if (!folders.length) return [];
+  // Which folder it's in, as a choice: the current one checked, any other moves it there.
+  const items: MenuItem[] = [
+    { label: "Folder", header: true, separatorBefore: true },
+    ...folders.map((f) => ({
+      label: f.name,
+      icon: FolderOpen,
+      checked: f.id === playlist.folderId,
+      action: () => useLibrary.getState().setPlaylistFolder(playlist.id, f.id),
+    })),
+  ];
   if (playlist.folderId) {
     items.push({
       label: "Remove from folder",
@@ -301,11 +318,13 @@ export function browseMenuItems(item: BrowseItem): MenuItem[] {
         icon: Link2,
         action: () => copyLink(`https://music.youtube.com/channel/${encodeURIComponent(item.browseId)}`),
       },
+      { subject: { title: item.title, subtitle: "Artist", thumb: item.thumb, round: true } },
     ];
   }
   if (item.type !== "album" && item.type !== "playlist") return [];
   const album = item.type === "album";
   return [
+    { subject: { title: item.title, subtitle: item.subtitle || (album ? "Album" : "Playlist"), thumb: item.thumb } },
     {
       label: "Play",
       icon: Play,
