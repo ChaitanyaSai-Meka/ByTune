@@ -180,8 +180,9 @@ export function mergeRecentSearches(localPayload: Envelope, remotePayload: Envel
 
 /** Fields that describe THIS machine — stripped before upload, never pulled. */
 /** Settings that belong to this machine: paths, and the output device id
- *  (another computer's audio device id means nothing here). */
-export const DEVICE_SETTINGS_FIELDS = ["downloadDir", "localMusicFolder", "audioSinkId", "lyricsOffset"] as const;
+ *  (another computer's audio device id means nothing here), and what closing
+ *  this computer's window does. */
+export const DEVICE_SETTINGS_FIELDS = ["downloadDir", "localMusicFolder", "audioSinkId", "lyricsOffset", "closeToTray"] as const;
 
 export function stripDeviceSettings(payload: Envelope): { state: Record<string, unknown>; version: number } {
   const state = stateOf(payload);

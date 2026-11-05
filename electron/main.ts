@@ -1,5 +1,5 @@
 /** ByTune desktop — Electron main process. */
-import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, nativeImage, powerMonitor, protocol, session, shell } from "electron";
+import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, nativeImage, powerMonitor, protocol, session, shell, Tray } from "electron";
 import type { NativeImage } from "electron";
 import { pathToFileURL } from "url";
 import * as fs from "fs";
@@ -26,6 +26,7 @@ import * as auth from "./supabase";
 import * as sync from "./sync";
 import * as transition from "./data-transition";
 import { buildAppMenu, type MenuCommand, type MenuPlaybackState, type MenuWiring } from "./mac-menu";
+import { buildTrayMenu, closeAction } from "./close-to-tray";
 import type { Track } from "../src/types";
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
@@ -48,9 +49,10 @@ process.on("unhandledRejection", (reason) => {
 
 let mainWindow: BrowserWindow | null = null;
 /**
- * macOS: closing the main window hides it and keeps the app (and playback)
- * running — the close button is not a quit. This flag marks a REAL quit so
- * the hide-on-close guard stands down.
+ * Closing the main window hides it and keeps the app running: always on
+ * macOS (still playing), and on Windows with "Close to tray" on (music
+ * paused; close-to-tray.ts). The close button is not a quit. This flag marks
+ * a REAL quit so the hide-on-close guard stands down.
  */
 let quitting = false;
 /** before-quit can fire twice (window close → quit); the drain must run once. */
@@ -65,12 +67,70 @@ let dataResetActive = false;
 /** A room invite link opened before the page took it (bytune://room/CODE). */
 let pendingRoomInvite: string | null = null;
 
+/**
+ * Every way back to the main window (the tray, the Dock, a second launch, the
+ * macOS menu, the miniplayer): the same window, its page still loaded, so the
+ * launch intro doesn't play again. A new one only if it's gone, and never
+ * while quitting or before the app is ready.
+ */
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (app.isReady() && !quitting) createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+/**
+ * Settings' "Close to tray" (Windows; on unless turned off). Read
+ * from the store's file when a close needs it: the renderer writes settings
+ * through at once, so the file is current.
+ */
+function closeToTrayOn(): boolean {
+  const saved = persist.readData("settings") as { state?: { closeToTray?: unknown } } | null;
+  return saved?.state?.closeToTray !== false;
+}
+
+/**
+ * The part of quitting that can't wait, in this order (before-quit, below).
+ * It's also all there's time for when Windows ends the session (sign-out,
+ * restart, shutdown): before-quit never comes then, and ByTune is often still
+ * running in the tray. Runs once.
+ */
+function startExit(): void {
+  if (quitting) return;
+  // Mark the real quit BEFORE the drain: the hide-on-close guard must
+  // stand down for any close events that fire during shutdown.
+  quitting = true;
+  // Out of the tray at once: app.exit() would leave the icon there until hovered.
+  tray?.destroy();
+  tray = null;
+  mediaControls.stop();
+  stats.flushSync();
+  pip.savePipRect();
+  // A download cut off by the quit leaves no partial file behind; it restarts from the Downloads list.
+  downloads.abandonDownloads();
+  // Say "left" to a room while the drain below holds the quit; if it doesn't arrive, the next start does.
+  void rooms.leaveRoom().catch(() => undefined);
+  // Kick off a final push, then persist sync-meta synchronously: quit
+  // cannot await the push, but the meta must record any un-synced local
+  // edits (changedAt > syncedAt) so the next boot pushes them instead of
+  // letting the pull comparison overwrite them with a stale cloud copy.
+  void sync.flushPending();
+  sync.flushMetaSync();
+}
+
 function iconPath(): string | undefined {
   // Windows: give the window the multi-size .ico so the shell can pick
   // exact-size bitmaps for the taskbar button and preview thumbnails instead
   // of scaling a single raster. macOS keeps the .png (Dock setIcon).
+  // Next to the bundled main process (dist-electron/../build, packaged too: the
+  // build files ship), as the thumbbar icons are, rather than under
+  // app.getAppPath(), which a test launch through scripts/ moves.
   const name = process.platform === "win32" ? "icon.ico" : "icon.png";
-  const p = path.join(app.getAppPath(), "build", name);
+  const p = path.join(__dirname, "..", "build", name);
   return fs.existsSync(p) ? p : undefined;
 }
 
@@ -98,15 +158,7 @@ function menuWiring(): MenuWiring {
         console.warn("[bytune] menu backup import failed:", err instanceof Error ? err.message : err)
       );
     },
-    showMainWindow: (): void => {
-      if (!mainWindow || mainWindow.isDestroyed()) {
-        createWindow();
-        return;
-      }
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-    },
+    showMainWindow,
   };
 }
 
@@ -162,6 +214,44 @@ function applyThumbar(): boolean {
   ]);
 }
 
+/* ------------------------------ Windows tray ------------------------------ */
+
+/**
+ * Windows: with "Close to tray" on, closing the main window hides it here
+ * with the music paused, ByTune still running. A click brings back the same
+ * window; the right-click menu (close-to-tray.ts) has the transport and Quit
+ * ByTune, its Play or Pause following the same menu:push-state as the
+ * thumbbar. Windows only, as in ZCode: macOS has the Dock.
+ */
+let tray: Tray | null = null;
+
+function trayMenu(): Menu {
+  return Menu.buildFromTemplate(
+    buildTrayMenu(menuState, { sendCommand: menuWiring().sendCommand, showMainWindow, quit: () => app.quit() })
+  );
+}
+
+function createTray(): void {
+  if (process.platform !== "win32" || tray) return;
+  const icon = iconPath();
+  if (!icon) return;
+  try {
+    tray = new Tray(icon);
+  } catch (err) {
+    // No icon, nothing to hide into: closing the window quits instead (closeAction).
+    console.warn("[bytune] tray icon unavailable:", err instanceof Error ? err.message : err);
+    return;
+  }
+  tray.setToolTip("ByTune");
+  tray.setContextMenu(trayMenu());
+  tray.on("click", showMainWindow);
+  tray.on("double-click", showMainWindow);
+}
+
+function applyTray(): void {
+  if (tray && !tray.isDestroyed()) tray.setContextMenu(trayMenu());
+}
+
 // The window's own ground: what the page paints, and what shows before it does.
 const WINDOW_BG = "#0a0a0a";
 
@@ -212,12 +302,13 @@ function createWindow(): void {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: false,
-      // macOS close-to-hide: the window can stay hidden for hours while
-      // music plays. Chromium throttles hidden-window timers (fade curves,
-      // stats accumulation, lyric sync all run on JS timers), so the main
-      // window must keep full timer resolution. Windows destroys its window
-      // on close, so its behaviour is unchanged.
-      backgroundThrottling: isMac ? false : undefined,
+      // Closed, the window is hidden (always on macOS, in the tray on
+      // Windows) and can stay hidden for hours while music plays: on macOS
+      // it plays on, and from the Windows tray the menu, the media keys or
+      // the miniplayer can start it. Chromium throttles hidden-window timers
+      // (fade curves, stats accumulation, lyric sync all run on JS timers),
+      // so the main window must keep full timer resolution.
+      backgroundThrottling: false,
     },
   });
 
@@ -232,14 +323,27 @@ function createWindow(): void {
   });
 
   // Windows taskbar thumbbar: the toolbar can only attach once the window
-  // owns a taskbar button, i.e. after the first show. If Windows still
-  // refuses (shell timing), retry once — every later play/pause re-applies
-  // the bar anyway via menu:push-state.
+  // owns a taskbar button, i.e. once it's shown, and again each time it comes
+  // back from the tray (hidden, it has no button, and its play/pause may have
+  // gone stale meanwhile). If Windows still refuses (shell timing), retry
+  // once — every later play/pause re-applies the bar anyway via
+  // menu:push-state. Back from the tray it's also repainted twice, as ZCode
+  // does (desktopWindowChrome.ts): a window made with acrylic can come back blank.
   if (process.platform === "win32") {
-    mainWindow.once("show", () => {
+    const win = mainWindow;
+    let shownBefore = false;
+    win.on("show", () => {
       const ok = applyThumbar();
       if (isDev) console.log("[bytune] taskbar thumbbar:", ok ? "attached" : "deferred");
       if (!ok) setTimeout(applyThumbar, 1500);
+      if (shownBefore) {
+        for (const delay of [0, 32]) {
+          setTimeout(() => {
+            if (!win.isDestroyed()) win.webContents.invalidate();
+          }, delay);
+        }
+      }
+      shownBefore = true;
     });
   }
 
@@ -322,21 +426,43 @@ function createWindow(): void {
     }
   });
 
-  // macOS: the red close button (and Cmd+W) hide the window — a music player
-  // keeps playing with its window closed (Apple Music / Spotify behaviour),
-  // and the Dock icon brings it back via the activate handler. Only a real
-  // quit (Cmd+Q, Dock → Quit) destroys the window.
+  // Closing hides the window instead (close-to-tray.ts). macOS: the red close
+  // button and Cmd+W, and the music plays on (Apple Music / Spotify
+  // behaviour); the Dock brings it back via the activate handler. Windows,
+  // with "Close to tray" on: the close button, Alt+F4 and the taskbar's Close
+  // window put it in the tray with the music paused; the tray icon brings it
+  // back. Only a real quit (Cmd+Q, Dock → Quit, the tray's Quit ByTune)
+  // destroys it.
   mainWindow.on("close", (event) => {
-    if (isMac && !quitting) {
-      event.preventDefault();
-      mainWindow?.hide();
+    const win = mainWindow;
+    if (!win) return;
+    const action = closeAction({
+      platform: process.platform,
+      quitting,
+      fullScreen: win.isFullScreen(),
+      closeToTray: process.platform === "win32" && closeToTrayOn(),
+      trayShown: !!tray && !tray.isDestroyed(),
+    });
+    if (action === "close") return;
+    event.preventDefault();
+    if (action === "leave-fullscreen") {
+      win.setFullScreen(false);
+      return;
     }
+    // The same pause as the player's own button (an absolute pause: never starts anything).
+    if (action === "tray") menuWiring().sendCommand("pause");
+    win.hide();
   });
+
+  // Windows sign-out, restart or shutdown: before-quit never comes, so save
+  // what can be saved at once (startExit).
+  mainWindow.on("session-end", startExit);
 
   mainWindow.on("closed", () => {
     mainWindow = null;
     // The miniplayer floats above other apps but is not a stand-alone app:
-    // closing the main window takes the native PiP with it (and quits).
+    // closing the main window for real (not hiding it) takes the native PiP
+    // with it (and quits).
     pip.closePip();
   });
 }
@@ -925,6 +1051,7 @@ function registerIpc(): void {
     };
     applyMenu();
     applyThumbar();
+    applyTray();
     mediaControls.setPlaying(menuState.playing);
   });
 
@@ -1041,11 +1168,9 @@ if (!gotLock) {
     queueOpen([file]);
   });
   app.on("second-instance", (_event, argv) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-    }
+    // Opening ByTune again (Start, a shortcut, an audio file, a link) brings
+    // back the running window, from the tray too.
+    showMainWindow();
     const url = argv.find((a) => a.startsWith("bytune://"));
     if (url) oauthFromUrl(url);
     queueOpen(audioArgs(argv));
@@ -1076,7 +1201,7 @@ if (!gotLock) {
     }
     persist.migrateLegacyData();
     transition.initializeOwner();
-    pip.bindMainWindowGetter(() => mainWindow);
+    pip.bindMainWindowGetter(() => mainWindow, showMainWindow);
     auth.registerProtocol();
     auth.initInstallMarker();
     sync.bindClient(auth.getClient);
@@ -1141,22 +1266,8 @@ if (!gotLock) {
         event.preventDefault();
         return;
       }
-      // Mark the real quit BEFORE the drain: the hide-on-close guard must
-      // stand down for any close events that fire during shutdown.
-      quitting = true;
-      mediaControls.stop();
-      stats.flushSync();
-      pip.savePipRect();
-      // A download cut off by the quit leaves no partial file behind; it restarts from the Downloads list.
-      downloads.abandonDownloads();
-      // Say "left" to a room while the drain below holds the quit; if it doesn't arrive, the next start does.
-      void rooms.leaveRoom().catch(() => undefined);
-      // Kick off a final push, then persist sync-meta synchronously: quit
-      // cannot await the push, but the meta must record any un-synced local
-      // edits (changedAt > syncedAt) so the next boot pushes them instead of
-      // letting the pull comparison overwrite them with a stale cloud copy.
-      void sync.flushPending();
-      sync.flushMetaSync();
+      // The real-quit flag first, then what has to be saved at once.
+      startExit();
       // Close-time durability: the renderer's last coalesced writes and any
       // queued ownership work may still be in flight when the window dies.
       // Hold quit for a bounded drain — the final player write lands unless
@@ -1206,28 +1317,24 @@ if (!gotLock) {
     stats.initStats();
     void startStreamProxy().catch((err) => console.warn("[bytune] stream proxy failed:", err));
     createWindow();
+    createTray();
     mediaControls.start({
       onAction: (action) => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("media:action", action);
       },
       readLocalArt: (thumb) => locallib.readLocalArtThumb(thumb)?.data ?? null,
     });
-    app.on("activate", () => {
-      // macOS Dock re-open: bring the hidden main window back, recreate it
-      // only if it was actually destroyed (real quit never reaches here).
-      if (!mainWindow || mainWindow.isDestroyed()) createWindow();
-      else {
-        if (mainWindow.isMinimized()) mainWindow.restore();
-        mainWindow.show();
-        mainWindow.focus();
-      }
-    });
+    // macOS Dock re-open: bring the hidden main window back, recreate it
+    // only if it was actually destroyed (real quit never reaches here).
+    app.on("activate", showMainWindow);
   });
 
   app.on("window-all-closed", () => {
     // macOS: the app keeps running when its windows close (close-to-hide
     // above means the main window is hidden, not destroyed) — quit comes
-    // from Cmd+Q / Dock → Quit, which goes through before-quit.
+    // from Cmd+Q / Dock → Quit, which goes through before-quit. Windows hides
+    // into the tray the same way, so this only comes when the window really
+    // closes there: "Close to tray" off, or no tray icon.
     if (!isMac) app.quit();
   });
 }

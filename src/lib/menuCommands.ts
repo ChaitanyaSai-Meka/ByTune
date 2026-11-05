@@ -22,6 +22,10 @@ function runCommand(command: string): void {
     case "play-pause":
       player.toggle();
       break;
+    // The window closed to the Windows tray: ByTune keeps running, quiet.
+    case "pause":
+      player.setPlaying(false);
+      break;
     case "next":
       player.next(true);
       break;

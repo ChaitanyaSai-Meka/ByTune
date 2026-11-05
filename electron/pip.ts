@@ -96,6 +96,7 @@ let pipWindow: BrowserWindow | null = null;
 let lastRect: PipRect | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let getMainWindow: () => BrowserWindow | null = () => null;
+let showMainWindow: () => void = () => undefined;
 
 /** native cursor watch */
 let cursorWatch: ReturnType<typeof setInterval> | null = null;
@@ -125,9 +126,13 @@ function startCursorWatch(): void {
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
-/** Called from main.ts so this module can reach the main window without a circular import. */
-export function bindMainWindowGetter(get: () => BrowserWindow | null): void {
+/**
+ * Called from main.ts so this module can reach the main window without a
+ * circular import, and bring it back the one way main.ts does (from the tray too).
+ */
+export function bindMainWindowGetter(get: () => BrowserWindow | null, show: () => void): void {
   getMainWindow = get;
+  showMainWindow = show;
 }
 
 function notifyMain(channel: string, payload?: unknown): void {
@@ -349,12 +354,7 @@ export function registerPipIpc(): void {
     if (pipWindow && !pipWindow.isDestroyed()) pipWindow.minimize();
   });
   ipcMain.on("pip:show-main", (event) => {
-    if (!fromPip(event)) return;
-    const win = getMainWindow();
-    if (!win || win.isDestroyed()) return;
-    if (win.isMinimized()) win.restore();
-    win.show();
-    win.focus();
+    if (fromPip(event)) showMainWindow();
   });
   // Playback snapshots flow main window → PiP.
   ipcMain.on("pip:state", (event, snapshot: unknown) => {

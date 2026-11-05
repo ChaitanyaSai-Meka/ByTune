@@ -89,6 +89,8 @@ interface SettingsState {
   /* Miscellaneous */
   dontRepeatSuggestions: boolean;
   hideVolumeBar: boolean;
+  /** Windows: closing the window hides ByTune in the tray, music paused (electron/close-to-tray.ts). This device's own. */
+  closeToTray: boolean;
 
   setDownloadDir(dir: string | null): void;
   setDownloadQuality(q: DownloadQuality): void;
@@ -122,6 +124,7 @@ interface SettingsState {
   setFilterNonMusicAudio(v: boolean): void;
   setDontRepeatSuggestions(v: boolean): void;
   setHideVolumeBar(v: boolean): void;
+  setCloseToTray(v: boolean): void;
 }
 
 export const useSettings = create<SettingsState>()(
@@ -163,6 +166,8 @@ export const useSettings = create<SettingsState>()(
 
       dontRepeatSuggestions: false,
       hideVolumeBar: false,
+      // On, as in ZCode: the main process reads it from this store's file when the window closes.
+      closeToTray: true,
 
       setDownloadDir: (downloadDir) => set({ downloadDir }),
       setDownloadQuality: (downloadQuality) => set({ downloadQuality }),
@@ -202,6 +207,7 @@ export const useSettings = create<SettingsState>()(
       setFilterNonMusicAudio: (filterNonMusicAudio) => set({ filterNonMusicAudio }),
       setDontRepeatSuggestions: (dontRepeatSuggestions) => set({ dontRepeatSuggestions }),
       setHideVolumeBar: (hideVolumeBar) => set({ hideVolumeBar }),
+      setCloseToTray: (closeToTray) => set({ closeToTray }),
     }),
     {
       name: "settings",

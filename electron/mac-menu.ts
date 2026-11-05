@@ -21,6 +21,8 @@
 /** Commands the renderer understands (src/lib/menuCommands.ts mirrors this). */
 export type MenuCommand =
   | "play-pause"
+  /** Not on a menu: main.ts sends it as the window closes to the Windows tray. */
+  | "pause"
   | "next"
   | "previous"
   | "shuffle"

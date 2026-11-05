@@ -48,6 +48,7 @@ import {
   Maximize2,
   MicVocal,
   Palette,
+  PanelBottom,
   RefreshCw,
   Repeat2,
   Search,
@@ -64,6 +65,7 @@ import {
   X,
 } from "lucide-react";
 import { DOWNLOAD_QUALITY_LABEL, LOUDNESS_LABEL, STREAM_QUALITY_LABEL, useSettings } from "../stores/settings";
+import { isWindows } from "../lib/platform";
 import { useLibrary } from "../stores/library";
 import { shownName, useSession } from "../lib/session";
 import { displayNameProblem, normalizeDisplayName } from "../lib/account-validators";
@@ -804,6 +806,17 @@ function PlaybackPane() {
           />
         </Row>
       </Group>
+      {/* Windows only: macOS always keeps ByTune running (and playing) with the window closed, and the Dock brings it back. */}
+      {isWindows && (
+        <Group title="Background">
+          <Row
+            icon={PanelBottom}
+            title="Close to tray"
+            note="Closing the window pauses the music; quit from the tray icon"
+            toggle={{ checked: s.closeToTray, onChange: s.setCloseToTray }}
+          />
+        </Group>
+      )}
     </>
   );
 }
