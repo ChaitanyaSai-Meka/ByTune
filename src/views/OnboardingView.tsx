@@ -831,7 +831,7 @@ export function Onboarding({ initial }: { initial: Screen }) {
 
       <div className="ob-scroll">
         <div className="ob-side">
-          <h1 className="ob-brand">
+          <h1 className="ob-brand" data-intro-target>
             <img src={brandLogo} alt="" aria-hidden className="ob-brand-mark" />
             <img src={brandText} alt="ByTune" className="ob-brand-word" />
           </h1>

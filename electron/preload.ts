@@ -81,6 +81,8 @@ const api = {
   windowMaximizeToggle: () => ipcRenderer.send("window:maximizeToggle"),
   windowClose: () => ipcRenderer.send("window:close"),
   isMaximized: () => ipcRenderer.invoke("window:isMaximized"),
+  /** The launch intro has handed over: the window's glass (main.ts setGlass) can go. */
+  introDone: () => ipcRenderer.send("window:introDone"),
   /** Whether the trackpad moves content along with the fingers (null: can't tell). */
   naturalScrolling: (): Promise<boolean | null> => ipcRenderer.invoke("input:naturalScrolling"),
   setOverlayChrome: (visible: boolean) => ipcRenderer.invoke("window:setOverlayChrome", visible),

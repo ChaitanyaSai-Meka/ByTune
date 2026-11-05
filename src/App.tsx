@@ -383,6 +383,20 @@ export default function App() {
     return () => unsubs.forEach((u) => u());
   }, []);
 
+  // The launch intro (src/intro.ts) shows the app once it's ready: its first screen rendered with
+  // the saved settings. With Reduce animation on, the intro stops there instead of finishing.
+  useEffect(() => {
+    if (!session.loaded) return;
+    const ready = (): void => {
+      window.dispatchEvent(new CustomEvent("bytune-startup-ready", { detail: { reduceMotion: useSettings.getState().reduceAnimation } }));
+    };
+    if (useSettings.persist.hasHydrated()) {
+      ready();
+      return;
+    }
+    return useSettings.persist.onFinishHydration(ready);
+  }, [session.loaded]);
+
   useKeyboardShortcuts();
   useAmbient();
   useAppearance();

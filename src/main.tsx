@@ -3,8 +3,11 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { PipApp } from "./pip/PipApp";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { endIntro } from "./intro";
 import "./lib/platform";
 import "./index.css";
+
+endIntro();
 
 /**
  * One bundle, two windows: the main app shell, and — when this renderer was

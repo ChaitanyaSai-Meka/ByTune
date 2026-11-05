@@ -162,13 +162,37 @@ function applyThumbar(): boolean {
   ]);
 }
 
+// The window's own ground: what the page paints, and what shows before it does.
+const WINDOW_BG = "#0a0a0a";
+
+// Windows 11 glass under the launch intro, as in ZCode: the intro (index.html) opens over the blurred
+// desktop, then darkens into the app. Only while it plays: once it hands over (window:introDone) the window
+// is solid again, so the opaque app never shows the material at its edges while it resizes. A reload
+// replays the intro, so it brings the glass back. Older Windows has no acrylic and opens dark.
+function setGlass(on: boolean): void {
+  if (process.platform !== "win32" || !mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    if (on) {
+      mainWindow.setBackgroundColor("#00000000");
+      mainWindow.setBackgroundMaterial("acrylic");
+    } else {
+      mainWindow.setBackgroundMaterial("none");
+      mainWindow.setBackgroundColor(WINDOW_BG);
+    }
+  } catch (err) {
+    console.warn("[bytune] window glass:", err);
+  }
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
     minWidth: 1000,
     minHeight: 640,
-    backgroundColor: "#0a0a0a",
+    ...(process.platform === "win32"
+      ? { backgroundColor: "#00000000", backgroundMaterial: "acrylic" as const }
+      : { backgroundColor: WINDOW_BG }),
     title: "ByTune",
     show: false,
     autoHideMenuBar: true,
@@ -201,6 +225,9 @@ function createWindow(): void {
     // (Spotify's convention) — the user's own zoom is remembered by the OS.
     if (!isMac && !mainWindow?.isMaximized()) mainWindow?.maximize();
     mainWindow?.show();
+  });
+  mainWindow.webContents.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument) setGlass(true);
   });
 
   // Windows taskbar thumbbar: the toolbar can only attach once the window
@@ -609,6 +636,9 @@ function registerIpc(): void {
     else mainWindow.maximize();
   });
   ipc.on("window:close", () => mainWindow?.close());
+  ipc.on("window:introDone", (e) => {
+    if (e.sender === mainWindow?.webContents) setGlass(false);
+  });
   ipc.handle("window:isMaximized", () => !!mainWindow?.isMaximized());
   // Which way the trackpad scrolls, so the onboarding's drum keeps a two-finger roll under the fingers.
   ipc.handle("input:naturalScrolling", () => naturalScrolling());

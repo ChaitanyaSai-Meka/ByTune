@@ -51,7 +51,7 @@ import brandText from "../assets/brand/bytune-Text.svg";
     packaged app — a string like "/brand/x.svg" only works on the dev server. */
 function BrandHeader() {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2" data-intro-target>
       <img
         src={brandLogo}
         alt=""
