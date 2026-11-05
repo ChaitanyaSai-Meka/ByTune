@@ -251,15 +251,30 @@ export function playlistFolderItems(playlist: Playlist): MenuItem[] {
       action: () => useLibrary.getState().setPlaylistFolder(playlist.id, f.id),
     })),
   ];
-  if (playlist.folderId) {
-    items.push({
+  return items;
+}
+
+/**
+ * A playlist's menu rows after any pin row: Rename, Delete, the folder choice. Inside a folder,
+ * "Remove from folder" takes Delete's place under Rename, in red, and Delete moves to the bottom in
+ * white: the row under Rename is the one pressed by mistake, and out of a folder is only a move.
+ */
+export function playlistOwnItems(playlist: Playlist): MenuItem[] {
+  const [rename, remove, subject] = playlistHeaderItems(playlist);
+  const folder = playlistFolderItems(playlist);
+  if (!playlist.folderId || !folder.length) return [rename, remove, subject, ...folder];
+  return [
+    rename,
+    {
       label: "Remove from folder",
       icon: FolderOpen,
-      separatorBefore: true,
+      danger: true,
       action: () => useLibrary.getState().setPlaylistFolder(playlist.id, null),
-    });
-  }
-  return items;
+    },
+    subject,
+    ...folder,
+    { ...remove, danger: false, separatorBefore: true },
+  ];
 }
 
 export function historyMenuItems(track: Track): MenuItem[] {

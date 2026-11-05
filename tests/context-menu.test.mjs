@@ -31,7 +31,7 @@ const { outputFiles } = await build({
       `export { ContextMenu } from "./src/components/ContextMenu";`,
       `export { useUI } from "./src/stores/ui";`,
       `export { useLibrary } from "./src/stores/library";`,
-      `export { trackMenuItems, playlistFolderItems } from "./src/lib/trackActions";`,
+      `export { trackMenuItems, playlistFolderItems, playlistOwnItems } from "./src/lib/trackActions";`,
     ].join("\n"),
     resolveDir: fileURLToPath(new URL("..", import.meta.url)),
     loader: "tsx",
@@ -42,7 +42,7 @@ const { outputFiles } = await build({
 });
 const module = { exports: {} };
 new Function("require", "module", "exports", outputFiles[0].text)(require, module, module.exports);
-const { ContextMenu, useUI, useLibrary, trackMenuItems, playlistFolderItems } = module.exports;
+const { ContextMenu, useUI, useLibrary, trackMenuItems, playlistFolderItems, playlistOwnItems } = module.exports;
 const { ListPlus, Trash2 } = require("lucide-react");
 
 async function mount() {
@@ -208,10 +208,38 @@ test("a playlist's folder is a choice: the folder it's in checked, the others mo
   const items = playlistFolderItems({ id: "p1", name: "Mine", tracks: [], folderId: "f1" });
   assert.deepEqual(
     items.map((i) => [i.label, i.header ? "caption" : i.checked]),
-    [["Folder", "caption"], ["Chill", true], ["Gym", false], ["Remove from folder", undefined]]
+    [["Folder", "caption"], ["Chill", true], ["Gym", false]]
   );
   useLibrary.setState({ folders: [] });
   assert.deepEqual(playlistFolderItems({ id: "p1", name: "Mine", tracks: [] }), [], "no folders, no choice");
+});
+
+test("in a folder, Remove from folder (red) sits under Rename and Delete playlist (white) moves to the bottom", async () => {
+  useLibrary.setState({ folders: [{ id: "f1", name: "Chill" }, { id: "f2", name: "Gym" }] });
+  // Each row as [label, how it reads]: a caption, a folder's check, or the row's colour.
+  const rows = (items) =>
+    items.filter((i) => !i.subject).map((i) => [i.label, i.header ? "caption" : i.checked ?? (i.danger ? "red" : "white")]);
+  const filed = playlistOwnItems({ id: "p1", name: "Mine", tracks: [], folderId: "f1" });
+  assert.deepEqual(rows(filed), [
+    ["Rename", "white"],
+    ["Remove from folder", "red"],
+    ["Folder", "caption"],
+    ["Chill", true],
+    ["Gym", false],
+    ["Delete playlist", "white"],
+  ]);
+  assert.ok(filed.at(-1).separatorBefore, "a hairline sets Delete apart at the bottom");
+  assert.ok(filed.some((i) => i.subject), "the playlist still heads the menu");
+  assert.deepEqual(
+    rows(playlistOwnItems({ id: "p2", name: "Loose", tracks: [] })),
+    [["Rename", "white"], ["Delete playlist", "red"], ["Folder", "caption"], ["Chill", false], ["Gym", false]],
+    "out of a folder the menu is as it was"
+  );
+  useLibrary.setState({ folders: [] });
+  assert.deepEqual(rows(playlistOwnItems({ id: "p3", name: "Stale", tracks: [], folderId: "gone" })), [
+    ["Rename", "white"],
+    ["Delete playlist", "red"],
+  ], "with no folders left there's nothing to remove it from");
 });
 
 test("only the listener's own scrolling closes a menu: the page scrolling by itself leaves it up", async () => {

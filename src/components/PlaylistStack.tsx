@@ -7,7 +7,7 @@ import { Pin, PinOff } from "lucide-react";
 import { CoverStack } from "./CoverStack";
 import { draggingFromPlaylist, useDrag, useTrackDrop } from "../lib/dnd";
 import { addSongToPlaylist } from "../lib/panelDrop";
-import { playlistFolderItems, playlistHeaderItems } from "../lib/trackActions";
+import { playlistOwnItems } from "../lib/trackActions";
 import { plural } from "../lib/format";
 import { useLibrary, type Playlist } from "../stores/library";
 import { usePlayer } from "../stores/player";
@@ -36,8 +36,7 @@ export function PlaylistStack({ playlist }: { playlist: Playlist }) {
               action: () => useLibrary.getState().togglePinPlaylist(playlist.id),
             },
           ]),
-      ...playlistHeaderItems(playlist),
-      ...playlistFolderItems(playlist),
+      ...playlistOwnItems(playlist),
     ]);
   return (
     <CoverStack

@@ -30,7 +30,7 @@ import { addSongsToPlaylists, staysOnDevice } from "../lib/devicePlaylists";
 import { upgradeArtwork } from "../lib/artwork";
 import { CreateMenu } from "./CreateMenu";
 import { askForNewFolder, folderMenuItems, rowIsOpen } from "../lib/collection";
-import { playlistFolderItems, playlistHeaderItems } from "../lib/trackActions";
+import { playlistOwnItems } from "../lib/trackActions";
 import { draggingFromPlaylist, dragHasAlbum, dragHasArtist, dragHasPlaylist, dragHasTrack, readAlbum, readArtist, readPlaylist, readTrack, type AlbumPayload, type ArtistPayload, type PlaylistPayload } from "../lib/dnd";
 import { requireBridge } from "../lib/bridge";
 import { downloadAll, startDownload } from "../lib/downloads";
@@ -570,8 +570,7 @@ function LibraryPill() {
           icon: playlist.pinned ? PinOff : Pin,
           action: () => useLibrary.getState().togglePinPlaylist(playlist.id),
         },
-        ...playlistHeaderItems(playlist),
-        ...playlistFolderItems(playlist),
+        ...playlistOwnItems(playlist),
       ]);
       return;
     }
