@@ -22,11 +22,12 @@ import { requireBridge } from "../../lib/bridge";
 import { storage } from "../persist";
 import { hiddenNow, tapsNow, useHomeEngagement } from "../../stores/homeEngagement";
 import { useUI } from "../../stores/ui";
-import type { HomeShelf } from "../../types";
+import type { HomeShelf, PlaylistCard } from "../../types";
 import { FALLBACK_MOODS } from "../../../electron/moods";
 import { getArtistBundle, peekBundle, pruneBundles, useBundleCacheVersion, type ArtistBundle } from "./candidates";
 import { useTasteProfile, type ArtistSignal, type TasteProfile } from "./profile";
 import { buildHomeSections, type HomeSection } from "./sections";
+import { coverRead } from "../palette";
 
 /* ------------------------------------------------------- youtube feed cache */
 /* Stale-while-revalidate: a manual refresh marks the caches stale and the
@@ -292,6 +293,26 @@ export function reloadHomeFeed(): void {
   useUI.getState().bumpHomeReload();
 }
 
+/**
+ * What Home leads with: the first of its picked playlists whose cover has real
+ * colour in it. While nothing is playing, the middle panel's glow borrows that
+ * cover, so a first visit is lit by colour rather than flat black, or grey off a
+ * black-and-white sleeve. Kept when Home closes; the next feed replaces it.
+ */
+export const useHomeLead = create<{ playlist: PlaylistCard | null }>(() => ({ playlist: null }));
+
+/** A cover counts as colourful with real colour over this share of it. */
+const LEAD_COLOURED = 0.3;
+
+async function homeLead(sections: HomeSection[]): Promise<PlaylistCard | null> {
+  const picks = (sections.find((s) => s.layout === "crate")?.playlists ?? []).filter((p) => !!p.thumb).slice(0, 8);
+  for (const p of picks) {
+    const read = await coverRead(p.thumb).catch(() => null);
+    if (read && read.colored >= LEAD_COLOURED) return p;
+  }
+  return picks[0] ?? null;
+}
+
 export function useHomeFeed(): { sections: HomeSection[]; profile: TasteProfile | null } {
   const profile = useTasteProfile();
   const reloadNonce = useUI((s) => s.homeReloadNonce);
@@ -314,7 +335,11 @@ export function useHomeFeed(): { sections: HomeSection[]; profile: TasteProfile 
     }
     const seq = ++runSeq.current;
     const apply = (next: HomeSection[]): void => {
-      if (runSeq.current === seq) setSections(next);
+      if (runSeq.current !== seq) return;
+      setSections(next);
+      void homeLead(next).then((playlist) => {
+        if (runSeq.current === seq) useHomeLead.setState({ playlist });
+      });
     };
 
     // Wave 0 — instant paint from stores + bundle cache + the last-known

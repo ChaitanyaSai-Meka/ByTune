@@ -3,12 +3,14 @@
  * light across the top of the panel, fading down into it. The real image keeps a cover's own colours,
  * a black-and-white one stays black and white and bright parts stay bright, where one colour picked
  * from it went muddy on warm covers. A new cover glows in over the last; with none, the glow fades
- * away. Not on the artist page (its hero is its own artwork) or Settings.
+ * away. With nothing playing yet, Home glows with the cover it leads with, so a first visit is lit
+ * too. Not on the artist page (its hero is its own artwork) or Settings.
  */
 import { useEffect, useState } from "react";
 import { glowBrightness } from "../lib/coverColor";
 import { useCoverRead } from "../lib/palette";
 import { usePlayer } from "../stores/player";
+import { useHomeLead } from "../lib/recs/feed";
 import { useUI } from "../stores/ui";
 
 /** How long a cover takes to glow in over the last one (and to fade away). */
@@ -34,7 +36,8 @@ export function CoverGlow() {
   const viewName = useUI((s) => s.view.name);
   const tintThumb = useUI((s) => s.tintThumb);
   const playingThumb = usePlayer((s) => s.queue[s.index]?.thumb ?? null);
-  const url = tintThumb ?? playingThumb ?? null;
+  const leadThumb = useHomeLead((s) => s.playlist?.thumb ?? null);
+  const url = tintThumb ?? playingThumb ?? (viewName === "home" ? leadThumb : null);
   const [layers, setLayers] = useState<Layer[]>(() => (url ? [{ id: 0, url }] : []));
 
   // A new cover goes on top of the one showing (anything older goes).

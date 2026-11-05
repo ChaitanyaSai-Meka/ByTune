@@ -10,13 +10,13 @@
  * (see LyricsCenter.tsx), not here.
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { BadgeCheck, Heart, Music2, ThumbsDown, X } from "lucide-react";
+import { BadgeCheck, Heart, Music2, Play, ThumbsDown, X } from "lucide-react";
 import { autoplayTail, isRadioSeed, shownTrack, usePlayer } from "../stores/player";
 import { useSettings } from "../stores/settings";
 import { useUI, type MenuItem } from "../stores/ui";
 import { dontPlay, useAutoplayInfo } from "../lib/autoplay";
 import { confirmClearHistory, historyMenuItems, trackMenuItems } from "../lib/trackActions";
-import { Artwork, EqBars, IconBtn, Switch } from "./primitives";
+import { Artwork, Btn, EqBars, IconBtn, Switch } from "./primitives";
 import { RoomPanel } from "./RoomPanel";
 import { useRoom } from "../stores/room";
 import { upgradeArtwork, wideArtwork } from "../lib/artwork";
@@ -28,6 +28,7 @@ import { useArtistImage } from "../lib/artistImage";
 import { monthlyListenersLabel, useArtistAbout } from "../lib/artistAbout";
 import { useLibrary } from "../stores/library";
 import type { Track } from "../types";
+import { playSource } from "../lib/recs/playback";
 
 /** The queue's "Now playing" row — draggable like every other song row. */
 function QueueCurrentRow({ track }: { track: Track }) {
@@ -464,19 +465,7 @@ function DetailsBody() {
   const { artistImage } = useArtistImage(track);
   const detailsDrag = useDrag({ track: track ?? { id: "", title: "", artist: "", duration: 0, thumb: "" } });
 
-  if (!track) {
-    return (
-      <div className="flex-1 grid place-items-center px-6">
-        <div className="text-center">
-          <div className="w-14 h-14 rounded-2xl bg-ink-hi/[0.05] grid place-items-center mx-auto mb-4">
-            <Music2 className="w-5 h-5 text-ink-hi/35" />
-          </div>
-          <p className="text-[14px] font-semibold text-ink-hi">Nothing playing</p>
-          <p className="text-[12.5px] text-ink-hi/55 mt-1">Song details will show up here.</p>
-        </div>
-      </div>
-    );
-  }
+  if (!track) return <StartHere />;
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
@@ -504,6 +493,46 @@ function DetailsBody() {
       </div>
 
       <AboutArtistCard track={track} fallbackImage={artistImage ?? track.thumb ?? null} />
+    </div>
+  );
+}
+
+/** The song the panel offers before anything has played: the same for everyone, every time (the user's pick). */
+const START_SONG: Track = {
+  id: "Kr4EQDVETuA",
+  title: "Billie Jean",
+  artist: "Michael Jackson",
+  artistId: "UCoIOOL7QKuBhQHVKL8y7BEQ",
+  album: "Thriller",
+  albumId: "MPREb_dqWTncCjkSp",
+  duration: 0,
+  thumb: "https://yt3.googleusercontent.com/URvHCfI2iyGAlAwqqBFeaFhU9DeKk_iuX40OIIIj8Zp0wIT3BVsJ2JRMwLLbUB9EZS7t7oDlMrI2S3OvGA=w544-h544-l90-rj",
+};
+
+/**
+ * Nothing has played yet (a new listener, guest or account): instead of an
+ * empty panel, Billie Jean, ready to play, with Michael Jackson's About card
+ * under it, laid out like the panel's own Now playing.
+ */
+function StartHere() {
+  const track = START_SONG;
+  const play = (): void => void playSource({ type: "tracks", tracks: [track], label: track.title });
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
+      <p className="px-0.5 text-[12.5px] font-semibold text-ink-hi/55 animate-meta-in">Nothing playing yet</p>
+      <div>
+        <Artwork src={track.thumb} className="w-full aspect-square rounded-xl shadow-elev animate-art-in" iconClassName="w-10 h-10" alt="" />
+        <div className="px-0.5 mt-2.5 animate-meta-in">
+          <div className="text-[24px] font-extrabold tracking-[-0.5px] text-ink-hi leading-tight">{track.title}</div>
+          <div className="text-[14px] text-ink-hi/70 mt-1">{track.artist}</div>
+        </div>
+        <div className="flex items-center gap-2 px-0.5 mt-3">
+          <Btn variant="white" icon={Play} onClick={play}>
+            Play
+          </Btn>
+        </div>
+      </div>
+      <AboutArtistCard track={track} fallbackImage={track.thumb} />
     </div>
   );
 }
@@ -536,13 +565,22 @@ function AboutArtistCard({
 
   if (!about) return null;
 
+  const open = (): void => navigate({ name: "artist", param: about.artistId });
+  // A focusable box rather than a <button>: the View profile button sits inside it, and a button can't hold one.
   return (
-    <button
-      onClick={() => navigate({ name: "artist", param: about.artistId })}
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+        e.preventDefault();
+        open();
+      }}
       title={`Open ${about.name} — or drag into Your Library`}
       aria-label={`About the artist — open ${about.name}`}
       {...drag.props}
-      className={`fit-host group rounded-xl bg-ink-hi/[0.04] overflow-hidden text-left cursor-pointer hover:bg-ink-hi/[0.06] transition-colors animate-fade-in ${
+      className={`fit-host group block w-full rounded-xl bg-ink-hi/[0.04] overflow-hidden text-left cursor-pointer hover:bg-ink-hi/[0.06] transition-colors animate-fade-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${
         drag.dragging ? "opacity-40" : ""
       }`}
     >
@@ -591,7 +629,7 @@ function AboutArtistCard({
           </p>
         )}
       </div>
-    </button>
+    </div>
   );
 }
 

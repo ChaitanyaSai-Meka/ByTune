@@ -86,6 +86,15 @@ export function useCoverRead(url: string | null | undefined): CoverRead | null {
   return read;
 }
 
+/** A cover's read outside a component, from the same cache as the hook; null when it can't be read. */
+export async function coverRead(url: string): Promise<CoverRead | null> {
+  const known = readCache.get(url);
+  if (known) return known;
+  const fresh = await readArtwork(url);
+  if (fresh) remember(url, fresh);
+  return fresh;
+}
+
 const triplet = (rgb: Rgb): string => `${rgb[0]} ${rgb[1]} ${rgb[2]}`;
 
 function toPalette(read: CoverRead): ArtworkPalette {

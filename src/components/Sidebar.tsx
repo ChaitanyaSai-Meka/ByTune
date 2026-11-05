@@ -10,8 +10,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Download,
   Folder,
-  FolderOpen,
-  BarChart3,
   Heart,
   Library,
   ListPlus,
@@ -34,6 +32,7 @@ import { playlistOwnItems } from "../lib/trackActions";
 import { draggingFromPlaylist, dragHasAlbum, dragHasArtist, dragHasPlaylist, dragHasTrack, readAlbum, readArtist, readPlaylist, readTrack, type AlbumPayload, type ArtistPayload, type PlaylistPayload } from "../lib/dnd";
 import { requireBridge } from "../lib/bridge";
 import { downloadAll, startDownload } from "../lib/downloads";
+import { DOWNLOADS_COVER, LIKED_COVER, LOCAL_COVER, REPLAY_COVER } from "../lib/libraryCovers";
 import { askToConnectSpotify, useSpotify } from "../lib/spotify";
 import { useEdgeFades } from "../lib/useEdgeFades";
 import { arrange, moveKey } from "../lib/libraryOrder";
@@ -143,7 +142,8 @@ function LibraryPill() {
     id: "__liked__",
     title: "Liked Songs",
     subtitle: `Playlist · ${liked.length} ${liked.length === 1 ? "track" : "tracks"}`,
-    thumb: liked[0]?.thumb,
+    // The four collections ByTune keeps carry sleeves of their own, the same from the first day.
+    thumb: LIKED_COVER,
     kind: "playlist",
     pinned: singlePinned("liked"),
     singleKey: "liked",
@@ -152,7 +152,7 @@ function LibraryPill() {
     id: "__downloads__",
     title: "Downloads",
     subtitle: `Playlist · ${doneDownloads.length} ${doneDownloads.length === 1 ? "track" : "tracks"}`,
-    thumb: doneDownloads[0]?.track.thumb,
+    thumb: DOWNLOADS_COVER,
     kind: "downloads",
     pinned: singlePinned("downloads"),
     singleKey: "downloads",
@@ -161,6 +161,7 @@ function LibraryPill() {
     id: "__local__",
     title: "Local Music",
     subtitle: "On this device",
+    thumb: LOCAL_COVER,
     kind: "local",
     pinned: singlePinned("local"),
     singleKey: "local",
@@ -186,6 +187,7 @@ function LibraryPill() {
     id: "__replay__",
     title: "Replay",
     subtitle: "Your listening stats",
+    thumb: REPLAY_COVER,
     kind: "replay",
     pinned: singlePinned("replay"),
     singleKey: "replay",
@@ -681,14 +683,6 @@ function LibraryPill() {
         ) : r.kind === "spotify" ? (
           <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
             <SpotifyIcon className="w-6 h-6" />
-          </span>
-        ) : r.kind === "local" || r.kind === "replay" ? (
-          <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
-            {r.kind === "local" ? (
-              <FolderOpen className="w-5 h-5 text-ink-hi/55" />
-            ) : (
-              <BarChart3 className="w-5 h-5 text-ink-hi/55" />
-            )}
           </span>
         ) : r.thumb ? (
           <img src={upgradeArtwork(r.thumb)} alt="" draggable={false} className="w-12 h-12 rounded-md object-cover art-hairline shrink-0" />

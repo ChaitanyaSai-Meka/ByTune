@@ -23,6 +23,7 @@ import type { LocalTrack } from "../../electron/local-library";
 import type { Track } from "../types";
 import { LikedView } from "./LikedView";
 import { DownloadsView } from "./DownloadsView";
+import { DOWNLOADS_COVER, LIKED_COVER, LOCAL_COVER } from "../lib/libraryCovers";
 
 type LibTab = "playlists" | "liked" | "downloaded";
 
@@ -160,7 +161,8 @@ export function LibraryView() {
   });
   const collections = [
     collection("liked", {
-      covers: liked.map((t) => t.thumb),
+      // Each collection's own sleeve in front, its songs fanned behind.
+      covers: [LIKED_COVER, ...liked.map((t) => t.thumb)],
       title: "Liked Songs",
       subtitle: plural(liked.length, "song", "songs"),
       fallback: Heart,
@@ -168,7 +170,7 @@ export function LibraryView() {
       onPlay: liked.length ? play(liked, "__liked__") : undefined,
     }),
     collection("downloads", {
-      covers: saved.map((t) => t.thumb),
+      covers: [DOWNLOADS_COVER, ...saved.map((t) => t.thumb)],
       title: "Downloads",
       subtitle: plural(saved.length, "song", "songs"),
       fallback: Download,
@@ -176,7 +178,7 @@ export function LibraryView() {
       onPlay: saved.length ? play(saved, "__downloads__") : undefined,
     }),
     collection("local", {
-      covers: local.map((t) => t.art),
+      covers: [LOCAL_COVER, ...local.map((t) => t.art)],
       title: "Local Music",
       subtitle: local.length ? plural(local.length, "song", "songs") : "On this device",
       fallback: FolderOpen,
