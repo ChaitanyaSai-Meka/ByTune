@@ -26,7 +26,8 @@ import { CoverGlow } from "./components/CoverGlow";
 import { PanelScrollbar } from "./components/PanelScrollbar";
 import { watchSession, useSession } from "./lib/session";
 import { watchSyncRestores } from "./lib/syncRestore";
-import { createSwipeNav, scrollsSideways } from "./lib/swipeNav";
+import { createSwipeNav, scrollsSideways, SWIPE_LIFT_MS, type SwipeDir, type SwipeUpdate } from "./lib/swipeNav";
+import { SwipeArrow, swipeArrow } from "./components/SwipeArrow";
 import { takeOnboardingIntent } from "./lib/onboardingIntent";
 import { startPipSync } from "./pip/pipSync";
 import { usePlayer } from "./stores/player";
@@ -183,16 +184,36 @@ function useKeyboardShortcuts(): void {
       if (e.button === 3) useUI.getState().goBack();
       else useUI.getState().goForward();
     };
-    // So do two-finger trackpad swipes, as in Chrome.
+    // So do two-finger trackpad swipes, as in Chrome: an arrow follows the
+    // swipe out of the panel's edge, and letting go past the line takes the
+    // step. Not under a dialog or a menu, nor in full-screen Now Playing,
+    // where the page that would change is out of sight.
     const swipe = createSwipeNav();
+    let settle = 0;
+    const blocked = (): boolean => {
+      const ui = useUI.getState();
+      return !!(ui.dialog || ui.contextMenu || ui.playlistPicker || ui.nowPlayingOpen);
+    };
+    const apply = (u: SwipeUpdate | null): void => {
+      if (!u) return;
+      if (u.kind === "track") swipeArrow.track(u.dir, u.progress);
+      else if (u.kind === "cancel" || blocked()) swipeArrow.cancel();
+      else {
+        swipeArrow.commit();
+        const ui = useUI.getState();
+        if (u.dir === "back") ui.goBack();
+        else ui.goForward();
+      }
+    };
     const onWheel = (e: WheelEvent): void => {
       if (e.defaultPrevented) return;
-      const step = swipe(e, (dx) => scrollsSideways(e.target, dx));
-      if (!step) return;
       const ui = useUI.getState();
-      if (ui.dialog || ui.contextMenu || ui.playlistPicker) return;
-      if (step === "back") ui.goBack();
-      else ui.goForward();
+      const open = !blocked();
+      const can = (dir: SwipeDir): boolean => open && (dir === "back" ? ui.navPast.length > 0 : ui.navFuture.length > 0);
+      apply(swipe.wheel(e, (dx) => scrollsSideways(e.target, dx), can, window.innerWidth));
+      // The page never sees the fingers lift: a quiet wheel settles the swipe.
+      window.clearTimeout(settle);
+      settle = window.setTimeout(() => apply(swipe.quiet(performance.now())), SWIPE_LIFT_MS + 10);
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("mouseup", onMouseUp);
@@ -201,6 +222,8 @@ function useKeyboardShortcuts(): void {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("mouseup", onMouseUp);
       window.removeEventListener("wheel", onWheel);
+      window.clearTimeout(settle);
+      swipeArrow.cancel();
     };
   }, []);
 }
@@ -435,6 +458,7 @@ export default function App() {
             }`}
           />
           <CoverGlow />
+          <SwipeArrow />
           {lyricsCenter ? (
             <LyricsCenter />
           ) : (
