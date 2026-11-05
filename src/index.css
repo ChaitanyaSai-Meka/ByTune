@@ -3599,6 +3599,63 @@ html.reduce-motion .ob-way-go {
   animation: fs-viz-dance var(--dur, 2.6s) ease-in-out var(--delay, 0s) infinite;
 }
 
+/* ---------- fullscreen idle ----------
+   YouTube's rule (NowPlaying + useIdle): while music plays and the pointer
+   rests, the controls fade, the cursor goes and the room re-centres on the
+   whole screen. The header and the play bar give up their height, the
+   switch and the like pill close up, the cover grows 15%, and the lyrics
+   run from top to bottom. A move brings it all back.
+   A transition is taken from the state it ends in: the base rules carry the
+   quick wake (the bar is there by the time a click lands), the .fs-idle
+   rules the slow settle. Every size moves on one clock, so the lyrics'
+   anchor, re-measured each frame, never trails the cover. */
+.fs-chrome {
+  transition:
+    opacity 200ms ease-out,
+    height 420ms var(--ease-enter),
+    margin 420ms var(--ease-enter);
+}
+.fs-art {
+  width: min(38vh, 32vw, 480px);
+  transition: width 420ms var(--ease-enter);
+}
+.fs-idle {
+  cursor: none;
+}
+/* Over everything while idle: nothing under the hidden cursor stays hovered
+   (no lit button, no stray tooltip), and the first click only wakes. */
+.fs-idle::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+}
+.fs-idle .fs-chrome {
+  opacity: 0;
+  transition:
+    opacity 320ms ease,
+    height 900ms cubic-bezier(0.45, 0, 0.2, 1),
+    margin 900ms cubic-bezier(0.45, 0, 0.2, 1);
+}
+.fs-idle .fs-head {
+  height: 16px;
+}
+.fs-idle .fs-switch,
+.fs-idle .fs-like,
+.fs-idle .fs-dock {
+  height: 0;
+  margin: 0;
+}
+.fs-idle .fs-art {
+  width: min(43.7vh, 36.8vw, 552px);
+  transition: width 900ms cubic-bezier(0.45, 0, 0.2, 1);
+}
+/* Moving, the lyric lines get a layer of their own, so the per-frame shift
+   is a layer offset rather than a repaint of every blurred line. */
+.fs-moving .lyrics-lines {
+  will-change: transform;
+}
+
 /* ---------- reduced motion ----------
    Mirrors the in-app "Reduce animation" kill-switch for the OS-level
    preference, so users who request reduced motion system-wide get it

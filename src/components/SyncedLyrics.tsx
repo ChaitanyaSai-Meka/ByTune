@@ -258,7 +258,13 @@ export function LyricsView({
       const container = containerRef.current;
       const el = activeRef.current;
       if (!container || !el) return;
-      const target = Math.max(0, el.offsetTop + el.clientHeight / 2 - container.clientHeight * anchor);
+      // The line's centre in the scroller's content, measured against the
+      // scroller itself: offsetTop would count from the list instead while
+      // the list has a layer of its own (fullscreen's .fs-moving), skipping
+      // the head spacer.
+      const r = el.getBoundingClientRect();
+      const mid = container.scrollTop + r.top - container.getBoundingClientRect().top + r.height / 2;
+      const target = Math.max(0, mid - container.clientHeight * anchor);
       const from = container.scrollTop;
       window.cancelAnimationFrame(glide.current);
       const still =
@@ -363,7 +369,7 @@ export function LyricsView({
           }}
         >
         <div aria-hidden="true" style={{ height: topSpacer, flexShrink: 0 }} />
-        <div className={hero ? "space-y-7" : large ? "space-y-5" : "space-y-4"}>
+        <div className={`lyrics-lines ${hero ? "space-y-7" : large ? "space-y-5" : "space-y-4"}`}>
           {(lines ?? []).map((line, i) => {
             const active = i === activeIndex;
             const dist = i - activeIndex;

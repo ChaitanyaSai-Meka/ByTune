@@ -15,13 +15,17 @@
  *            Lyrics | Queue control.
  *   behind   the artwork's own colours — an ArtworkPalette floor plus a
  *            heavily blurred cover — crossfaded per track and held dark.
+ *   idle     while music plays and the pointer rests, the controls and the
+ *            cursor go and the room re-centres on the whole screen (useIdle
+ *            and the .fs-idle rules in index.css).
  *
  * Entering releases the shell into a true OS fullscreen; the mount/exit
  * choreography below is the same state machine the previous fullscreen mode
  * used, kept verbatim so the window behavior (Esc, rapid toggles, reduced
  * motion) is untouched.
  */
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
+import { flushSync } from "react-dom";
 import { ChevronDown, Heart, Music2 } from "lucide-react";
 import { PlayerBar } from "./PlayerBar";
 import { QueuePanel } from "./RightRail";
@@ -38,7 +42,11 @@ import { shortTitle, titleSource } from "../lib/format";
 import { FitText } from "./FitText";
 import { useCanvas } from "../lib/canvas";
 import { requestLyricsAlignment, useLyricsOffset } from "../lib/lyricsOffset";
+import { useIdle } from "../lib/useIdle";
 import type { LyricsResult } from "../types";
+
+/** How long the pointer rests before the controls and the cursor go (YouTube's wait). */
+const IDLE_MS = 3000;
 
 /* ================================================================ backdrop */
 
@@ -199,6 +207,68 @@ function FsModeSwitch({
   );
 }
 
+/* ================================================================== lyrics */
+
+/**
+ * The lyrics panel. Its live line rests at the album cover's centre height:
+ * the panel is measured against the artwork tile (boxes move with the
+ * viewport, with maximize/restore and with the idle re-centring), so the
+ * anchor is a fraction re-derived whenever either box changes size. The
+ * re-centring resizes both every frame; each resize renders here inside the
+ * frame that caused it (flushSync), so the line never trails the cover, and
+ * only the lyrics re-render. The artwork row's entrance settles inside the
+ * first ~400ms, hence the two timed re-measures.
+ */
+function FsLyrics({
+  artRef,
+  trackId,
+  lyrics,
+  loading,
+  offset,
+}: {
+  artRef: RefObject<HTMLDivElement | null>;
+  trackId: string;
+  lyrics: LyricsResult | null;
+  loading: boolean;
+  offset: number;
+}) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [anchor, setAnchor] = useState(0.5);
+  useLayoutEffect(() => {
+    const measure = (): void => {
+      const art = artRef.current;
+      const panel = panelRef.current;
+      if (!art || !panel) return;
+      const a = art.getBoundingClientRect();
+      const p = panel.getBoundingClientRect();
+      if (p.height < 40) return;
+      const next = Math.min(0.6, Math.max(0.08, (a.top + a.height / 2 - p.top) / p.height));
+      // Half a pixel, so a glide moves the line every frame instead of in steps.
+      setAnchor((prev) => (Math.abs(prev - next) * p.height > 0.5 ? next : prev));
+    };
+    measure();
+    const ro = new ResizeObserver(() => flushSync(measure));
+    if (artRef.current) ro.observe(artRef.current);
+    if (panelRef.current) ro.observe(panelRef.current);
+    window.addEventListener("resize", measure);
+    const settles = [60, 400].map((ms) => window.setTimeout(measure, ms));
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+      settles.forEach((t) => window.clearTimeout(t));
+    };
+  }, [artRef, trackId]);
+
+  return (
+    <div ref={panelRef} className="group relative flex-1 min-h-0 flex">
+      {/* Same LyricsView the centre pane uses, hero scale — keyed per track
+          so the scroll position resets with the song, exactly like
+          LyricsCenter. */}
+      <LyricsView key={trackId} trackKey={trackId} lyrics={lyrics} loading={loading} hero anchor={anchor} offset={offset} />
+    </div>
+  );
+}
+
 /* ================================================================ the view */
 
 export function NowPlaying() {
@@ -332,39 +402,29 @@ export function NowPlaying() {
 
   const [mode, setMode] = useState<"lyrics" | "queue">("lyrics");
 
-  // The live lyric line rests at the album cover's centre height. The panel
-  // is measured against the artwork tile (boxes move with the viewport and
-  // with maximize/restore), so the anchor is a fraction re-derived whenever
-  // either box changes. The artwork row's entrance animation settles inside
-  // the first ~400ms, hence the two timed re-measures.
+  // The artwork tile the lyrics panel (FsLyrics) measures its anchor against.
   const artRef = useRef<HTMLDivElement | null>(null);
-  const lyricsPanelRef = useRef<HTMLDivElement | null>(null);
-  const [lyricsAnchor, setLyricsAnchor] = useState(0.5);
+
+  // YouTube's rule: while music plays and the pointer rests, the controls
+  // and the cursor go and the room re-centres on the whole screen (the
+  // .fs-idle rules in index.css); a move brings them back. Paused, or under
+  // a menu or dialog, the controls stay. It holds through the exit fade, so
+  // leaving never replays the re-centring.
+  const menuOpen = useUI((s) => !!(s.contextMenu || s.dialog || s.playlistPicker));
+  const idle = useIdle(mounted && playing && !menuOpen, IDLE_MS, ".fs-chrome");
+  // While the room re-centres, the lyric lines ride their own layer
+  // (.fs-moving in index.css): shifted by layout every frame, they would be
+  // repainted, blur and all, every frame. Only while moving, since a layer
+  // left in place can soften the live line at a fractional offset.
+  const [moving, setMoving] = useState(false);
+  const wasIdle = useRef(idle);
   useEffect(() => {
-    if (mode !== "lyrics" || !open) return;
-    const measure = (): void => {
-      const art = artRef.current;
-      const panel = lyricsPanelRef.current;
-      if (!art || !panel) return;
-      const a = art.getBoundingClientRect();
-      const p = panel.getBoundingClientRect();
-      if (p.height < 40) return;
-      const fraction = (a.top + a.height / 2 - p.top) / p.height;
-      const next = Math.min(0.6, Math.max(0.08, fraction));
-      setLyricsAnchor((prev) => (Math.abs(prev - next) > 0.002 ? next : prev));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    if (artRef.current) ro.observe(artRef.current);
-    if (lyricsPanelRef.current) ro.observe(lyricsPanelRef.current);
-    window.addEventListener("resize", measure);
-    const settles = [60, 400].map((ms) => window.setTimeout(measure, ms));
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", measure);
-      settles.forEach((t) => window.clearTimeout(t));
-    };
-  }, [mode, open, track?.id]);
+    if (wasIdle.current === idle) return undefined;
+    wasIdle.current = idle;
+    setMoving(true);
+    const t = window.setTimeout(() => setMoving(false), idle ? 1000 : 520);
+    return () => window.clearTimeout(t);
+  }, [idle]);
 
   // Spotify's entry hint: "To exit full screen, press Esc" — fades in with the
   // view, lingers ~3s, fades back out.
@@ -384,7 +444,7 @@ export function NowPlaying() {
     <div
       className={`fixed inset-0 z-[100] overflow-hidden bg-black animate-fade-in ${
         exiting ? "fs-exiting" : ""
-      }`}
+      } ${idle ? "fs-idle" : ""} ${moving ? "fs-moving" : ""}`}
     >
       <FsBackdrop artwork={shown?.thumb ?? null} boost={boost} legacy={legacyMesh} />
 
@@ -406,8 +466,9 @@ export function NowPlaying() {
           </div>
         </div>
 
-        {/* Header — close (mobile: the iOS sheet-grabber). */}
-        <div className="relative h-14 shrink-0 flex items-center px-3">
+        {/* Header — close (mobile: the iOS sheet-grabber). Idle, it fades
+            and gives up its height. */}
+        <div className="fs-chrome fs-head relative h-14 shrink-0 flex items-center px-3">
           <button
             onClick={close}
             title="Close (Esc)"
@@ -453,7 +514,7 @@ export function NowPlaying() {
                   <div
                     ref={artRef}
                     {...heroDrag.props}
-                    className={`relative rounded-[20px] overflow-hidden shadow-art art-hairline aspect-square w-[min(38vh,32vw,480px)] grid place-items-center bg-white/[0.04] ${
+                    className={`fs-art relative rounded-[20px] overflow-hidden shadow-art art-hairline aspect-square grid place-items-center bg-white/[0.04] ${
                       heroDrag.dragging ? "opacity-60" : ""
                     }`}
                     title="Drag to a playlist to add this song"
@@ -500,15 +561,18 @@ export function NowPlaying() {
                   <FitText mode="auto" text={shown.artist} />
                 </div>
                 {titleSource(shown.title) && <div className="text-[12.5px] text-white/40 mt-1">From {titleSource(shown.title)}</div>}
-                <button
-                  onClick={() => toggleLike(shown)}
-                  title={liked ? "Remove from Liked Songs" : "Add to Liked Songs"}
-                  aria-pressed={liked}
-                  className="mt-4 inline-flex items-center gap-2 h-8 px-4 rounded-full bg-white/[0.06] hover:bg-white/[0.11] text-white/60 hover:text-white text-[12.5px] font-semibold transition-all active:scale-95"
-                >
-                  <Heart className={`w-3.5 h-3.5 shrink-0 ${liked ? "fill-current" : ""}`} />
-                  {liked ? "In Your Library" : "Add to Library"}
-                </button>
+                {/* Idle, the pill fades and its row closes up. */}
+                <div className="fs-chrome fs-like mt-4 h-8">
+                  <button
+                    onClick={() => toggleLike(shown)}
+                    title={liked ? "Remove from Liked Songs" : "Add to Liked Songs"}
+                    aria-pressed={liked}
+                    className="inline-flex items-center gap-2 h-8 px-4 rounded-full bg-white/[0.06] hover:bg-white/[0.11] text-white/60 hover:text-white text-[12.5px] font-semibold transition-all active:scale-95"
+                  >
+                    <Heart className={`w-3.5 h-3.5 shrink-0 ${liked ? "fill-current" : ""}`} />
+                    {liked ? "In Your Library" : "Add to Library"}
+                  </button>
+                </div>
               </div>
 
               {/* Full-width row so the visualizer's percentage width resolves
@@ -519,28 +583,19 @@ export function NowPlaying() {
               </div>
             </div>
 
-            {/* RIGHT — the mode switch over the existing lyrics / queue views. */}
+            {/* RIGHT — the mode switch over the existing lyrics / queue views.
+                Idle, the switch fades and its row closes up, so the lyrics
+                run from top to bottom. (The fade sits on an outer box: the
+                entrance's `both` fill would hold the switch's own opacity.) */}
             <div className="flex-1 min-w-0 min-h-0 max-w-[780px] flex flex-col py-1">
-              <div className="shrink-0 flex justify-center lg:justify-start fs-enter fs-d1">
-                <FsModeSwitch mode={mode} onChange={setMode} />
+              <div className="fs-chrome fs-switch shrink-0 h-10 mb-5">
+                <div className="flex justify-center lg:justify-start fs-enter fs-d1">
+                  <FsModeSwitch mode={mode} onChange={setMode} />
+                </div>
               </div>
-              <div className="flex-1 min-h-0 mt-5 flex flex-col">
+              <div className="flex-1 min-h-0 flex flex-col">
                 {mode === "lyrics" ? (
-                  <div ref={lyricsPanelRef} className="group relative flex-1 min-h-0 flex">
-                    {/* Same LyricsView the centre pane uses, hero scale —
-                        keyed per track so the scroll position resets with the
-                        song, exactly like LyricsCenter. The anchor keeps the
-                        live line resting at the cover's centre height. */}
-                    <LyricsView
-                      key={track.id}
-                      trackKey={track.id}
-                      lyrics={lyrics}
-                      loading={lyricsLoading}
-                      hero
-                      anchor={lyricsAnchor}
-                      offset={lyricsOffset}
-                    />
-                  </div>
+                  <FsLyrics artRef={artRef} trackId={track.id} lyrics={lyrics} loading={lyricsLoading} offset={lyricsOffset} />
                 ) : (
                   /* The exact queue sheet from the right rail — same data,
                      tabs and actions; its close returns to the lyrics view. */
@@ -553,8 +608,9 @@ export function NowPlaying() {
 
         {/* The existing play bar — the exact component the shell renders,
             unchanged; fullscreen adds nothing to it. No top border: the bar's
-            black and the backdrop's near-black floor meet seamlessly. */}
-        <div className="shrink-0">
+            black and the backdrop's near-black floor meet seamlessly. Idle,
+            its dock closes and the bar fades as it slides off the bottom. */}
+        <div className="fs-chrome fs-dock h-[88px] shrink-0">
           <PlayerBar />
         </div>
       </div>
