@@ -206,6 +206,11 @@ export function LyricsView({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const activeRef = useRef<HTMLButtonElement | null>(null);
   const glide = useRef(0);
+  /** The glide in flight heads here; an anchor-only move retargets it. */
+  const glideTo = useRef<number | null>(null);
+  const lastIndex = useRef(-1);
+  /** The active line changed and no frame has moved the list for it yet. */
+  const lineMoved = useRef(false);
 
   // BitChord mobile's LyricsLoadingLine: the lookup's stand-in is one of the
   // loading phrases — no spinner — picked once per track and held there.
@@ -252,8 +257,15 @@ export function LyricsView({
   // The move is a glide: an ease-out over GLIDE_MS, restarted from wherever it
   // is when the next line comes. A long jump (a seek, lyrics opening
   // mid-song) lands at once, as does every move under Reduce motion.
+  // When only the anchor moved (fullscreen's cover growing or re-centring,
+  // re-measured every frame), the line follows at once instead of easing in
+  // behind the cover; a glide already under way just takes the new target.
   useEffect(() => {
     if (activeIndex < 0) return;
+    if (activeIndex !== lastIndex.current) {
+      lastIndex.current = activeIndex;
+      lineMoved.current = true;
+    }
     const raf = window.requestAnimationFrame(() => {
       const container = containerRef.current;
       const el = activeRef.current;
@@ -265,8 +277,15 @@ export function LyricsView({
       const r = el.getBoundingClientRect();
       const mid = container.scrollTop + r.top - container.getBoundingClientRect().top + r.height / 2;
       const target = Math.max(0, mid - container.clientHeight * anchor);
+      if (!lineMoved.current) {
+        if (glideTo.current != null) glideTo.current = target;
+        else container.scrollTop = target;
+        return;
+      }
+      lineMoved.current = false;
       const from = container.scrollTop;
       window.cancelAnimationFrame(glide.current);
+      glideTo.current = null;
       const still =
         document.documentElement.classList.contains("reduce-motion") ||
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -274,16 +293,23 @@ export function LyricsView({
         container.scrollTop = target;
         return;
       }
+      glideTo.current = target;
       const start = performance.now();
       const step = (now: number): void => {
         const t = Math.min(1, (now - start) / GLIDE_MS);
-        container.scrollTop = from + (target - from) * (1 - (1 - t) ** 4);
+        const to = glideTo.current ?? target;
+        container.scrollTop = from + (to - from) * (1 - (1 - t) ** 4);
         if (t < 1) glide.current = window.requestAnimationFrame(step);
+        else glideTo.current = null;
       };
       glide.current = window.requestAnimationFrame(step);
     });
     return () => window.cancelAnimationFrame(raf);
   }, [activeIndex, synced, anchor]);
+  const stopGlide = (): void => {
+    window.cancelAnimationFrame(glide.current);
+    glideTo.current = null;
+  };
   useEffect(() => () => window.cancelAnimationFrame(glide.current), []);
 
   if (loading) {
@@ -319,28 +345,21 @@ export function LyricsView({
   }
 
   if (synced && syncedOn) {
-    // Anchor spacers: the scroll target puts the active line's centre at
-    // `anchor` × container height. Without head room the first lines can't
-    // reach the anchor — scrollTop clamps at 0, so line 0 sticks to the very
-    // top where the vertical melt mask (transparent → black over the top
-    // 14%) dims it. That is why the opening line always looked grey next to
-    // the later, centred (fully bright) lines. Matching top/bottom spacers
-    // let every line — first through last — rest exactly on the anchor, in
-    // the mask's solid middle band.
-    // % heights resolve against the scroller's own (definite, absolute-
-    // positioned) height; the −fudge is ~half a line so the line *centre*
-    // lands on the anchor. `max(...,12px)` keeps a sane gap if the anchor
-    // ever measures near an edge.
+    // Spacers: the scroll target puts the active line's centre at `anchor` ×
+    // container height. The bottom spacer lets the last lines reach the
+    // anchor too. % heights resolve against the scroller's own (definite,
+    // absolute-positioned) height; the −fudge is ~half a line so the line
+    // *centre* lands on the anchor. `max(...,12px)` keeps a sane gap if the
+    // anchor ever measures near an edge.
     const headFudge = hero ? 36 : large ? 28 : 20;
-    // The non-fullscreen panel parks the lyric list at the top of the area:
-    // a small fixed head spacer (just under the top melt mask's full-opacity
-    // line) instead of the anchor pre-centre, and it never changes size — the
-    // intro view and the first active line sit at exactly the same height, so
-    // singing starting cannot reposition the list. Later lines still glide to
-    // the anchor through the normal auto-scroll once their offset outgrows
-    // the scroll clamp. The fullscreen panel keeps its measured-anchor
-    // spacer, which must never move.
-    const topSpacer = hero ? `max(12px, calc(${anchor * 100}% - ${headFudge}px))` : "calc(10% + 4px)";
+    // Both panels park the lyric list at the top of the area: a small fixed
+    // head spacer (just under the top melt mask's full-opacity line) instead
+    // of the anchor pre-centre, and it never changes size — the intro view and
+    // the first active line sit at exactly the same height, so singing
+    // starting cannot reposition the list. Later lines glide down to the
+    // anchor (fullscreen: beside the cover) and stay on it through the normal
+    // auto-scroll once their offset outgrows the scroll clamp.
+    const topSpacer = "calc(10% + 4px)";
     const bottomSpacer = `max(12px, calc(${(1 - anchor) * 100}% - ${headFudge}px))`;
     return (
       <div
@@ -359,8 +378,8 @@ export function LyricsView({
         <div
           ref={containerRef}
           // Scrolling by hand stops a glide instead of fighting it.
-          onWheel={() => window.cancelAnimationFrame(glide.current)}
-          onPointerDown={() => window.cancelAnimationFrame(glide.current)}
+          onWheel={stopGlide}
+          onPointerDown={stopGlide}
           className="absolute inset-0 overflow-y-auto scroll-host px-6 py-0"
           style={{
             // Lines melt into the dark at the panel edges instead of stopping hard.
