@@ -14,9 +14,10 @@
   display: none;
 }
 
-/* The glass shows through until the intro darkens; the body is the app's ground again for the hand-over.
-   index.html paints it inline, so this needs !important. */
-html.intro-wait body {
+/* The glass shows through until the intro has played (intro.ts then takes intro-glass off, as it draws the
+   app under it); the body is the app's ground again from there, so nothing under the glide has to be drawn
+   afresh. index.html paints it inline, so this needs !important. */
+html.intro-glass body {
   background: transparent !important;
 }
 
@@ -27,13 +28,44 @@ html.intro #intro {
   display: grid;
   place-items: center;
   -webkit-app-region: drag;
-  /* Glass while the shell pops, then the window's own ground (main.ts, body), as in Arkemis Cut. */
+}
+
+/* Glass while the shell pops, then the window's own ground (main.ts, body), as in Arkemis Cut: a layer of its
+   own that fades in, and out again at the hand-over, by opacity alone, so neither redraws the screen. It fades
+   in to 99.9%, not 100%: Chromium skips drawing whatever a fully opaque layer covers, and the app is drawn
+   under it before the glide (below). */
+html.intro #intro::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: #0a0a0a;
+  opacity: 0;
+  pointer-events: none;
   animation: intro-dark 160ms ease 0.84s both;
 }
 
 /* Until it's handed over the app stays hidden under it. */
 html.intro-wait #root {
   opacity: 0;
+}
+
+/* Then, before the glide, it's shown under the intro's dark ground and so drawn, but unseen (at 0.1% of it,
+   nothing reaches the screen); intro.ts waits for that. The glide then needn't wait on the app's first picture,
+   which with a big library froze it for most of a second, and nothing about the app changes as it begins. */
+html.intro-wait.intro-warm #root {
+  opacity: 1;
+}
+
+/* intro.ts's probe: a dot under the dark ground, drawn in a frame after the app's first picture, which
+   Element Timing reports once that frame has reached the screen. */
+.intro-probe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: -2;
+  color: #0a0a0a;
+  pointer-events: none;
 }
 
 /* Handed over (intro.ts animates the exit): the app underneath takes clicks and window drags. */
@@ -135,7 +167,7 @@ html.intro:not(.intro-wait) #intro {
 
 @keyframes intro-dark {
   to {
-    background-color: #0a0a0a;
+    opacity: 0.999;
   }
 }
 
@@ -172,8 +204,9 @@ html.intro:not(.intro-wait) #intro {
   }
 }
 
+/* With reduced motion the logo shows as it ends: no pop, slide, rise or breathing, and no light show
+   (public/intro.js). The darkening over the glass stays, a fade rather than a move. */
 @media (prefers-reduced-motion: reduce) {
-  #intro,
   #intro *,
   #intro *::before {
     animation: none;

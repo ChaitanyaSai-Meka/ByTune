@@ -166,9 +166,10 @@ function applyThumbar(): boolean {
 const WINDOW_BG = "#0a0a0a";
 
 // Windows 11 glass under the launch intro, as in ZCode: the intro (index.html) opens over the blurred
-// desktop, then darkens into the app. Only while it plays: once it hands over (window:introDone) the window
-// is solid again, so the opaque app never shows the material at its edges while it resizes. A reload
-// replays the intro, so it brings the glass back. Older Windows has no acrylic and opens dark.
+// desktop, then darkens into the app. Only while it plays: once it has (window:introDone, as the app is
+// drawn under it) the window is solid again, so the hand-over composites as an opaque window and the opaque
+// app never shows the material at its edges while it resizes. A reload replays the intro, so it brings the
+// glass back. Older Windows has no acrylic and opens dark.
 function setGlass(on: boolean): void {
   if (process.platform !== "win32" || !mainWindow || mainWindow.isDestroyed()) return;
   try {

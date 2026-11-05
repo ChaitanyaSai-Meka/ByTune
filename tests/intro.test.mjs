@@ -5,9 +5,9 @@
  * - the light show keeps the brand kit's own clock and tracks, in white light;
  * - the page draws the rest from its own markup (index.html) and stylesheet (src/intro.css): the tile, the
  *   mark as it ends, then the wordmark letter by letter (the B with its holes), every class there;
- * - src/intro.ts ends it once it has played and the app is ready (never held: each has a time limit),
- *   landing the logo on the app's own, or fading out with reduced motion or nowhere to land, and then
- *   stops the light and hands the window's glass back.
+ * - src/intro.ts ends it once it has played and the app is ready (never held: each has a time limit): the
+ *   window's glass goes and the app is drawn under it, then the logo lands on the app's own once that has
+ *   reached the screen, or the intro fades out with reduced motion or nowhere to land; then the light stops.
  * Run in jsdom on the page's own markup, with the browser's animation calls stubbed and a mocked clock.
  */
 import test, { mock } from "node:test";
@@ -67,7 +67,8 @@ function boot({ search = "", target = true, visible = true, reduce = false } = {
   w.Element.prototype.getAnimations = () => [{ effect: { getTiming: () => ({ iterations: 1 }) }, finished: playedOut }, breathe];
   const animations = [];
   w.Element.prototype.animate = function (keyframes, options) {
-    animations.push({ el: this, keyframes, options, targetHidden: doc.querySelector("[data-intro-target]")?.style.visibility === "hidden" });
+    const html = doc.documentElement;
+    animations.push({ el: this, keyframes, options, targetHidden: doc.querySelector("[data-intro-target]")?.style.visibility === "hidden", warm: html.classList.contains("intro-warm") });
     return { finished: Promise.resolve() };
   };
   Object.assign(globalThis, {
@@ -77,8 +78,8 @@ function boot({ search = "", target = true, visible = true, reduce = false } = {
     matchMedia: (q) => ({ matches: reduce && q.includes("reduce"), media: q }),
   });
   // The preload's bridge: the window's glass goes when the intro is done. And public/intro.js's light, stopped then.
-  const glass = { handedBack: 0, lightStopped: 0 };
-  w.bytune = { introDone: () => glass.handedBack++ };
+  const glass = { calls: [], lightStopped: 0 };
+  w.bytune = { introDone: () => glass.calls.push(doc.documentElement.classList.contains("intro-wait") ? "while the app waits" : "at the end") };
   w.bytuneIntroLight = Object.assign(() => {}, { stop: () => glass.lightStopped++ });
   const html = doc.documentElement;
   return {
@@ -107,7 +108,7 @@ test("public/intro.js turns it on before anything paints, never in the miniplaye
   const main = boot();
   const pip = boot({ search: "?window=pip" });
   try {
-    assert.deepEqual([...main.html.classList], ["intro", "intro-wait"], "it shows, and the app waits under it");
+    assert.deepEqual([...main.html.classList], ["intro", "intro-wait", "intro-glass"], "it shows over the glass, and the app waits under it");
     assert.equal(pip.html.className, "", "no class, so none of the intro's CSS applies there");
   } finally {
     main.close();
@@ -279,7 +280,7 @@ test("the miniplayer's window: endIntro takes the intro out at once", () => {
   try {
     endIntro();
     assert.equal(p.intro(), null);
-    assert.equal(p.glass.handedBack, 0, "its window has no glass to hand back");
+    assert.equal(p.glass.calls.length, 0, "its window has no glass to hand back");
   } finally {
     p.close();
   }
@@ -287,30 +288,85 @@ test("the miniplayer's window: endIntro takes the intro out at once", () => {
 
 test("it ends only when it has played and the app is ready; then the logo lands on the app's own", async () => {
   const p = boot();
+  // Element Timing, holding the probe's report until the test says its frame has reached the screen.
+  const observers = [];
+  const real = globalThis.PerformanceObserver;
+  globalThis.PerformanceObserver = Object.assign(
+    class {
+      constructor(report) {
+        this.report = report;
+        observers.push(this);
+      }
+      observe(options) {
+        this.type = options.type;
+      }
+      disconnect() {
+        this.off = true;
+      }
+    },
+    { supportedEntryTypes: ["element"] },
+  );
   try {
     endIntro();
     p.ready();
     await flush();
     assert.ok(p.html.classList.contains("intro-wait"), "the app is ready, but the logo is still playing");
+    assert.ok(p.html.classList.contains("intro-glass") && p.glass.calls.length === 0, "the glass stays while the light plays");
     p.finishPlayed();
     await flush();
-    assert.ok(p.breathe.cancelled, "the breathing stops for the landing");
+    assert.ok(p.breathe.cancelled, "the breathing stops before the app is drawn under the intro");
+    assert.deepEqual(p.glass.calls, ["while the app waits"], "the glass goes once the intro has played, while nothing moves");
+    assert.ok(!p.html.classList.contains("intro-glass") && p.html.classList.contains("intro-warm"), "the app is drawn under the intro, on the body's own ground");
+    const probe = p.doc.querySelector('#intro .intro-probe[elementtiming="intro-probe"]');
+    assert.ok(probe && probe.getAttribute("aria-hidden") === "true", "with a probe in the same frame, which no screen reader hears");
+    assert.ok(observers.length === 1 && observers[0].type === "element");
+    assert.ok(!p.animations.some((a) => a.keyframes.transform), "no glide until that frame has reached the screen");
+    observers[0].report({ getEntries: () => [{ identifier: "intro-probe" }] });
+    await flush();
+    assert.ok(observers[0].off && !probe.parentNode, "then the probe goes");
     const tile = p.animations.find((a) => a.el.matches(".intro-tile") && a.keyframes.transform);
     const word = p.animations.find((a) => a.el.matches(".intro-word svg"));
     assert.ok(tile && word, "the mark and the wordmark fly");
     assert.ok(tile.targetHidden, "only the flying logo shows until it lands");
+    assert.ok(tile.warm, "the app was drawn under the intro before the glide began");
     const mark = land(tile.keyframes.transform[1], { left: 500, top: 400 }, { x: 548, y: 448 });
     assert.ok(Math.abs(mark.x - (20 + 23.87 / 2)) < 1e-6 && Math.abs(mark.y - 28) < 1e-6, "the mark's centre on the top bar's");
     assert.ok(Math.abs(mark.k - 28 / (96 * MARK_SPAN)) < 1e-9, "at the top bar's size");
     const text = land(word.keyframes.transform[1], { left: 633, top: 413 }, { x: 633, y: 448 });
     assert.ok(Math.abs(text.x - 51.87) < 1e-6 && Math.abs(text.y - 28) < 1e-6 && Math.abs(text.k - 19 / 70) < 1e-9, "the word on the top bar's");
     assert.ok(p.animations.some((a) => a.el.matches(".intro-tile") && a.options.pseudoElement === "::before"), "the tile itself fades");
+    assert.ok(p.animations.some((a) => a.el.id === "intro" && a.options.pseudoElement === "::before" && a.keyframes.opacity), "the dark ground fades by opacity, on its own layer");
+    assert.ok(!p.animations.some((a) => "backgroundColor" in a.keyframes), "nothing repaints a background under the glide");
     assert.equal(p.intro(), null, "then the intro is gone");
     assert.equal(p.html.className, "", "and its classes with it");
     assert.equal(p.doc.querySelector("[data-intro-target]").style.visibility, "", "the app's own logo shows");
-    assert.equal(p.glass.handedBack, 1, "and the window's glass goes, once");
+    assert.deepEqual(p.glass.calls, ["while the app waits", "at the end"], "the glass was gone before the glide (again at the end, which changes nothing)");
     assert.equal(p.glass.lightStopped, 1, "and the light's worker with it");
   } finally {
+    globalThis.PerformanceObserver = real;
+    p.close();
+  }
+});
+
+test("the glide never waits on the screen past its time: 1.5 s, if the probe's frame never shows", async () => {
+  const p = boot();
+  const real = globalThis.PerformanceObserver;
+  globalThis.PerformanceObserver = Object.assign(class { observe() {} disconnect() {} }, { supportedEntryTypes: ["element"] });
+  try {
+    endIntro();
+    p.ready();
+    p.finishPlayed();
+    await flush();
+    assert.ok(p.html.classList.contains("intro-warm") && !p.animations.some((a) => a.keyframes.transform));
+    mock.timers.tick(1499);
+    await flush();
+    assert.ok(!p.animations.some((a) => a.keyframes.transform), "still drawing");
+    mock.timers.tick(1);
+    await flush();
+    assert.ok(p.animations.some((a) => a.el.matches(".intro-tile") && a.keyframes.transform), "it glides anyway");
+    assert.equal(p.doc.querySelector(".intro-probe"), null);
+  } finally {
+    globalThis.PerformanceObserver = real;
     p.close();
   }
 });
@@ -340,6 +396,7 @@ test("with ByTune's own Reduce animation the app shows as soon as it's ready, an
     assert.equal(p.intro(), null, "not waiting for the logo to finish");
     assert.ok(!p.animations.some((a) => a.keyframes.transform), "no flight");
     assert.ok(p.animations.some((a) => a.el.id === "intro" && a.keyframes.opacity), "a fade");
+    assert.deepEqual(p.glass.calls, ["at the end"], "the glass goes as it ends");
   } finally {
     p.close();
   }

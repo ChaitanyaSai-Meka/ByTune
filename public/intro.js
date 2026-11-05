@@ -11,7 +11,8 @@
   if (new URLSearchParams(window.location.search).get("window") === "pip") return;
   var html = document.documentElement;
   // intro: the intro shows. intro-wait: the app stays hidden under it until src/intro.ts hands over.
-  html.classList.add("intro", "intro-wait");
+  // intro-glass: the page is see-through, for the window's glass, until the intro has played.
+  html.classList.add("intro", "intro-wait", "intro-glass");
 
   // The mark's light show runs in a worker (public/intro-light.js) on the intro's canvas, so the app starting
   // up on this thread can't stall it. intro-lit hides the SVG mark meanwhile; with reduced motion, without
