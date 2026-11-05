@@ -12,7 +12,7 @@ import { LyricsView } from "./SyncedLyrics";
 import { usePlayer } from "../stores/player";
 import { useUI } from "../stores/ui";
 import { useArtworkPalette } from "../lib/palette";
-import { requestLyricsAlignment, useLyricsOffset } from "../lib/lyricsOffset";
+import { useLyricsOffset } from "../lib/lyricsOffset";
 import { LyricsTiming } from "./LyricsTiming";
 import type { LyricsResult, Track } from "../types";
 
@@ -67,13 +67,6 @@ export function LyricsCenter() {
       if (!cancelled) {
         setLyrics(r ?? null);
         setLoading(false);
-        // Version-mismatch check: when the upload is much longer than the
-        // synced song, measure the intro offset from the audio itself.
-        const last = r?.synced?.[r.synced.length - 1];
-        const end = last?.end ?? last?.time ?? 0;
-        if (r?.synced?.length && track.duration) {
-          requestLyricsAlignment(track.id, track.duration, end);
-        }
       }
     });
     return () => {
@@ -81,7 +74,7 @@ export function LyricsCenter() {
     };
   }, [track?.id]);
 
-  // The audio-anchored alignment (0 until it lands) plus the listener's own timing.
+  // The listener's own timing: this song's nudge and this device's setting.
   const offset = useLyricsOffset(track?.id);
 
   const palette = useArtworkPalette(track?.thumb ?? null);

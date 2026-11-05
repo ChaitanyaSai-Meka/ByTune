@@ -41,7 +41,7 @@ import { useDrag } from "../lib/dnd";
 import { shortTitle, titleSource } from "../lib/format";
 import { FitText } from "./FitText";
 import { useCanvas } from "../lib/canvas";
-import { requestLyricsAlignment, useLyricsOffset } from "../lib/lyricsOffset";
+import { useLyricsOffset } from "../lib/lyricsOffset";
 import { useIdle } from "../lib/useIdle";
 import type { LyricsResult } from "../types";
 
@@ -368,8 +368,7 @@ export function NowPlaying() {
   const palette: ArtworkPalette = useArtworkPalette(shown?.thumb ?? null);
 
   // Lyrics — the same cached lookup the centre-pane lyrics view uses (warmed
-  // by prefetchLyrics the moment a track starts), plus the same audio-anchored
-  // alignment check. No second lyrics pipeline.
+  // by prefetchLyrics the moment a track starts). No second lyrics pipeline.
   const [lyrics, setLyrics] = useState<LyricsResult | null>(null);
   const [lyricsLoading, setLyricsLoading] = useState(false);
   useEffect(() => {
@@ -384,20 +383,13 @@ export function NowPlaying() {
       if (cancelled) return;
       setLyrics(r ?? null);
       setLyricsLoading(false);
-      // Version-mismatch check — the same audio-anchored alignment the
-      // centre lyrics use, so both agree on the timeline.
-      const last = r?.synced?.[r.synced.length - 1];
-      const end = last?.end ?? last?.time ?? 0;
-      if (r?.synced?.length && track.duration) {
-        requestLyricsAlignment(track.id, track.duration, end);
-      }
     });
     return () => {
       cancelled = true;
     };
   }, [track?.id, open]);
 
-  // 0 until the audio-anchored alignment lands, then lyrics re-sync to it.
+  // This song's nudge plus this device's lyrics timing; nothing automatic.
   const lyricsOffset = useLyricsOffset(track?.id);
 
   const [mode, setMode] = useState<"lyrics" | "queue">("lyrics");
