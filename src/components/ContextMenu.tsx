@@ -347,8 +347,11 @@ export function ContextMenu() {
       close();
     };
     const onScroll = (e: Event): void => {
-      // Scrolling the menu's own list (or its submenu portal) must keep the
-      // menu up — only scroll behind the menu dismisses it.
+      // Only the listener's own scrolling behind the menu dismisses it: the
+      // wheel or a trackpad (a touch drag or a scrollbar already closed it on
+      // pointerdown). The page scrolling by itself, like synced lyrics gliding
+      // to the next line, leaves it up. Scrolling the menu's own list (or its
+      // submenu portal) keeps it up too.
       const t = e.target;
       if (t instanceof Node && ref.current?.contains(t)) return;
       if (t instanceof Element && t.closest("[data-menu-portal]")) return;
@@ -392,11 +395,11 @@ export function ContextMenu() {
     };
     window.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("keydown", onKey);
-    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("wheel", onScroll, { capture: true, passive: true });
     return () => {
       window.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("keydown", onKey);
-      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("wheel", onScroll, { capture: true });
     };
   }, [menu, close, sub]);
 

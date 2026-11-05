@@ -213,3 +213,22 @@ test("a playlist's folder is a choice: the folder it's in checked, the others mo
   useLibrary.setState({ folders: [] });
   assert.deepEqual(playlistFolderItems({ id: "p1", name: "Mine", tracks: [] }), [], "no folders, no choice");
 });
+
+test("only the listener's own scrolling closes a menu: the page scrolling by itself leaves it up", async () => {
+  const h = await mount();
+  try {
+    await h.open([{ label: "Add to playlist", action() {} }]);
+    const lyrics = document.createElement("div");
+    document.body.append(lyrics);
+    // Synced lyrics gliding to the next line: a scroll event, with nobody touching the wheel.
+    await act(async () => lyrics.dispatchEvent(new window.Event("scroll")));
+    assert.ok(useUI.getState().contextMenu, "a scroll the page made on its own leaves the menu up");
+    const wheel = (el) => act(async () => el.dispatchEvent(new window.WheelEvent("wheel", { bubbles: true, deltaY: 40 })));
+    await wheel(h.row("Add to playlist"));
+    assert.ok(useUI.getState().contextMenu, "the wheel over the menu scrolls its own list");
+    await wheel(lyrics);
+    assert.equal(useUI.getState().contextMenu, null, "the wheel behind it is the listener scrolling: the menu goes");
+  } finally {
+    await h.close();
+  }
+});
