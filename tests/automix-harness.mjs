@@ -414,6 +414,8 @@ export async function boot(opts = {}) {
     skipSilence: opts.skipSilence ?? false,
     autoplay: opts.autoplay ?? false,
     playbackSpeed: 1,
+    // the level these engine tests measure against, whatever a fresh install defaults to
+    loudnessLevel: "normal",
   });
   useLibrary.setState({ history: [] });
   while (!usePlayer.persist.hasHydrated()) await flushMicrotasks(2);

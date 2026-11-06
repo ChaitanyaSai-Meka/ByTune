@@ -108,6 +108,32 @@ async function mount(session = ACCOUNT, view = { name: "settings" }) {
   };
 }
 
+test("a fresh install starts with the settings everyone gets", () => {
+  const s = useSettings.getInitialState();
+  const fresh = {
+    crossfade: s.crossfadeSeconds, automix: s.smartFade, skipSilence: s.skipSilence,
+    autoplay: s.autoplay, dontRepeatSuggestions: s.dontRepeatSuggestions,
+    speed: s.playbackSpeed, closeToTray: s.closeToTray,
+    streaming: s.streamingQuality, leveling: s.loudnessLevel,
+    eq: s.eqEnabled, eqFlat: s.eqGains.every((g) => g === 0), preventClipping: s.eqAutoHeadroom,
+    syncedLyrics: s.syncedLyrics, blurLyrics: s.blurUnfocusedLyrics, romanized: s.romanizeLyrics, lyricsTiming: s.lyricsOffset,
+    reduceAnimation: s.reduceAnimation, reduceBlur: s.reduceDynamicBlur, liquidGlass: s.liquidGlass,
+    fullScreenCover: s.fullBleedArtwork, animatedCover: s.animatedCanvas, legacyMesh: s.legacyMeshGradient,
+    hideVolumeBar: s.hideVolumeBar, filterNonMusic: s.filterNonMusicAudio,
+  };
+  assert.deepEqual(fresh, {
+    crossfade: 0, automix: false, skipSilence: false,
+    autoplay: true, dontRepeatSuggestions: false,
+    speed: 1, closeToTray: true,
+    streaming: "high", leveling: "loud",
+    eq: false, eqFlat: true, preventClipping: true,
+    syncedLyrics: true, blurLyrics: true, romanized: false, lyricsTiming: 0,
+    reduceAnimation: false, reduceBlur: false, liquidGlass: true,
+    fullScreenCover: true, animatedCover: false, legacyMesh: false,
+    hideVolumeBar: false, filterNonMusic: true,
+  });
+});
+
 test("Settings opens on Account, with every category in the rail and you at the top of it", async () => {
   const h = await mount();
   try {
