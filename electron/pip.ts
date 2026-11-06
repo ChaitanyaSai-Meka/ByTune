@@ -63,17 +63,17 @@ export function restrictNavigation(win: BrowserWindow, isPip = false): void {
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 }
 
-/** Spotify MiniPlayer-measured defaults (logical px). Spotify's viewport is
- * 330×342; ByTune's frameless window carries ~22px of horizontal and ~11px
- * of vertical invisible resize frame, so the outer window is sized to land
- * that viewport. Min/max mirror Spotify's own clamps (253×228 / 569×569
- * outer) converted through the same frame. */
+/** Sizing defaults (logical px).
+ * - Default size: 352×353 (matching Spotify's ~330×342 viewport plus resize margins).
+ * - Min clamps: 200×75, allowing the window to shrink down to an ultra-compact
+ *   horizontal music controller (~220–280 px wide by ~80–110 px high).
+ * - Max clamps: 640×580, accommodating wide bars or expanded square formats. */
 export const PIP_DEFAULT_W = 352;
 export const PIP_DEFAULT_H = 353;
-const PIP_MIN_W = 262;
-const PIP_MIN_H = 233;
-const PIP_MAX_W = 578;
-const PIP_MAX_H = 574;
+const PIP_MIN_W = 200;
+const PIP_MIN_H = 75;
+const PIP_MAX_W = 640;
+const PIP_MAX_H = 580;
 /** default resting spot: bottom-right of the work area */
 const REST_MARGIN = 16;
 
@@ -157,7 +157,8 @@ function readSavedRect(): PipRect | null {
 function visibleRect(r: PipRect): PipRect {
   const reachable = screen.getAllDisplays().some((d) => {
     const a = d.workArea;
-    return r.x + r.w > a.x + 56 && r.x < a.x + a.width - 56 && r.y + r.h > a.y + 56 && r.y < a.y + a.height - 56;
+    const minReach = Math.min(32, Math.floor(r.h / 2));
+    return r.x + r.w > a.x + minReach && r.x < a.x + a.width - minReach && r.y + r.h > a.y + minReach && r.y < a.y + a.height - minReach;
   });
   if (!reachable) return defaultRect();
   // Final safety net: keep the box inside the primary work area (never under
