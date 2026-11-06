@@ -41,6 +41,8 @@ const KNOWN_HASHES = {
   libraryV3: "390c78e5b951029bad359785e69b07b536a509c581cbcd0aded5e5067f187455",
   fetchLibraryTracks: "087278b20b743578a6262c2b0b4bcd20d879c503cc359a2285baf083ef944240",
   profileAttributes: "08ffb4730af3746e04a8301396f20875dbbce10c75243803091a9274eacc8ac0",
+  searchTracks: "bc1ca2fcd0ba1013a0fc88e6cc4f190af501851e3dafd3e1ef85840297694428",
+  canvas: "575138ab27cd5c1b3e54da54d0a7cc8d85485402de26340c2145f0f6bb5e7a9f",
 };
 type Operation = keyof typeof KNOWN_HASHES;
 
@@ -225,6 +227,49 @@ async function signedIn<T>(read: (token: string) => Promise<T>): Promise<T> {
     s.problem = err instanceof SpotifySessionError ? err.message : CHANGED;
     console.warn("[bytune] spotify:", err instanceof Error ? err.message : err);
     throw new Error(s.problem);
+  }
+}
+
+/* ---------------- Canvas, for canvas.ts (ported from BitChord, GPL-3.0: SpotifyCanvas) ---------------- */
+
+const CANVAZ = "https://spclient.wg.spotify.com/canvaz-cache/v0/canvases";
+/** spclient keeps canvaz-cache for Spotify's own apps, so the request wears one's user agent. */
+const SPOTIFY_APP_UA = "Spotify/9.0.34.593 iOS/18.4 (iPhone15,3)";
+
+/** The older route to a track's Canvas: protobuf in, protobuf out. */
+async function canvaz(trackUri: string, token: string): Promise<string | null> {
+  const res = await get(CANVAZ, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/protobuf", "Content-Type": "application/protobuf", "Accept-Language": "en", "User-Agent": SPOTIFY_APP_UA },
+    body: web.canvazRequest(trackUri),
+  });
+  return res.ok ? web.canvazClip(new Uint8Array(await res.arrayBuffer()), trackUri) : null;
+}
+
+/**
+ * Spotify's own Canvas: the web player's track search, the first hit `pick` accepts, then its clip
+ * from the canvas query, or canvaz-cache when that has none. It needs the listener's session (the
+ * anonymous token gets no Canvas), so it answers null at once for an owner who hasn't connected
+ * Spotify. Never throws, and leaves Settings' problem alone: a missing canvas isn't one.
+ */
+export async function spotifyCanvas(searchTerm: string, pick: (hit: web.SpotifyTrackHit) => boolean): Promise<{ url: string; hit: web.SpotifyTrackHit } | null> {
+  if (!account().cookie) return null;
+  try {
+    const token = await userToken();
+    const search = await query("searchTracks", { searchTerm, offset: 0, limit: 10, numberOfTopResults: 5, includeAudiobooks: false, includePreReleases: false }, token);
+    const hit = web.parseTrackSearch(search).find(pick);
+    if (!hit) return null;
+    let url: string | null = null;
+    try {
+      url = web.parseCanvasAnswer(await query("canvas", { trackUri: hit.uri }, token));
+    } catch (err) {
+      if (err instanceof SpotifySessionError) throw err;
+    }
+    url ??= await canvaz(hit.uri, token);
+    return url ? { url, hit } : null;
+  } catch (err) {
+    if (err instanceof SpotifySessionError) here().access = null; // minted afresh on the next track
+    return null;
   }
 }
 

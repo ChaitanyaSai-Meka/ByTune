@@ -6,8 +6,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  SpotifyFormatError, hotp, isSpotifyShortLink, parseEmbedPage, parseLibraryPage, parseLikedPage, parsePlaylistPage,
-  parseProfileName, playerScriptUrl, playerSecret, playerTotp, queryHash, spotifyPlaylistId,
+  SpotifyFormatError, canvazClip, canvazRequest, hotp, isSpotifyShortLink, parseCanvasAnswer, parseEmbedPage, parseLibraryPage,
+  parseLikedPage, parsePlaylistPage, parseProfileName, parseTrackSearch, playerScriptUrl, playerSecret, playerTotp, queryHash,
+  spotifyPlaylistId,
 } from "../.test-build/spotify-web.mjs";
 
 const fixture = (name) => readFileSync(new URL(`./fixtures/spotify/${name}`, import.meta.url), "utf8");
@@ -111,4 +112,43 @@ test("token codes: RFC 4226 vectors, and the web player's key derivation", () =>
   // The key is the decimal codes of each character XORed with (index % 33) + 9, joined.
   const derived = Buffer.from([..."ab"].map((c, i) => c.charCodeAt(0) ^ ((i % 33) + 9)).join(""));
   assert.equal(playerTotp("ab", t), hotp(derived, BigInt(Math.floor(t / 30_000))));
+});
+
+test("Canvas: the track search's hits, and the canvas query's clip (videos only)", () => {
+  const hit = (uri, name, artists, album) => ({ item: { data: { uri, name, artists: { items: artists.map((n) => ({ profile: { name: n } })) }, albumOfTrack: { name: album } } } });
+  const search = { data: { searchV2: { tracksV2: { items: [
+    hit("spotify:track:0VjIjW4GlUZAMYd2vXMi3b", "Blinding Lights", ["The Weeknd"], "After Hours"),
+    hit("spotify:episode:xyz", "Not a track", ["Someone"], ""),
+    hit("spotify:track:7J1uxwnxfQLu4APicE5Rnj", "", ["Nameless"], ""),
+    hit("spotify:track:2qSkIjg1o9h3YT9RAgYN75", "Espresso", ["Sabrina Carpenter", "Guest"], undefined),
+  ] } } } };
+  assert.deepEqual(parseTrackSearch(search), [
+    { uri: "spotify:track:0VjIjW4GlUZAMYd2vXMi3b", name: "Blinding Lights", artists: ["The Weeknd"], album: "After Hours" },
+    { uri: "spotify:track:2qSkIjg1o9h3YT9RAgYN75", name: "Espresso", artists: ["Sabrina Carpenter", "Guest"], album: "" },
+  ]);
+  assert.deepEqual(parseTrackSearch({ data: null }), []);
+
+  const answer = (url) => ({ data: { trackUnion: { canvas: url === undefined ? null : { url, type: "VIDEO_LOOPING" } } } });
+  const clip = "https://canvaz.scdn.co/upload/artist/x/video/abc.cnvs.mp4";
+  assert.equal(parseCanvasAnswer(answer(clip)), clip);
+  assert.equal(parseCanvasAnswer(answer(undefined)), null, "no Canvas");
+  assert.equal(parseCanvasAnswer(answer("https://canvaz.scdn.co/upload/artist/x/image/abc.cnvs.jpg")), null, "a still image");
+  assert.equal(parseCanvasAnswer(answer("http://canvaz.scdn.co/abc.cnvs.mp4")), null, "https only");
+});
+
+test("Canvas: canvaz-cache's protobuf, both ways, with the scan for renumbered fields", () => {
+  const uri = "spotify:track:0VjIjW4GlUZAMYd2vXMi3b";
+  const bytes = (s) => [...new TextEncoder().encode(s)];
+  assert.deepEqual([...canvazRequest(uri)], [0x0a, uri.length + 2, 0x0a, uri.length, ...bytes(uri)]);
+
+  const ld = (field, body) => [(field << 3) | 2, body.length, ...body];
+  const canvas = (url, track, urlField = 2) => ld(1, [...ld(1, bytes("id")), 0x18, 0x01, ...ld(urlField, bytes(url)), ...ld(5, bytes(track))]);
+  const mine = "https://canvaz.scdn.co/upload/a/video/mine.cnvs.mp4";
+  const other = "https://canvaz.scdn.co/upload/a/video/other.cnvs.mp4";
+  assert.equal(canvazClip(Uint8Array.from([...canvas(other, "spotify:track:other"), ...canvas(mine, uri)]), uri), mine, "the asked track's own clip");
+  assert.equal(canvazClip(Uint8Array.from(canvas(other, "spotify:track:other")), uri), other, "else the first");
+  assert.equal(canvazClip(Uint8Array.from(canvas(mine, uri, 7)), uri), mine, "a renumbered url field is still found");
+  assert.equal(canvazClip(Uint8Array.from(canvas("https://canvaz.scdn.co/a/image/x.cnvs.jpg", uri)), uri), null, "a still image");
+  assert.equal(canvazClip(Uint8Array.from([0x0a, 0x01, 0x00]), uri), null, "the empty answer a logged-out token gets");
+  assert.equal(canvazClip(Uint8Array.from(canvas(mine, uri).slice(0, 20)), uri), null, "truncated, without throwing");
 });

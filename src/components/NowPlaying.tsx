@@ -40,7 +40,7 @@ import { upgradeArtwork } from "../lib/artwork";
 import { useDrag } from "../lib/dnd";
 import { shortTitle, titleSource } from "../lib/format";
 import { FitText } from "./FitText";
-import { useCanvas } from "../lib/canvas";
+import { playFragmented, useCanvas } from "../lib/canvas";
 import { useLyricsOffset } from "../lib/lyricsOffset";
 import { useIdle } from "../lib/useIdle";
 import type { LyricsResult } from "../types";
@@ -356,8 +356,16 @@ export function NowPlaying() {
   const boost = useSettings((st) => st.fullBleedArtwork);
   const legacyMesh = useSettings((st) => st.legacyMeshGradient);
   const animatedCanvas = useSettings((st) => st.animatedCanvas);
-  const canvasUrl = useCanvas(shown ?? null);
+  const canvas = useCanvas(shown ?? null);
+  const canvasUrl = canvas?.url ?? null;
+  const canvasFragmented = canvas?.source === "apple";
   const canvasVideoRef = useRef<HTMLVideoElement | null>(null);
+  // Apple's clips loop through Media Source (lib/canvas); their src is set here, before play or pause.
+  useEffect(() => {
+    const v = canvasVideoRef.current;
+    if (!v || !canvasUrl || !canvasFragmented) return;
+    return playFragmented(v, canvasUrl);
+  }, [canvasUrl, canvasFragmented, animatedCanvas]);
   useEffect(() => {
     const v = canvasVideoRef.current;
     if (!v) return;
@@ -518,9 +526,9 @@ export function NowPlaying() {
                         <video
                           key={canvasUrl}
                           ref={canvasVideoRef}
-                          src={canvasUrl}
+                          src={canvasFragmented ? undefined : canvasUrl}
                           autoPlay
-                          loop
+                          loop={!canvasFragmented}
                           muted
                           playsInline
                           className="relative w-full h-full object-cover animate-fade-in"

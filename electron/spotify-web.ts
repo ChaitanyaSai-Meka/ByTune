@@ -211,6 +211,101 @@ export function queryHash(script: string, operation: string): string | null {
   return new RegExp(`["']${operation}["']\\s*,\\s*["']query["']\\s*,\\s*["']([0-9a-f]{64})["']`).exec(script)?.[1] ?? null;
 }
 
+/* ---------------- Canvas (ported from BitChord, GPL-3.0: SpotifyCanvas, SpotifyCanvasQuery) ---------------- */
+
+/** One track in an answer to the web player's searchTracks query. */
+export interface SpotifyTrackHit {
+  uri: string;
+  name: string;
+  artists: string[];
+  album: string;
+}
+
+/** The tracks in a searchTracks answer, in Spotify's order. */
+export function parseTrackSearch(json: unknown): SpotifyTrackHit[] {
+  return arr(at(json, "data", "searchV2", "tracksV2", "items")).flatMap((item) => {
+    const d = at(item, "item", "data");
+    const uri = str(at(d, "uri"));
+    const name = str(at(d, "name"));
+    if (!uri?.startsWith("spotify:track:") || !name) return [];
+    const artists = arr(at(d, "artists", "items")).flatMap((a) => str(at(a, "profile", "name")) ?? []);
+    return [{ uri, name, artists, album: str(at(d, "albumOfTrack", "name")) ?? "" }];
+  });
+}
+
+/** A Canvas that is a video at an https URL; some are still images, which the player doesn't show. */
+const canvasVideo = (url: string | undefined): string | null => (url?.startsWith("https://") && /\.mp4(?:[?#]|$)/i.test(url) ? url : null);
+
+/** The clip in an answer to the canvas query, or null (no Canvas, or one this can't play). */
+export function parseCanvasAnswer(json: unknown): string | null {
+  return canvasVideo(str(at(json, "data", "trackUnion", "canvas", "url")));
+}
+
+function varint(n: number): number[] {
+  const out: number[] = [];
+  for (; n > 0x7f; n >>>= 7) out.push((n & 0x7f) | 0x80);
+  return [...out, n];
+}
+const field1 = (bytes: Uint8Array): Uint8Array<ArrayBuffer> => Uint8Array.from([0x0a, ...varint(bytes.length), ...bytes]);
+
+/** canvaz-cache's request, `CanvasRequest { repeated Track tracks = 1 }` with `Track { string track_uri = 1 }`, hand-rolled. */
+export function canvazRequest(trackUri: string): Uint8Array<ArrayBuffer> {
+  return field1(field1(new TextEncoder().encode(trackUri)));
+}
+
+/** A protobuf message's fields: varints as numbers, length-delimited ones as bytes; anything else ends the read. */
+function* protoFields(bytes: Uint8Array): Generator<[number, number | Uint8Array]> {
+  let i = 0;
+  const read = (): number => {
+    let n = 0;
+    for (let shift = 0; ; shift += 7) {
+      if (i >= bytes.length || shift > 49) throw new SpotifyFormatError("truncated protobuf");
+      const b = bytes[i++];
+      n += (b & 0x7f) * 2 ** shift;
+      if (b < 0x80) return n;
+    }
+  };
+  while (i < bytes.length) {
+    const tag = read();
+    const wire = tag % 8;
+    if (wire === 0) yield [Math.floor(tag / 8), read()];
+    else if (wire === 2) {
+      const len = read();
+      if (i + len > bytes.length) throw new SpotifyFormatError("truncated protobuf");
+      yield [Math.floor(tag / 8), bytes.subarray(i, i + len)];
+      i += len;
+    } else if (wire === 1) i += 8;
+    else if (wire === 5) i += 4;
+    else throw new SpotifyFormatError(`protobuf wire type ${wire}`);
+  }
+}
+
+/**
+ * The clip in canvaz-cache's answer, `CanvasResponse { repeated Canvas canvases = 1 }` with
+ * `Canvas { id = 1; canvas_url = 2; track_uri = 5 }`: this track's own first, else the first.
+ * When the fields don't read (Spotify renumbered them), any .cnvs.mp4 URL in the bytes.
+ */
+export function canvazClip(bytes: Uint8Array, trackUri: string): string | null {
+  const hits: { url: string; track?: string }[] = [];
+  const text = (b: number | Uint8Array): string | undefined => (typeof b === "number" ? undefined : new TextDecoder().decode(b));
+  try {
+    for (const [n, canvas] of protoFields(bytes)) {
+      if (n !== 1 || typeof canvas === "number") continue;
+      const hit: { url?: string; track?: string } = {};
+      for (const [f, v] of protoFields(canvas)) {
+        if (f === 2) hit.url = text(v);
+        else if (f === 5) hit.track = text(v);
+      }
+      if (hit.url) hits.push({ url: hit.url, track: hit.track });
+    }
+  } catch {
+    // a truncated answer: what was read stands, and the scan below covers the rest
+  }
+  const url = (hits.find((h) => h.track === trackUri) ?? hits[0])?.url
+    ?? /https:\/\/[^"'\s\x00-\x1F]+\.cnvs\.mp4/.exec(new TextDecoder("latin1").decode(bytes))?.[0];
+  return canvasVideo(url);
+}
+
 /** RFC 4226: six digits from an HMAC-SHA1 over the counter. */
 export function hotp(key: Buffer, counter: bigint): string {
   const block = Buffer.alloc(8);
