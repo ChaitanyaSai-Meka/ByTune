@@ -140,7 +140,8 @@ export function seedArtistAbout(
 
 /** The playing track's artist about-card data, cached per artist. */
 export function useArtistAbout(track: Track | null): ArtistAbout | null {
-  const key = track ? track.artistId ?? `name:${track.artist}` : "";
+  // A podcast episode's "artist" is its show: there is no artist to look up.
+  const key = track && !track.episode ? track.artistId ?? `name:${track.artist}` : "";
   const cacheVersion = useAboutCache((s) => s.version);
   const [data, setData] = useState<ArtistAbout | null>(() => {
     if (!key) return null;

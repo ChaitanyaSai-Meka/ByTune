@@ -1,35 +1,30 @@
 /**
- * First-run onboarding — three ways in: username + password account
- * (Supabase-backed, no email involved), Google OAuth through the default
- * browser, or guest mode (fully offline; data stays in this PC's app-data
- * folder and survives uninstall/reinstall). Also renders the "guest account
- * found — continue?" prompt shown on relaunches after a reinstall, and the
- * one-time username choice for fresh Google sign-ins.
+ * First-run onboarding. Three ways in: a username and password account (Supabase-backed, no email
+ * involved), Google through the default browser, or guest mode (fully offline; the library stays
+ * in this computer's app-data folder and survives an uninstall). It also asks a reinstalled guest
+ * whether to carry on, and asks a fresh Google account for a username, once.
  *
- * Composition: one centered column — brand lockup, one-line message, then a
- * single auth card holding whichever step is active. The page is constant
- * while the card's content swaps (short keyed enter, direction-aware), so
- * every screen reads as the same place.
+ * Composition: ByTune's own look, a page lit by the music. On the right, a drum of covers in 3D
+ * (components/CoverDrum) that turns and can be spun or rolled; the cover in focus lights the page.
+ * On the left, on the dark side, the brand and one step at a time. The first step says what ByTune
+ * is and lists the ways in, each saying what it means and lighting up with the cover in focus as
+ * the pointer reaches it. A step swaps in place (keyed, direction-aware) and turns the drum a notch.
  *
- * Loading states reflect real operations only: the post-auth
- * "Restoring your library…" card waits for the actual cloud merge.
+ * Loading states reflect real operations only: "Restoring your library" waits for the actual
+ * cloud merge.
  */
-import { useEffect, useState, type ReactNode } from "react";
-import {
-  Check,
-  CircleUserRound,
-  Eye,
-  EyeOff,
-  KeyRound,
-  Loader2,
-  ShieldCheck,
-  UserRound,
-} from "lucide-react";
+import { useEffect, useId, useState, type ReactNode } from "react";
+import { ArrowLeft, ArrowRight, Check, Cloud, Eye, EyeOff, HardDrive, KeyRound, Loader2 } from "lucide-react";
 import { CaptionButtons } from "../components/TopBar";
+import { CoverDrum } from "../components/CoverDrum";
 import { useSession } from "../lib/session";
 import { isMac } from "../lib/platform";
 import {
   availabilityState,
+  DISPLAY_NAME_MAX,
+  displayNameProblem,
+  normalizeDisplayName,
+  PASSWORD_MIN,
   passwordProblem,
   usernameProblem,
   usernameTypable,
@@ -39,9 +34,9 @@ import {
 import brandLogo from "../assets/brand/bytune-logo.svg";
 import brandText from "../assets/brand/bytune-Text.svg";
 
-type Screen = "choose" | "signup" | "signin" | "resume" | "restoring" | "pickusername";
+type Screen = "choose" | "signup" | "signin" | "resume" | "restoring" | "pickusername" | "guestname";
 
-/** Raw provider/engine errors → short, human, actionable messages. */
+/** Raw provider/engine errors to short, human, actionable messages. */
 function friendlyError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   const msg = raw.replace(/^\[.*?\]\s*/, "");
@@ -65,9 +60,6 @@ function friendlyError(err: unknown): string {
   if (/at least \d+ characters|letters, numbers/i.test(msg)) return msg;
   return "Something went wrong. Please try again.";
 }
-
-/** Staggered entrance delay for .ob-item elements. */
-const dly = (ms: number): React.CSSProperties => ({ ["--ob-delay" as string]: `${ms}ms` });
 
 /* ------------------------------------------------------------------ */
 /* Shared pieces                                                       */
@@ -103,77 +95,98 @@ function Spinner() {
 function ErrorNote({ msg }: { msg: string | null }) {
   if (!msg) return null;
   return (
-    <p
-      role="alert"
-      className="ob-note text-[12.5px] text-red-400 bg-red-400/[0.08] border border-red-400/20 rounded-[10px] px-3 py-2 mt-3 break-words"
-    >
+    <p role="alert" className="ob-error">
       {msg}
     </p>
   );
 }
 
-/** Card buttons — one press/hover/disabled/focus system. Flat desktop press;
-    the primary is the only loud element in the card. */
-const btnBase =
-  "ob-btn h-11 w-full flex items-center justify-center gap-2 rounded-xl px-4 text-[13.5px] font-semibold transition-[background-color,border-color,filter,box-shadow,transform] duration-150 ease-out active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 select-none";
-const btnPrimary = `${btnBase} bg-primary text-on-primary hover:brightness-[0.94] disabled:hover:brightness-100`;
-const btnSecondary = `${btnBase} bg-ink-hi/[0.06] text-ink-hi border border-ink-hi/[0.1] hover:bg-ink-hi/[0.1] hover:border-ink-hi/[0.18]`;
-const btnTertiary = `${btnBase} text-ink border border-ink-hi/[0.16] hover:bg-ink-hi/[0.07] hover:border-ink-hi/[0.3] hover:shadow-[0_0_24px_-6px_rgb(var(--primary)/0.35)]`;
-const btnGhost =
-  "ob-btn h-9 inline-flex items-center justify-center gap-2 rounded-lg px-3 text-[13px] text-ink-dim hover:text-ink-hi transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed select-none";
+/** Buttons: the app's own pills (a collection page's Play is the same white one). */
+const btnPrimary = "ob-btn ob-btn-primary";
+const btnSecondary = "ob-btn ob-btn-secondary";
+/** Quiet text actions: skip. */
+const btnText = "ob-text";
 
-/** Card title + optional one-line hint. */
-function CardHead({ title, hint }: { title: string; hint?: string }) {
+/** Back to the ways in, above a step's title. */
+function BackLink({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {
   return (
-    <div className="mb-5">
-      <h2 className="text-[17px] font-bold tracking-[-0.01em] text-ink-hi">{title}</h2>
-      {hint && <p className="text-[13px] text-ink-dim mt-1 leading-relaxed">{hint}</p>}
-    </div>
+    <button type="button" onClick={onClick} disabled={disabled} className="ob-back-link">
+      <ArrowLeft className="w-4 h-4" /> Back
+    </button>
   );
 }
 
-/** Text input with a leading glyph and an optional trailing affordance. */
+/** A step's title, and the line under it. */
+function Title({ children, lede }: { children: ReactNode; lede?: ReactNode }) {
+  return (
+    <header className="ob-head">
+      <h2 className="ob-title">{children}</h2>
+      {lede && <p className="ob-lede">{lede}</p>}
+    </header>
+  );
+}
+
+/**
+ * A text field that keeps its words inside the box: the label sits in it and moves up out of the
+ * way once there's text or focus; while it's focused and empty, a hint on the typing line says
+ * what goes in; and what's known about the text (available, taken, too long) sits on the top
+ * line, opposite the label.
+ */
 function Field({
-  icon: Icon,
+  label,
+  hint,
+  status,
+  tone,
   trailing,
   ...props
 }: React.InputHTMLAttributes<HTMLInputElement> & {
-  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  hint?: string;
+  status?: ReactNode;
+  tone?: "good" | "warn";
   trailing?: ReactNode;
 }) {
+  const id = useId();
   return (
-    <div className="relative">
-      <Icon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-dim pointer-events-none" />
+    <div className="ob-field">
       <input
         {...props}
-        className="h-11 w-full bg-black/25 border border-ink-hi/[0.09] rounded-xl pl-10 pr-4 text-[14px] text-ink-hi outline-none transition-[border-color,background-color,box-shadow] duration-150 placeholder:text-ink-ghost disabled:opacity-50 focus:border-ink-hi/35 focus:bg-black/40 focus:shadow-[0_0_0_3px_rgb(var(--ink-hi)/0.06)]"
+        id={id}
+        placeholder={hint ?? " "}
+        aria-label={label}
+        aria-describedby={`${id}s`}
+        className={trailing ? "ob-input ob-trail" : "ob-input"}
       />
+      <label htmlFor={id} className="ob-label">
+        {label}
+      </label>
+      {/* Always there, so a change is announced. */}
+      <span id={`${id}s`} aria-live="polite" className={`ob-field-status${tone ? ` is-${tone}` : ""}`}>
+        {status}
+      </span>
       {trailing}
     </div>
   );
 }
 
-/** Password input with a reveal toggle — desktop apps never make you type
-    a long password blind. */
-function PasswordField(props: React.InputHTMLAttributes<HTMLInputElement>) {
+/** A password field with a reveal toggle: a desktop app never makes you type a long password blind. */
+function PasswordField(props: React.InputHTMLAttributes<HTMLInputElement> & { label: string; hint?: string }) {
   const [show, setShow] = useState(false);
   return (
-    <div className="relative">
-      <KeyRound className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-dim pointer-events-none" />
-      <input
-        type={show ? "text" : "password"}
-        {...props}
-        className="h-11 w-full bg-black/25 border border-ink-hi/[0.09] rounded-xl pl-10 pr-12 text-[14px] text-ink-hi outline-none transition-[border-color,background-color,box-shadow] duration-150 placeholder:text-ink-ghost disabled:opacity-50 focus:border-ink-hi/35 focus:bg-black/40 focus:shadow-[0_0_0_3px_rgb(var(--ink-hi)/0.06)]"
-      />
-      <button
-        type="button"
-        onClick={() => setShow((v) => !v)}
-        aria-label={show ? "Hide password" : "Show password"}
-        className="absolute right-1.5 top-1/2 -translate-y-1/2 w-8 h-8 grid place-items-center rounded-lg text-ink-dim hover:text-ink-hi hover:bg-ink-hi/[0.07] transition-colors"
-      >
-        {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-      </button>
-    </div>
+    <Field
+      {...props}
+      type={show ? "text" : "password"}
+      trailing={
+        <button
+          type="button"
+          onClick={() => setShow((v) => !v)}
+          aria-label={show ? "Hide password" : "Show password"}
+          className="ob-reveal"
+        >
+          {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+        </button>
+      }
+    />
   );
 }
 
@@ -215,60 +228,78 @@ function useUsernameAvailability(username: string, active: boolean): UsernameAva
   return state;
 }
 
-/** Reserved-height status row under the username field. Every state has a
-    home here, so availability feedback never shifts the layout. */
-function UsernameHint({
-  name,
-  state,
-  formatProblem,
-}: {
-  name: string;
-  state: UsernameAvailability;
-  formatProblem: string | null;
-}) {
-  let content: ReactNode = <>Letters, numbers, _ and @.</>;
+/** What the username field knows about its text, for the box's top line. A rule still unmet while
+    typing is said quietly; only a taken name is a warning. */
+function usernameStatus(
+  state: UsernameAvailability,
+  formatProblem: string | null
+): { status?: ReactNode; tone?: "good" | "warn" } {
   if (formatProblem) {
-    content =
-      formatProblem === `Username must be at least ${USERNAME_MIN} characters.` ? (
-        <>At least {USERNAME_MIN} characters.</>
-      ) : (
-        <>{formatProblem}</>
-      );
-  } else if (state === "checking") {
-    content = (
-      <>
-        <Loader2 className="w-3 h-3 animate-spin" /> Checking availability…
-      </>
-    );
-  } else if (state === "free") {
-    content = (
-      <>
-        <Check className="w-3.5 h-3.5" /> {name} is available
-      </>
-    );
-  } else if (state === "taken") {
-    content = <>{name} is already taken</>;
-  } else if (state === "unknown") {
-    content = <>Couldn't check availability. You can still continue.</>;
+    const n = /at (least|most) (\d+)/.exec(formatProblem);
+    return { status: n ? `${n[1] === "least" ? "At least" : "Up to"} ${n[2]} characters` : "Letters, numbers, _ and @ only" };
   }
+  if (state === "checking") {
+    return {
+      status: (
+        <>
+          <Loader2 className="w-3 h-3 animate-spin" /> Checking
+        </>
+      ),
+    };
+  }
+  if (state === "free") {
+    return {
+      status: (
+        <>
+          <Check className="w-3.5 h-3.5" /> Available
+        </>
+      ),
+      tone: "good",
+    };
+  }
+  if (state === "taken") return { status: "Taken", tone: "warn" };
+  if (state === "unknown") return { status: "Couldn't check, you can still continue" };
+  return {};
+}
+
+/** The display name field: what it's for while focused, and on its top line when it's too long. */
+function DisplayNameField({
+  value,
+  onChange,
+  hint,
+  autoFocus,
+  disabled,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  hint: string;
+  autoFocus?: boolean;
+  disabled?: boolean;
+}) {
+  const tooLong = [...normalizeDisplayName(value)].length > DISPLAY_NAME_MAX;
   return (
-    <div
-      aria-live="polite"
-      className={`h-[18px] mt-1.5 px-1 flex items-center gap-1.5 text-[12px] leading-none ${
-        state === "free" && !formatProblem
-          ? "text-emerald-400/90"
-          : state === "taken" && !formatProblem
-            ? "text-amber-400/90"
-            : "text-ink-ghost"
-      }`}
-    >
-      {content}
-    </div>
+    <Field
+      label="Display name"
+      hint={hint}
+      status={tooLong ? `Up to ${DISPLAY_NAME_MAX} characters` : undefined}
+      tone={tooLong ? "warn" : undefined}
+      autoFocus={autoFocus}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      autoComplete="name"
+      disabled={disabled}
+    />
   );
 }
 
+/** A guest's own name, or one carried from the guest who is now creating an account. */
+function startingName(): string {
+  const s = useSession.getState();
+  return s.suggestedDisplayName ?? (s.mode === "guest" ? s.displayName : null) ?? "";
+}
+
 /* ------------------------------------------------------------------ */
-/* Card: username + password form (sign up / sign in)                  */
+/* Step: username + password form (sign up / sign in)                  */
 /* ------------------------------------------------------------------ */
 
 function UsernamePasswordForm({
@@ -280,6 +311,7 @@ function UsernamePasswordForm({
   onBack: () => void;
   navigate: (s: Screen) => void;
 }) {
+  const [displayName, setDisplayName] = useState(startingName);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -291,11 +323,12 @@ function UsernamePasswordForm({
     username,
     mode === "signup" && !formatProblem && username.trim().length >= USERNAME_MIN
   );
+  const nameProblem = mode === "signup" ? displayNameProblem(displayName) : null;
 
   const canSubmit =
     username.trim().length >= USERNAME_MIN &&
     password.length > 0 &&
-    (mode === "signin" || (confirm.length > 0 && availability !== "taken" && !formatProblem)) &&
+    (mode === "signin" || (confirm.length > 0 && availability !== "taken" && !formatProblem && !nameProblem)) &&
     !busy;
 
   const google = async (): Promise<void> => {
@@ -334,8 +367,9 @@ function UsernamePasswordForm({
     setBusy(true);
     setError(null);
     try {
-      const fn = mode === "signup" ? window.bytune?.authSignUp : window.bytune?.authSignIn;
-      const info = (await fn?.(username.trim(), password)) as { needsUsername?: boolean } | undefined;
+      const info = (await (mode === "signup"
+        ? window.bytune?.authSignUp(username.trim(), password, displayName)
+        : window.bytune?.authSignIn(username.trim(), password))) as { needsUsername?: boolean } | undefined;
       if (info?.needsUsername) {
         navigate("pickusername");
         return;
@@ -350,95 +384,130 @@ function UsernamePasswordForm({
     }
   };
 
+  const signup = mode === "signup";
   return (
     <form onSubmit={(e) => void submit(e)}>
-      <CardHead
-        title={mode === "signup" ? "Create your account" : "Welcome back"}
-        hint={mode === "signup" ? undefined : "Pick up right where you left off."}
-      />
-      <div className="space-y-3">
-        <div>
-          <Field
-            icon={UserRound}
-            autoFocus
-            value={username}
-            onChange={(e) => setUsername(usernameTypable(e.target.value))}
-            placeholder="Username"
-            autoComplete="username"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            disabled={busy}
-            aria-label="Username"
-            trailing={
-              availability === "checking" ? (
-                <Loader2 className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-dim animate-spin" />
-              ) : undefined
-            }
-          />
-          {mode === "signup" && (
-            <UsernameHint name={username.trim()} state={availability} formatProblem={formatProblem} />
-          )}
-        </div>
+      <BackLink onClick={onBack} disabled={busy} />
+      <Title lede={signup ? "No email needed, but a lost password can't be reset." : undefined}>
+        {signup ? "Create your account" : "Sign in"}
+      </Title>
+      <div className="ob-fields">
+        {signup && (
+          <DisplayNameField value={displayName} onChange={setDisplayName} hint="What people see" autoFocus disabled={busy} />
+        )}
+        <Field
+          label="Username"
+          hint={signup ? "For signing in. Letters, numbers, _ and @" : undefined}
+          {...(signup ? usernameStatus(availability, formatProblem) : {})}
+          autoFocus={!signup}
+          value={username}
+          onChange={(e) => setUsername(usernameTypable(e.target.value))}
+          autoComplete="username"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          disabled={busy}
+        />
         <PasswordField
+          label="Password"
+          hint={signup ? `At least ${PASSWORD_MIN} characters` : undefined}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          placeholder="Password"
-          autoComplete={mode === "signup" ? "new-password" : "current-password"}
+          autoComplete={signup ? "new-password" : "current-password"}
           disabled={busy}
-          aria-label="Password"
         />
-        {mode === "signup" && (
+        {signup && (
           <PasswordField
+            label="Confirm password"
+            hint="The same password again"
             value={confirm}
             onChange={(e) => setConfirm(e.target.value)}
-            placeholder="Confirm password"
             autoComplete="new-password"
             disabled={busy}
-            aria-label="Confirm password"
           />
         )}
       </div>
       <ErrorNote msg={error} />
-      {mode === "signup" && (
-        <p className="text-[12px] text-ink-dim mt-3.5 leading-relaxed flex gap-2">
-          <ShieldCheck className="w-4 h-4 shrink-0 mt-[1px] text-ink-ghost" />
-          <span>There's no email on this account, so your password can't be recovered. Save it somewhere safe.</span>
-        </p>
-      )}
-      <button type="submit" disabled={!canSubmit} className={`${btnPrimary} mt-5`}>
-        {busy ? (
-          <>
-            <Spinner /> {mode === "signup" ? "Creating account…" : "Signing in…"}
-          </>
-        ) : mode === "signup" ? (
-          "Create account"
-        ) : (
-          "Sign in"
-        )}
-      </button>
-      <button type="button" onClick={() => void google()} className={`${btnSecondary} mt-2.5`} disabled={busy}>
-        {busy ? <Spinner /> : <GoogleG className="w-[17px] h-[17px]" />} Continue with Google
-      </button>
-      <div className="flex items-center justify-between mt-4">
-        <button type="button" onClick={onBack} className={btnGhost}>
-          Back
+      <div className="ob-actions">
+        <button type="submit" disabled={!canSubmit} className={btnPrimary}>
+          {busy ? (
+            <>
+              <Spinner /> {signup ? "Creating account…" : "Signing in…"}
+            </>
+          ) : signup ? (
+            "Create account"
+          ) : (
+            "Sign in"
+          )}
         </button>
-        <button
-          type="button"
-          onClick={() => navigate(mode === "signup" ? "signin" : "signup")}
-          className={btnGhost}
-        >
-          {mode === "signup" ? "Sign in instead" : "Create account"}
+        <button type="button" onClick={() => void google()} className={btnSecondary} disabled={busy}>
+          {busy ? <Spinner /> : <GoogleG className="w-[18px] h-[18px]" />} Continue with Google
         </button>
       </div>
+      <p className="ob-switch">
+        {signup ? "Already have an account? " : "New to ByTune? "}
+        <button type="button" onClick={() => navigate(signup ? "signin" : "signup")} className="ob-link" disabled={busy}>
+          {signup ? "Sign in" : "Create an account"}
+        </button>
+      </p>
     </form>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* Card: choose screen                                                 */
+/* Step: the ways in                                                   */
 /* ------------------------------------------------------------------ */
+
+/**
+ * One way in, as a row: what it is and what it means. The row's name is its title alone; the
+ * line under it describes it. It lights up with the cover in focus on the drum (index.css, .ob-way).
+ */
+function Way({
+  icon,
+  title,
+  note,
+  main,
+  busy,
+  disabled,
+  onClick,
+}: {
+  icon: ReactNode;
+  title: string;
+  note: string;
+  /** The way ByTune suggests: its tile is the one white thing in the list. */
+  main?: boolean;
+  /** This way is under way: it stays bright while the others wait. */
+  busy?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  const id = useId();
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        aria-labelledby={`${id}t`}
+        aria-describedby={`${id}n`}
+        className={`ob-way${busy ? " is-busy" : ""}`}
+      >
+        <span className={`ob-way-icon${main ? " is-main" : ""}`} aria-hidden>
+          {icon}
+        </span>
+        <span className="ob-way-text">
+          <span id={`${id}t`} className="ob-way-title">
+            {title}
+          </span>
+          <span id={`${id}n`} className="ob-way-note">
+            {note}
+          </span>
+        </span>
+        <ArrowRight className="ob-way-go w-4 h-4" aria-hidden />
+      </button>
+    </li>
+  );
+}
 
 function ChooseContent({
   onPick,
@@ -448,20 +517,7 @@ function ChooseContent({
   navigate: (s: Screen) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"none" | "guest" | "google">("none");
-
-  const guest = async (): Promise<void> => {
-    if (busy !== "none") return;
-    setBusy("guest");
-    setError(null);
-    try {
-      await window.bytune?.authContinueGuest();
-      await useSession.getState().refresh();
-    } catch (err) {
-      setError(friendlyError(err));
-      setBusy("none");
-    }
-  };
+  const [busy, setBusy] = useState<"none" | "google">("none");
 
   const google = async (): Promise<void> => {
     if (busy !== "none") return;
@@ -470,7 +526,7 @@ function ChooseContent({
     try {
       const info = (await window.bytune?.authSignInGoogle()) as { needsUsername?: boolean } | undefined;
       if (info?.needsUsername) {
-        // Fresh Google user — one-time username choice before entry.
+        // Fresh Google user: one-time username choice before entry.
         navigate("pickusername");
         return;
       }
@@ -484,65 +540,119 @@ function ChooseContent({
     }
   };
 
+  const off = busy !== "none";
+  const icon = "w-[18px] h-[18px]";
   return (
     <div>
-      <div className="space-y-2.5">
-        <button
+      {/* Two lines that rise out of their own masks; the text stays one heading for screen readers. */}
+      <h2 className="ob-hero">
+        <span className="ob-line">
+          <span>Stream what's new.</span>
+        </span>{" "}
+        <span className="ob-line ob-line-dim" style={{ ["--d" as string]: "90ms" }}>
+          <span>Play what's yours.</span>
+        </span>
+      </h2>
+      <p className="ob-lede ob-hero-lede">One library for both. Free and open source.</p>
+      <ul className="ob-ways">
+        <Way
+          main
+          icon={<Cloud className={icon} />}
+          title="Create an account"
+          note="Keeps your library in sync on every computer"
           onClick={() => onPick("signup")}
-          className={`${btnPrimary} ob-item`}
-          style={dly(60)}
-          disabled={busy !== "none"}
-        >
-          <UserRound className="w-4 h-4" /> Create account
-        </button>
-        <button
-          onClick={() => onPick("signin")}
-          className={`${btnSecondary} ob-item`}
-          style={dly(110)}
-          disabled={busy !== "none"}
-        >
-          <KeyRound className="w-4 h-4" /> Sign in
-        </button>
-        <button
+          disabled={off}
+        />
+        <Way
+          icon={busy === "google" ? <Spinner /> : <GoogleG className={icon} />}
+          title="Continue with Google"
+          note={busy === "google" ? "Finish in your browser" : "Sign in or sign up through your browser"}
           onClick={() => void google()}
-          className={`${btnSecondary} ob-item`}
-          style={dly(160)}
-          disabled={busy !== "none"}
-        >
-          {busy === "google" ? <Spinner /> : <GoogleG className="w-[17px] h-[17px]" />} Continue with Google
-        </button>
-      </div>
-      <div className="my-5 flex items-center gap-3 ob-item" style={dly(210)} aria-hidden="true">
-        <div className="h-px flex-1 bg-ink-hi/[0.09]" />
-        <span className="micro-label text-ink-ghost">or</span>
-        <div className="h-px flex-1 bg-ink-hi/[0.09]" />
-      </div>
-      <button
-        onClick={() => void guest()}
-        className={`${btnTertiary} ob-item`}
-        style={dly(250)}
-        disabled={busy !== "none"}
-      >
-        {busy === "guest" ? (
-          <span className="inline-flex items-center gap-2">
-            <Spinner /> Starting…
-          </span>
-        ) : (
-          <>
-            <CircleUserRound className="w-4 h-4" /> Continue as guest
-          </>
-        )}
-      </button>
-      <p className="text-[12px] text-ink-ghost mt-2 leading-relaxed text-center ob-item" style={dly(290)}>
-        Guest mode keeps your data on this PC. It survives reinstall, but isn't backed up.
-      </p>
+          busy={busy === "google"}
+          disabled={off}
+        />
+        <Way
+          icon={<KeyRound className={icon} />}
+          title="Sign in"
+          note="With your ByTune username and password"
+          onClick={() => onPick("signin")}
+          disabled={off}
+        />
+        <Way
+          icon={<HardDrive className={icon} />}
+          title="Continue as guest"
+          note="Everything stays on this computer"
+          onClick={() => navigate("guestname")}
+          disabled={off}
+        />
+      </ul>
       <ErrorNote msg={error} />
     </div>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* Card: guest resume (reinstall)                                      */
+/* Step: guest name (optional, before entering as a guest)             */
+/* ------------------------------------------------------------------ */
+
+function GuestNameContent({ onBack }: { onBack: () => void }) {
+  const [name, setName] = useState(startingName);
+  const [busy, setBusy] = useState<"none" | "name" | "skip">("none");
+  const [error, setError] = useState<string | null>(null);
+  const problem = displayNameProblem(name);
+
+  const enter = async (withName: boolean): Promise<void> => {
+    if (busy !== "none" || (withName && problem)) return;
+    setBusy(withName ? "name" : "skip");
+    setError(null);
+    try {
+      await window.bytune?.authContinueGuest(withName ? name : undefined);
+      await useSession.getState().refresh();
+    } catch (err) {
+      setError(friendlyError(err));
+      setBusy("none");
+    }
+  };
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        void enter(true);
+      }}
+    >
+      <BackLink onClick={onBack} disabled={busy !== "none"} />
+      <Title lede="Everything stays on this computer. It isn't backed up.">What should we call you?</Title>
+      <DisplayNameField value={name} onChange={setName} hint="Shown around ByTune" autoFocus disabled={busy !== "none"} />
+      <ErrorNote msg={error} />
+      <div className="ob-actions">
+        <button type="submit" disabled={busy !== "none" || !!problem} className={btnPrimary}>
+          {busy === "name" ? (
+            <>
+              <Spinner /> Starting…
+            </>
+          ) : (
+            "Continue"
+          )}
+        </button>
+      </div>
+      <div className="ob-foot">
+        <button type="button" onClick={() => void enter(false)} className={btnText} disabled={busy !== "none"}>
+          {busy === "skip" ? (
+            <>
+              <Spinner /> Starting…
+            </>
+          ) : (
+            "Skip for now"
+          )}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Step: guest resume (after a reinstall)                              */
 /* ------------------------------------------------------------------ */
 
 function ResumeContent({ onSignInInstead }: { onSignInInstead: () => void }) {
@@ -550,8 +660,8 @@ function ResumeContent({ onSignInInstead }: { onSignInInstead: () => void }) {
   const [error, setError] = useState<string | null>(null);
   return (
     <div>
-      <CardHead title="Welcome back" hint="We found your guest library from a previous install on this PC." />
-      <div className="space-y-2.5">
+      <Title lede="We found it on this computer, from an earlier install.">Your guest library is still here</Title>
+      <div className="ob-actions">
         <button
           disabled={busy}
           onClick={async () => {
@@ -569,9 +679,9 @@ function ResumeContent({ onSignInInstead }: { onSignInInstead: () => void }) {
           className={btnPrimary}
         >
           {busy ? (
-            <span className="inline-flex items-center gap-2">
+            <>
               <Spinner /> Starting…
-            </span>
+            </>
           ) : (
             "Continue as guest"
           )}
@@ -580,54 +690,49 @@ function ResumeContent({ onSignInInstead }: { onSignInInstead: () => void }) {
           Sign in with an account instead
         </button>
       </div>
-      <p className="text-[12px] text-ink-ghost leading-relaxed mt-3.5">
-        Signing in later carries your guest data over. Nothing is deleted either way.
-      </p>
+      <p className="ob-aside">Signing in later carries it over. Nothing is deleted.</p>
       <ErrorNote msg={error} />
     </div>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* Card: restoring — real state, shown while the cloud merge runs      */
+/* Step: restoring (real state, shown while the cloud merge runs)      */
 /* ------------------------------------------------------------------ */
 
 function RestoringContent() {
   return (
     <div>
-      <CardHead title="Restoring your library" />
-      <div className="flex items-center gap-3 py-2">
-        <Loader2 className="w-5 h-5 animate-spin text-primary shrink-0" />
-        <p className="text-[13.5px] text-ink-dim leading-relaxed">
-          Playlists, likes and history are coming back.
-        </p>
-      </div>
+      <Title lede="Your playlists, likes and history are coming back from your account.">Restoring your library</Title>
+      <p className="ob-status">
+        <Loader2 className="w-4 h-4 animate-spin" /> Syncing
+      </p>
     </div>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* Card: pick username — one-time choice for fresh Google sign-ins     */
+/* Step: pick a username (one time, for fresh Google sign-ins)         */
 /* ------------------------------------------------------------------ */
 
 function PickUsernameContent() {
+  // The name on their Google account (or the guest's own), ready to keep.
+  const [displayName, setDisplayName] = useState(startingName);
   const [username, setUsername] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const formatProblem = username.length > 0 ? usernameProblem(username) : null;
-  const availability = useUsernameAvailability(
-    username,
-    !formatProblem && username.trim().length >= USERNAME_MIN
-  );
+  const availability = useUsernameAvailability(username, !formatProblem && username.trim().length >= USERNAME_MIN);
+  const nameProblem = displayNameProblem(displayName);
 
   const save = async (): Promise<void> => {
-    if (busy || availability === "taken" || formatProblem) return;
+    if (busy || availability === "taken" || formatProblem || nameProblem) return;
     setBusy(true);
     setError(null);
     try {
-      await window.bytune?.authSetUsername(username.trim());
-      // Username claimed — now pull/merge the account and enter.
+      await window.bytune?.authSetUsername(username.trim(), displayName);
+      // Username claimed: now pull/merge the account and enter.
       await window.bytune?.syncNow().catch(() => undefined);
       await useSession.getState().refresh();
     } catch (err) {
@@ -643,7 +748,7 @@ function PickUsernameContent() {
     setBusy(true);
     setError(null);
     try {
-      await window.bytune?.authSkipUsername();
+      await window.bytune?.authSkipUsername(displayName);
       await window.bytune?.syncNow().catch(() => undefined);
       await useSession.getState().refresh();
     } catch (err) {
@@ -654,43 +759,44 @@ function PickUsernameContent() {
 
   return (
     <div>
-      <CardHead title="Choose your username" hint="This is how you'll appear in ByTune. You can change it later in Settings." />
-      <Field
-        icon={UserRound}
-        autoFocus
-        value={username}
-        onChange={(e) => setUsername(usernameTypable(e.target.value))}
-        placeholder="Username"
-        autoComplete="username"
-        autoCapitalize="off"
-        autoCorrect="off"
-        spellCheck={false}
-        disabled={busy}
-        aria-label="Username"
-        trailing={
-          availability === "checking" ? (
-            <Loader2 className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-dim animate-spin" />
-          ) : undefined
-        }
-      />
-      <UsernameHint name={username.trim()} state={availability} formatProblem={formatProblem} />
+      <Title lede="It's how you sign in. You can change it later.">Choose a username</Title>
+      <div className="ob-fields">
+        <DisplayNameField value={displayName} onChange={setDisplayName} hint="What people see in rooms" disabled={busy} />
+        <Field
+          label="Username"
+          hint="Letters, numbers, _ and @"
+          {...usernameStatus(availability, formatProblem)}
+          autoFocus
+          value={username}
+          onChange={(e) => setUsername(usernameTypable(e.target.value))}
+          autoComplete="username"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          disabled={busy}
+        />
+      </div>
       <ErrorNote msg={error} />
-      <button
-        onClick={() => void save()}
-        disabled={busy || availability === "taken" || !!formatProblem || username.trim().length < USERNAME_MIN}
-        className={`${btnPrimary} mt-5`}
-      >
-        {busy ? (
-          <>
-            <Spinner /> Saving…
-          </>
-        ) : (
-          "Continue"
-        )}
-      </button>
-      <button onClick={() => void skip()} disabled={busy} className={`${btnGhost} w-full mt-2`}>
-        Skip for now
-      </button>
+      <div className="ob-actions">
+        <button
+          onClick={() => void save()}
+          disabled={busy || availability === "taken" || !!formatProblem || !!nameProblem || username.trim().length < USERNAME_MIN}
+          className={btnPrimary}
+        >
+          {busy ? (
+            <>
+              <Spinner /> Saving…
+            </>
+          ) : (
+            "Continue"
+          )}
+        </button>
+      </div>
+      <div className="ob-foot">
+        <button onClick={() => void skip()} disabled={busy} className={btnText}>
+          Skip for now
+        </button>
+      </div>
     </div>
   );
 }
@@ -699,79 +805,42 @@ function PickUsernameContent() {
 /* Shell                                                               */
 /* ------------------------------------------------------------------ */
 
-/** Fine soundwave along the bottom edge — the app's now-playing motif,
-    redrawn as a quiet horizon. Stable pseudo-random timings so bars never
-    re-randomise between renders, edge-faded so it never reads as a widget. */
-function EqualizerStrip() {
-  const bars = useState(
-    Array.from({ length: 56 }, (_, i) => ({
-      duration: 0.9 + ((i * 7919) % 17) / 12,
-      delay: ((i * 104729) % 29) / 10,
-      height: 0.16 + ((i * 6151) % 84) / 100,
-    }))
-  )[0];
-
-  return (
-    <div className="ob-eq-strip" aria-hidden="true">
-      {bars.map((b, i) => (
-        <div
-          key={i}
-          className="ob-eq-bar eq-bar"
-          style={{
-            height: `${b.height * 100}%`,
-            animationDuration: `${b.duration}s`,
-            animationDelay: `${b.delay}s`,
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
 export function Onboarding({ initial }: { initial: Screen }) {
   const [screen, setScreen] = useState<Screen>(initial);
   const [dir, setDir] = useState<"fwd" | "back">("fwd");
+  /** Steps taken, back steps counting down: the drum turns a notch the way each one went. */
+  const [turn, setTurn] = useState(0);
+  /** Until the first step, the first screen waits for the brand and the drum. */
+  const [stepped, setStepped] = useState(false);
   const navigate = (s: Screen, d: "fwd" | "back" = "fwd"): void => {
     setDir(d);
     setScreen(s);
+    setTurn((n) => n + (d === "back" ? -1 : 1));
+    setStepped(true);
   };
 
   return (
     <div className="ob-root h-screen flex flex-col bg-canvas text-ink overflow-hidden select-none relative">
-      {/* Atmosphere: one slow light field above, film grain and a vignette,
-          and a fine soundwave on the horizon. Nothing else. */}
-      <div aria-hidden="true" className="absolute inset-0 pointer-events-none overflow-hidden">
-        <div className="ob-light" />
-        <div className="ob-light ob-light-b" />
-        <div className="ob-grain" />
-        <div className="ob-vignette" />
-        <EqualizerStrip />
-      </div>
+      <CoverDrum turn={turn} busy={screen === "restoring"} />
 
-      {/* Frameless-window chrome: a bare drag strip with the caption buttons.
-          Branding lives in the page, not the title bar. macOS draws native
-          traffic lights top-left over this strip — nothing to render here. */}
+      {/* Frameless-window chrome: a bare drag strip with the caption buttons. macOS draws its
+          traffic lights top-left over this strip, so there's nothing to render there. */}
       <div className="app-drag h-12 shrink-0 flex items-start justify-end relative z-10">
         {!isMac && <CaptionButtons />}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto relative z-10 flex flex-col">
-        <div className="ob-page">
-          <div className="ob-hero">
-            <div className="ob-lockup">
-              <img src={brandLogo} alt="" aria-hidden className="ob-lockup-logo ob-item" />
-              <img src={brandText} alt="ByTune" className="ob-lockup-text ob-item" style={dly(70)} />
-            </div>
-            <h1 className="ob-headline ob-item" style={dly(140)}>
-              Your music lives here.
-            </h1>
-            <p className="ob-tagline ob-item" style={dly(200)}>
-              One player for streaming and your own library.
-            </p>
-          </div>
-
-          <div className="ob-card ob-item" style={dly(260)}>
-            <div key={screen} className={`ob-screen ${dir === "back" ? "ob-back" : "ob-fwd"}`}>
+      <div className="ob-scroll">
+        <div className="ob-side">
+          <h1 className="ob-brand" data-intro-target>
+            <img src={brandLogo} alt="" aria-hidden className="ob-brand-mark" />
+            <img src={brandText} alt="ByTune" className="ob-brand-word" />
+          </h1>
+          <main className="ob-column">
+            <div
+              key={screen}
+              className={`ob-screen${dir === "back" ? " ob-back" : ""}`}
+              style={stepped ? undefined : { ["--ob-base" as string]: "380ms" }}
+            >
               {screen === "choose" && <ChooseContent onPick={(s) => navigate(s)} navigate={navigate} />}
               {screen === "signup" && (
                 <UsernamePasswordForm mode="signup" onBack={() => navigate("choose", "back")} navigate={navigate} />
@@ -782,8 +851,9 @@ export function Onboarding({ initial }: { initial: Screen }) {
               {screen === "resume" && <ResumeContent onSignInInstead={() => navigate("choose", "back")} />}
               {screen === "restoring" && <RestoringContent />}
               {screen === "pickusername" && <PickUsernameContent />}
+              {screen === "guestname" && <GuestNameContent onBack={() => navigate("choose", "back")} />}
             </div>
-          </div>
+          </main>
         </div>
       </div>
     </div>

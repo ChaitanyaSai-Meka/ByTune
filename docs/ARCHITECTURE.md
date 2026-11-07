@@ -17,7 +17,7 @@ Application state  (Zustand stores)
         │
 Audio engine  (src/lib/audio.ts)
   <audio> element ⇄ store, error recovery with stream-source rotation,
-  MediaSession (media keys + SMTC overlay), play-event logging
+  MediaSession (media keys + now-playing overlays), play-event logging
         │  IPC (contextBridge preload, electron/preload.ts)
 Main process  (Electron, electron/)
   main.ts           app lifecycle, window, IPC routing
@@ -25,6 +25,9 @@ Main process  (Electron, electron/)
                     lyrics + stream URL resolution
   po-token.ts       BotGuard PO-token minting (sandboxed JSDOM + bgutils-js)
   stream-proxy.ts   local 127.0.0.1 range-aware streaming proxy
+  media-controls.ts Windows media flyout + media keys via ByTuneMedia.exe
+                    (media-helper.cs): full-size cover instead of Chromium's
+                    150px copy
   downloads.ts      track downloader with progress events
   persist.ts        JSON persistence for renderer stores (+ legacy migration)
   sync-merge.ts     library merge for account sync
@@ -53,9 +56,9 @@ Note that YouTube actively changes this plumbing; if playback ever breaks, updat
 - Downloads are written as `.m4a` files to the user-configured downloads folder and tracked in a download registry that is reconciled at boot.
 - With an account (optional), the library is backed up to Supabase and merged across devices (`sync-merge.ts`); guest data stays on the device only.
 
-## Beat-aware Auto Mix
+## Automix
 
-`src/lib/analysis.ts` decodes a track and estimates tempo (BPM) from the onset-energy envelope via autocorrelation. Auto Mix uses that beat grid to land crossfades on the incoming track's tempo; the plain Crossfade setting uses fixed-duration fades instead.
+`src/lib/analysis.ts` decodes each song once at a reduced sample rate and finds its silent edges, its first musical onset, its integrated loudness (BS.1770) and beat grids at the intro and outro. Automix blends where the outgoing song's sound really ends, brings the next song in at its first sound, and slides the blend by under one beat so the beats land together when the tempos are within 4% (`planBlend` in `src/lib/audio.ts`). It does not stretch tempo. The plain Crossfade setting uses fixed-length fades; Skip silence trims the same edges. The same measurement levels Piped streams and local files without ReplayGain.
 
 ## Local music
 

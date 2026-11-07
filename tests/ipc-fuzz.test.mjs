@@ -6,6 +6,7 @@ import vm from "node:vm";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { transform } from "esbuild";
+import { srcModule } from "./helpers/src-module.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -90,6 +91,19 @@ async function loadIpcHandlers() {
       };
       if (name === "./stream-proxy") return {
         proxyUrlFor: async () => "http://127.0.0.1:1/x", proxyUrlForLocalTrack: () => null, startStreamProxy: async () => {},
+        setDownloadedFileLookup() {},
+      };
+      if (name === "./downloaded-files") return { noteLibrary() {}, noteDownloaded() {}, downloadedFilePath: () => null };
+      if (name === "./spotify") return {
+        LIKED_ID: "liked", spotifyStatus: () => ({ connected: false }), connectSpotify: async () => ({ connected: false }),
+        forgetSpotify: async () => {}, disconnectSpotify: async () => {}, moveGuestSpotify: async () => {},
+        spotifyPlaylists: async () => [], spotifyPlaylist: async () => ({ name: "", songs: [], total: 0 }),
+        publicPlaylist: async () => ({ name: "", songs: [], total: 0 }), matchSong: async () => null,
+      };
+      if (name === "./rooms") return {
+        onRoomChange() {}, roomView: () => ({ state: null, me: null, offsetMs: 0 }), createRoom: async () => ({}), joinRoom: async () => ({}),
+        leaveRoom: async () => ({}), updateRoom: async () => ({}), setHostOnly: async () => ({}), makeHost: async () => ({}),
+        removeMember: async () => ({}), stash: async () => {}, unstash: async () => null, resync() {}, recover: async () => {},
       };
       if (name === "./supabase") return {
         getClient: () => null, registerProtocol() {}, initInstallMarker() {}, initAuth: async () => {},
@@ -99,6 +113,7 @@ async function loadIpcHandlers() {
         continueAsGuest: async () => ({}), clearGuestProfile: async () => {},
         validateUsername: () => null, usernameAvailableToUser: async () => true,
         setUsername: async () => ({}), skipUsernameClaim: async () => ({}),
+        setDisplayName: async () => ({}), syncDisplayName: async () => false,
       };
       if (name === "./backup") return { backupExport: async () => ({}), backupImport: async () => ({}) };
       if (name === "./data-transition") return {
@@ -111,6 +126,7 @@ async function loadIpcHandlers() {
         readData: () => null, writeData: async () => {}, writeDataSync() {},
         drainWrites: async () => {}, resetAppData: async () => {}, migrateLegacyData() {},
       };
+      if (name.startsWith("../src/")) return srcModule(name);
       if (name.startsWith("./")) return {};
       return require(name);
     },

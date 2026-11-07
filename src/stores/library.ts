@@ -1,6 +1,6 @@
 /** Library state: liked tracks, playlists, history and download registry. */
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 import { coalescedStorage } from "../lib/persist";
 import { recordDeletionChanges } from "../lib/deletion-sync";
 import type { DeletionChange, DeletionSync } from "../lib/deletion-sync";
@@ -19,6 +19,9 @@ export interface Playlist {
       opens the artist page and the artist's photo stands in as cover */
   artistId?: string;
   artistThumb?: string;
+  /** when the listener last put the songs in their own order — the newest
+      order wins a two-device merge (electron/sync-merge.ts inPlaylistOrder) */
+  orderedAt?: number;
 }
 
 /** An artist the user dropped into their library — a follow, not a playlist. */
@@ -49,7 +52,20 @@ export interface DownloadItem {
 }
 
 /** Pinnable library shortcuts — Liked Songs, Downloads, Local Music. */
-export type PinnedSingleKey = "liked" | "downloads" | "local";
+export type PinnedSingleKey = "liked" | "spotify" | "replay" | "downloads" | "local";
+/** The sidebar's shortcut rows, in their order. */
+export const SINGLE_KEYS: PinnedSingleKey[] = ["liked", "spotify", "replay", "downloads", "local"];
+const PIN_DEFAULTS: Record<PinnedSingleKey, boolean> = { liked: true, spotify: true, replay: true, downloads: false, local: false };
+/**
+ * Pins as stored. `v2` marks a set written since Spotify and Replay became pinnable (2026-11-03).
+ * An older set saved "pinned" for every row whether chosen or not, so only its unpins still count.
+ */
+export type PinnedSingles = Partial<Record<PinnedSingleKey, boolean>> & { v2?: boolean };
+
+export function isPinned(pins: PinnedSingles | null | undefined, key: PinnedSingleKey): boolean {
+  if (pins?.v2) return pins[key] ?? PIN_DEFAULTS[key];
+  return pins?.[key] === false ? false : PIN_DEFAULTS[key];
+}
 
 interface LibraryState {
   liked: Track[];
@@ -59,20 +75,27 @@ interface LibraryState {
   followedArtists: FollowedArtist[];
   history: Track[];
   downloads: Record<string, DownloadItem>;
-  /** pin state for the Liked / Downloads / Local shortcut rows — all pinned by default */
-  pinnedSingles: Record<PinnedSingleKey, boolean>;
+  /** pin state for the shortcut rows (read it with isPinned) */
+  pinnedSingles: PinnedSingles;
+  /** the order of Your Library's movable rows, as last dragged (lib/libraryOrder; [] = default) */
+  libraryOrder?: string[];
   /** deletion/version metadata replicated with the library (see deletion-sync.ts) */
   deletionSync?: DeletionSync;
 
   isLiked(id: string): boolean;
   toggleLike(track: Track): void;
   togglePinSingle(key: PinnedSingleKey): void;
+  setLibraryOrder(keys: string[]): void;
   createPlaylist(name: string): Playlist;
+  /** A new playlist holding imported songs — never overwrites an existing one. */
+  importPlaylist(name: string, tracks: Track[], folderId?: string): Playlist;
   renamePlaylist(id: string, name: string): void;
   togglePinPlaylist(id: string): void;
   deletePlaylist(id: string): void;
   addToPlaylist(playlistId: string, track: Track): boolean;
   removeFromPlaylist(playlistId: string, trackId: string): void;
+  /** Move one song inside a playlist (drag, or Move up/down). */
+  moveInPlaylist(playlistId: string, from: number, to: number): void;
   getPlaylist(id: string): Playlist | null;
   createFolder(name: string): LibraryFolder;
   renameFolder(id: string, name: string): void;
@@ -80,6 +103,8 @@ interface LibraryState {
   setPlaylistFolder(playlistId: string, folderId: string | null): void;
   pushHistory(track: Track): void;
   clearHistory(): void;
+  /** Forget one song from Recently played — on every device, via its tombstone. */
+  removeFromHistory(id: string): void;
   followArtist(artist: { id: string; name: string; thumb?: string }): boolean;
   unfollowArtist(id: string): void;
   setDownload(id: string, item: DownloadItem): void;
@@ -92,7 +117,8 @@ function uid(): string {
 }
 
 let hydrationLikes: Map<string, { track: Track; liked: boolean }> | null = null;
-let hydrationHistory: Array<Track | null> | null = null;
+/** Buffered history actions: a track (played), null (cleared) or a removal. */
+let hydrationHistory: Array<Track | null | { remove: string }> | null = null;
 
 /** Membership and its version must persist atomically in the same write. */
 function withChanges(
@@ -113,11 +139,17 @@ export const useLibrary = create<LibraryState>()(
       followedArtists: [],
       history: [],
       downloads: {},
-      pinnedSingles: { liked: true, downloads: true, local: true },
+      pinnedSingles: { ...PIN_DEFAULTS, v2: true },
+      libraryOrder: [],
+
+      setLibraryOrder(keys) {
+        set({ libraryOrder: keys });
+      },
 
       togglePinSingle(key) {
-        const current = get().pinnedSingles ?? { liked: true, downloads: true, local: true };
-        set({ pinnedSingles: { ...current, [key]: !current[key] } });
+        const pins = get().pinnedSingles;
+        const now = Object.fromEntries(SINGLE_KEYS.map((k) => [k, isPinned(pins, k)])) as Record<PinnedSingleKey, boolean>;
+        set({ pinnedSingles: { ...now, [key]: !now[key], v2: true } });
       },
 
       isLiked(id) {
@@ -145,6 +177,27 @@ export const useLibrary = create<LibraryState>()(
         return playlist;
       },
 
+      importPlaylist(name, tracks, folderId) {
+        // Always a NEW playlist: an import named like one of the listener's
+        // own playlists used to replace that playlist's songs. A clash gets a
+        // number instead, and every song is stamped so merges keep it.
+        const taken = new Set(get().playlists.map((p) => p.name.trim().toLowerCase()));
+        const base = name.trim() || "Imported playlist";
+        let unique = base;
+        for (let n = 2; taken.has(unique.toLowerCase()); n++) unique = `${base} (${n})`;
+        const seen = new Set<string>();
+        const list = tracks.filter((t) => (seen.has(t.id) ? false : (seen.add(t.id), true)));
+        // orderedAt: songs added in one batch share an add stamp, so the import's
+        // own order is what a merge keeps (electron/sync-merge.ts inPlaylistOrder).
+        const now = Date.now();
+        const playlist: Playlist = { id: uid(), name: unique, tracks: list, createdAt: now, orderedAt: now, ...(folderId ? { folderId } : {}) };
+        withChanges(set, get, { playlists: [playlist, ...get().playlists] }, [
+          { kind: "add", group: "playlists", id: playlist.id },
+          ...list.map((t): DeletionChange => ({ kind: "add", group: "tracks", id: t.id, parent: playlist.id })),
+        ]);
+        return playlist;
+      },
+
       renamePlaylist(id, name) {
         withChanges(set, get, {
           playlists: get().playlists.map((p) => (p.id === id ? { ...p, name: name.trim() || p.name } : p)),
@@ -158,10 +211,10 @@ export const useLibrary = create<LibraryState>()(
       },
 
       deletePlaylist(id) {
-        const deleted = get().playlists.find((p) => p.id === id);
+        // The playlist's own tombstone already drops all of its songs on merge
+        // (ids are never reused). A tombstone per song made a big playlist push
+        // compaction past its limit and lifted the floor for every other record.
         const changes: DeletionChange[] = [{ kind: "delete", group: "playlists", id }];
-        // Keep explicit child deletions too, in case this id is later recreated.
-        for (const track of deleted?.tracks ?? []) changes.push({ kind: "delete", group: "tracks", id: track.id, parent: id });
         withChanges(set, get, { playlists: get().playlists.filter((p) => p.id !== id) }, changes);
       },
 
@@ -187,6 +240,21 @@ export const useLibrary = create<LibraryState>()(
             p.id === playlistId ? { ...p, tracks: p.tracks.filter((t) => t.id !== trackId) } : p
           ),
         }, [{ kind: "delete", group: "tracks", id: trackId, parent: playlistId }]);
+      },
+
+      moveInPlaylist(playlistId, from, to) {
+        const target = get().playlists.find((p) => p.id === playlistId);
+        if (!target || from === to || from < 0 || to < 0 || from >= target.tracks.length || to >= target.tracks.length) return;
+        const tracks = [...target.tracks];
+        const [moved] = tracks.splice(from, 1);
+        tracks.splice(to, 0, moved);
+        // Only the order changes: no metadata edit stamp, or this device's stale
+        // name/folder would win the next merge. orderedAt alone carries the order.
+        withChanges(set, get, {
+          playlists: get().playlists.map((p) =>
+            p.id === playlistId ? { ...p, tracks, orderedAt: Math.max(Date.now(), (p.orderedAt ?? 0) + 1) } : p
+          ),
+        }, []);
       },
 
       getPlaylist(id) {
@@ -236,6 +304,12 @@ export const useLibrary = create<LibraryState>()(
         withChanges(set, get, { history: [] }, [{ kind: "clear", group: "history" }]);
       },
 
+      removeFromHistory(id) {
+        hydrationHistory?.push({ remove: id });
+        withChanges(set, get, { history: get().history.filter((t) => t.id !== id) },
+          [{ kind: "delete", group: "history", id }]);
+      },
+
       followArtist(artist) {
     if (!artist.id) return false;
     if (get().followedArtists.some((a) => a.id === artist.id)) return false;
@@ -276,7 +350,7 @@ export const useLibrary = create<LibraryState>()(
       // would serialize the whole library (liked + playlists + history + the
       // full Track objects) to disk at that rate. Pending writes still flush
       // on pagehide/beforeunload, so close-time durability is unchanged.
-      storage: createJSONStorage(() => coalescedStorage),
+      storage: coalescedStorage,
       version: 1,
       onRehydrateStorage: () => {
         const likes = hydrationLikes ?? new Map<string, { track: Track; liked: boolean }>();
@@ -298,10 +372,16 @@ export const useLibrary = create<LibraryState>()(
             replay = { ...replay, ...next, deletionSync: recordDeletionChanges(replay, next,
               [{ kind: action.liked ? "add" : "delete", group: "liked", id: action.track.id }]) };
           }
-          for (const track of history) {
-            const next = { history: track === null ? [] : [track, ...replay.history.filter((item) => item.id !== track.id)].slice(0, 200) };
+          for (const action of history) {
+            const next = {
+              history: action === null ? []
+                : "remove" in action ? replay.history.filter((item) => item.id !== action.remove)
+                : [action, ...replay.history.filter((item) => item.id !== action.id)].slice(0, 200),
+            };
             replay = { ...replay, ...next, deletionSync: recordDeletionChanges(replay, next,
-              [track === null ? { kind: "clear", group: "history" } : { kind: "add", group: "history", id: track.id }]) };
+              [action === null ? { kind: "clear", group: "history" }
+                : "remove" in action ? { kind: "delete", group: "history", id: action.remove }
+                : { kind: "add", group: "history", id: action.id }]) };
           }
           useLibrary.setState({ liked: replay.liked, history: replay.history, deletionSync: replay.deletionSync });
         };
@@ -311,7 +391,7 @@ export const useLibrary = create<LibraryState>()(
         if (version < 1 || state.pinnedSingles == null) {
           return {
             ...state,
-            pinnedSingles: { liked: true, downloads: true, local: true },
+            pinnedSingles: { ...PIN_DEFAULTS, v2: true },
           };
         }
         return state;

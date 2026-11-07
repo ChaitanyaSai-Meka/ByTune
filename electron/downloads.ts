@@ -4,17 +4,22 @@
  *   - enqueue(): one door into the queue; a track already saved, queued or
  *     running is left alone rather than duplicated
  *   - concurrency capped at 2 so the stream proxy and the network stay healthy
- *   - cancel() aborts an in-flight transfer (partial file removed) or dequeues
+ *   - bytes land in a hidden ".part" file that takes the song's name only when
+ *     complete; a stall, an HTTP error or an early end resumes from the bytes on
+ *     disk on a fresh URL (same file), or starts over (another rendition)
+ *   - cancel() aborts an in-flight transfer (partial file removed) or dequeues;
+ *     quitting does the same, so no half-written file survives
+ *   - an M4A file gets the song's title, artist, album and cover written into it
+ *     before it takes its name (a file that won't take them is kept untagged)
  *   - progress + lifecycle events stream to the renderer over download:event
- *
- * Metadata/cover embedding is deliberately not attempted — it needs a tagger
- * dependency, so the feature stays unimplemented rather than faked.
  */
 import { app } from "electron";
 import * as fs from "fs";
 import * as path from "path";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
+import { upgradeThumb } from "./artwork";
+import { writeM4aTags, type M4aTags } from "./m4a-tags";
 import { resolveStream } from "./music-service";
 import type { Track } from "../src/types";
 
@@ -22,6 +27,10 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 const MAX_CONCURRENT = 2;
+/** No bytes for this long means the transfer is dead: it resumes on a fresh URL. */
+const STALL_MS = 20_000;
+/** Tries per download (the first plus resumes), with a growing pause between them. */
+const ATTEMPTS = 4;
 
 type QueueState =
   | { phase: "queued" }
@@ -31,6 +40,8 @@ type QueueState =
 const queue: { track: Track; dir?: string; maxKbps?: number; exportCompat?: boolean }[] = [];
 const state = new Map<string, QueueState>();
 const controllers = new Map<string, AbortController>();
+/** Partial files of the transfers running now, removed at once if the app quits mid-download. */
+const partials = new Set<string>();
 let active = 0;
 const workers = new Set<Promise<void>>();
 let resetTask: Promise<void> | null = null;
@@ -47,6 +58,41 @@ export function resetDownloads(): Promise<void> {
   for (const ctrl of controllers.values()) ctrl.abort();
   for (const item of queued) emit({ type: "cancelled", id: item.track.id });
   return resetTask;
+}
+
+let quitting = false;
+
+/** Quitting: stop every transfer and delete its partial file now (the process won't wait for async
+ *  cleanup). No "cancelled" events: the rows stay on the Downloads list, offered again at next launch. */
+export function abandonDownloads(): void {
+  quitting = true;
+  queue.splice(0);
+  for (const ctrl of controllers.values()) ctrl.abort();
+  for (const file of partials) {
+    try {
+      fs.rmSync(file, { force: true });
+      fs.rmSync(`${file}.tagging`, { force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+}
+
+/** The song's cover for its file: a large JPEG or PNG, else none (a WebP, a failed fetch, an oversized answer). */
+async function coverFor(track: Track, signal: AbortSignal): Promise<M4aTags["cover"]> {
+  const url = upgradeThumb(track.thumb ?? "", 1000);
+  if (!url.startsWith("https://")) return undefined;
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": UA }, signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]) });
+    if (!res.ok) return undefined;
+    const data = new Uint8Array(await res.arrayBuffer());
+    if (data.length > 5 * 1024 * 1024) return undefined;
+    if (data[0] === 0xff && data[1] === 0xd8) return { data, mime: "image/jpeg" };
+    if (data[0] === 0x89 && data[1] === 0x50) return { data, mime: "image/png" };
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // Stream resolution has no AbortSignal API. Stop waiting immediately on reset;
@@ -121,16 +167,56 @@ export function sanitizeFilename(name: string): string {
   return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(bounded) ? `_${bounded}` : bounded;
 }
 
-function uniquePath(dir: string, base: string): string {
+/** Claim a free name for a finished file by creating it exclusively, so two downloads of
+ *  same-named songs finishing together can never take (and overwrite) the same one. */
+function claimName(dir: string, base: string): string {
   const ext = path.extname(base);
   const stem = base.slice(0, base.length - ext.length);
-  let candidate = path.join(dir, base);
-  let n = 1;
-  while (fs.existsSync(candidate)) {
-    candidate = path.join(dir, `${stem} (${n})${ext}`);
-    n += 1;
+  for (let n = 0; ; n++) {
+    const candidate = path.join(dir, n ? `${stem} (${n})${ext}` : base);
+    try {
+      fs.closeSync(fs.openSync(candidate, "wx"));
+      return candidate;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
   }
-  return candidate;
+}
+
+/** One request for the bytes from `from` on, written into `part`. A stall aborts it. */
+async function transfer(
+  url: string,
+  part: string,
+  from: number,
+  job: AbortSignal,
+  onBytes: (size: number, total: number) => void
+): Promise<{ size: number; total: number }> {
+  const attempt = new AbortController();
+  const cancel = (): void => attempt.abort(new Error("cancelled"));
+  job.addEventListener("abort", cancel, { once: true });
+  let stall = setTimeout(() => attempt.abort(new Error("download stalled")), STALL_MS);
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": UA, Range: `bytes=${from}-` }, signal: attempt.signal });
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+    // A server that ignores the range sends the whole file again: the part starts over.
+    const start = res.status === 206 ? from : 0;
+    const length = Number(res.headers.get("content-length") ?? 0);
+    const total = length > 0 ? start + length : 0;
+    const out = fs.createWriteStream(part, { flags: start > 0 ? "a" : "w" });
+    const src = Readable.fromWeb(res.body as import("stream/web").ReadableStream);
+    let size = start;
+    src.on("data", (chunk: Buffer) => {
+      clearTimeout(stall);
+      stall = setTimeout(() => attempt.abort(new Error("download stalled")), STALL_MS);
+      size += chunk.length;
+      onBytes(size, total);
+    });
+    await pipeline(src, out, { signal: attempt.signal });
+    return { size, total };
+  } finally {
+    clearTimeout(stall);
+    job.removeEventListener("abort", cancel);
+  }
 }
 
 /** Register a listener for lifecycle events (the renderer bridge forwards). */
@@ -200,8 +286,7 @@ async function drain(): Promise<void> {
 async function runDownload(track: Track, dirOverride?: string, maxKbps?: number, exportCompat?: boolean): Promise<void> {
   const ctrl = new AbortController();
   controllers.set(track.id, ctrl);
-  let dest = "";
-  let ownsPartial = false;
+  let part = "";
   const checkCancelled = (): void => { if (ctrl.signal.aborted) throw new Error("cancelled"); };
   try {
     const dir = exportCompat ? exportDownloadDir() : dirOverride && dirOverride.trim() ? dirOverride : await defaultDownloadDir();
@@ -211,59 +296,80 @@ async function runDownload(track: Track, dirOverride?: string, maxKbps?: number,
 
     // Downloads ask for an mp4/AAC rendition (the most portable container);
     // the resolver still falls back to the best available if a track has none,
-    // so name the file from the mime it actually returned.
-    const stream = await abortable(resolveStream(track.id, false, maxKbps, true), ctrl.signal);
+    // so the file is named from the mime it actually returned.
+    // A fresh URL: an hours-old URL may be tied to an old address.
+    let stream = await abortable(resolveStream(track.id, true, maxKbps, true), ctrl.signal);
     checkCancelled();
-    const ext = /webm|opus/i.test(stream.mime) ? ".webm" : ".m4a";
-    dest = uniquePath(dir, `${sanitizeFilename(`${track.artist} - ${track.title}`)}${ext}`);
-
-    const res = await fetch(stream.url, {
-      headers: { "User-Agent": UA, Range: "bytes=0-" },
-      signal: ctrl.signal,
-    });
-    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-    const total = Number(res.headers.get("content-length") ?? 0);
-    checkCancelled();
-    // Exclusive creation prevents a competing download/user file from being
-    // overwritten or later deleted by cancellation cleanup.
-    const fd = fs.openSync(dest, "wx");
-    ownsPartial = true;
-    const out = fs.createWriteStream(dest, { fd });
-    const src = Readable.fromWeb(res.body as import("stream/web").ReadableStream);
+    // Named by the track id, the part is this song's own: one left by a download the app
+    // was quit in the middle of is simply started over.
+    part = path.join(dir, `.bytune-${track.id}.part`);
+    partials.add(part);
     emit({ type: "start", id: track.id });
-    state.set(track.id, { phase: "running", downloaded: 0, total });
+    state.set(track.id, { phase: "running", downloaded: 0, total: 0 });
 
-    let downloaded = 0;
     let lastEmit = 0;
-    src.on("data", (chunk: Buffer) => {
+    const progress = (downloaded: number, total: number): void => {
       if (ctrl.signal.aborted) return;
-      downloaded += chunk.length;
       const now = Date.now();
       if (now - lastEmit > 250) {
         lastEmit = now;
         state.set(track.id, { phase: "running", downloaded, total });
         emit({ type: "progress", id: track.id, downloaded, total });
       }
-    });
-
-    await pipeline(src, out, { signal: ctrl.signal });
-    ownsPartial = false; // A completed audio file belongs to the user now.
+    };
+    for (let attempt = 1; ; attempt++) {
+      try {
+        // Resume from what actually reached the disk (a failed write may have dropped its last buffer).
+        const from = attempt === 1 ? 0 : await fs.promises.stat(part).then((s) => s.size, () => 0);
+        const got = await transfer(stream.url, part, from, ctrl.signal, progress);
+        const expected = stream.clen || got.total;
+        if (expected > 0 && got.size < expected) throw new Error("download ended early");
+        break;
+      } catch (err) {
+        checkCancelled();
+        if (attempt >= ATTEMPTS) throw err;
+        console.warn(`[bytune] download ${track.id}: ${err instanceof Error ? err.message : err}; trying again`);
+        await abortable(new Promise((r) => setTimeout(r, attempt * 1500)), ctrl.signal);
+        // A fresh URL. The same file (rendition and length) resumes; another one starts over.
+        const next = await abortable(resolveStream(track.id, true, maxKbps, true), ctrl.signal);
+        if (next.itag !== stream.itag || next.clen !== stream.clen) await fs.promises.truncate(part, 0).catch(() => undefined);
+        stream = next;
+      }
+    }
     checkCancelled();
+
+    const ext = /webm|opus/i.test(stream.mime) ? ".webm" : ".m4a";
+    // The song's details go into the file itself, so other players and phones show them.
+    if (ext === ".m4a") {
+      try {
+        const cover = await coverFor(track, ctrl.signal);
+        await writeM4aTags(part, { title: track.title, artist: track.artist, album: track.album || undefined, cover });
+      } catch (err) {
+        console.warn(`[bytune] download ${track.id}: tags not written:`, err instanceof Error ? err.message : err);
+      }
+      checkCancelled();
+    }
+    const dest = claimName(dir, `${sanitizeFilename(`${track.artist} - ${track.title}`)}${ext}`);
+    try {
+      await fs.promises.rename(part, dest); // replaces the empty file that claimed the name
+    } catch (err) {
+      await fs.promises.rm(dest, { force: true }).catch(() => undefined);
+      throw err;
+    }
+    partials.delete(part);
+    // A completed audio file belongs to the user now.
     state.delete(track.id);
     emit({ type: "done", id: track.id, path: dest });
   } catch (err) {
-    // Remove a partial file so we don't leave broken audio behind. Completed
-    // files from before this transfer are never touched.
-    if (dest && ownsPartial) {
-      try {
-        await fs.promises.unlink(dest);
-      } catch {
-        /* ignore */
-      }
+    // Remove the partial file so no broken audio is left behind. Finished
+    // files are never touched.
+    if (part) {
+      partials.delete(part);
+      await fs.promises.rm(part, { force: true }).catch(() => undefined);
     }
     if (ctrl.signal.aborted) {
       state.delete(track.id);
-      emit({ type: "cancelled", id: track.id });
+      if (!quitting) emit({ type: "cancelled", id: track.id });
       throw new Error("cancelled");
     }
     throw err;

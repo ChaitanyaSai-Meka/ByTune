@@ -2,7 +2,7 @@
   "name": "bytune-desktop",
   "productName": "ByTune",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.1.0",
   "author": "ByTune",
   "description": "ByTune — desktop music player for Windows & macOS",
   "main": "dist-electron/main.js",
@@ -10,10 +10,10 @@
     "dev": "concurrently -k -s first \"npm:dev:renderer\" \"npm:dev:app\"",
     "dev:renderer": "vite",
     "dev:app": "wait-on tcp:127.0.0.1:5173 && npm run build:electron && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
-    "build:electron": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --external:electron --external:jsdom --external:undici --outdir=dist-electron && esbuild electron/po-page.ts --bundle --format=iife --outfile=dist-electron/po-page.js && node -e \"require('fs').copyFileSync('electron/po.html','dist-electron/po.html')\" && node -e \"require('fs').cpSync('electron/assets','dist-electron/assets',{recursive:true})\"",
+    "build:electron": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --external:electron --external:jsdom --external:undici --outdir=dist-electron && esbuild electron/po-page.ts --bundle --format=iife --outfile=dist-electron/po-page.js && node -e \"require('fs').copyFileSync('electron/po.html','dist-electron/po.html')\" && node -e \"require('fs').cpSync('electron/assets','dist-electron/assets',{recursive:true})\" && node scripts/build-media-helper.mjs",
     "icons:thumbar": "node scripts/gen-thumbar-icons.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "esbuild src/lib/account-validators.ts --bundle --format=esm --outfile=.test-build/account-validators.mjs && esbuild src/lib/config.ts --bundle --format=esm --outfile=.test-build/config.mjs && esbuild electron/sync-merge.ts --bundle --format=esm --outfile=.test-build/sync-merge.mjs && esbuild electron/audio-format.ts --bundle --format=esm --outfile=.test-build/audio-format.mjs && esbuild electron/backup-transfer.ts --bundle --format=esm --outfile=.test-build/backup-transfer.mjs && esbuild electron/market.ts --bundle --format=esm --outfile=.test-build/market.mjs && esbuild electron/ytm.ts --bundle --format=esm --outfile=.test-build/ytm.mjs && esbuild electron/local-paths.ts --bundle --format=esm --outfile=.test-build/local-paths.mjs && esbuild src/lib/deletion-sync.ts --bundle --format=esm --outfile=.test-build/deletion-sync.mjs && esbuild src/lib/download-reconcile.ts --bundle --format=esm --outfile=.test-build/download-reconcile.mjs && esbuild electron/mac-menu.ts --bundle --format=esm --outfile=.test-build/mac-menu.mjs && esbuild src/lib/media-key-tap.ts --bundle --format=esm --outfile=.test-build/media-key-tap.mjs && esbuild src/lib/audio-output.ts --bundle --format=esm --outfile=.test-build/audio-output.mjs && node --test tests/*.test.mjs",
+    "test": "esbuild src/lib/account-validators.ts --bundle --format=esm --outfile=.test-build/account-validators.mjs && esbuild src/lib/config.ts --bundle --format=esm --outfile=.test-build/config.mjs && esbuild electron/sync-merge.ts --bundle --format=esm --outfile=.test-build/sync-merge.mjs && esbuild electron/audio-format.ts --bundle --format=esm --outfile=.test-build/audio-format.mjs && esbuild electron/backup-transfer.ts --bundle --format=esm --outfile=.test-build/backup-transfer.mjs && esbuild electron/market.ts --bundle --format=esm --outfile=.test-build/market.mjs && esbuild electron/ytm.ts --bundle --format=esm --outfile=.test-build/ytm.mjs && esbuild electron/local-paths.ts --bundle --format=esm --outfile=.test-build/local-paths.mjs && esbuild src/lib/deletion-sync.ts --bundle --format=esm --outfile=.test-build/deletion-sync.mjs && esbuild src/lib/download-reconcile.ts --bundle --format=esm --outfile=.test-build/download-reconcile.mjs && esbuild electron/mac-menu.ts --bundle --format=esm --outfile=.test-build/mac-menu.mjs && esbuild electron/close-to-tray.ts --bundle --format=esm --outfile=.test-build/close-to-tray.mjs && esbuild src/lib/media-key-tap.ts --bundle --format=esm --outfile=.test-build/media-key-tap.mjs && esbuild src/lib/audio-output.ts --bundle --format=esm --outfile=.test-build/audio-output.mjs && esbuild src/lib/radio-filter.ts --bundle --format=esm --outfile=.test-build/radio-filter.mjs && esbuild src/lib/lyricsLines.ts --bundle --format=esm --outfile=.test-build/lyrics-lines.mjs && esbuild src/lib/replayFormat.ts --bundle --format=esm --outfile=.test-build/replay-format.mjs && esbuild src/lib/playlistShare.ts --bundle --format=esm --outfile=.test-build/playlist-share.mjs && esbuild src/lib/format.ts --bundle --format=esm --outfile=.test-build/format.mjs && esbuild src/lib/romanize.ts --bundle --format=esm --outfile=.test-build/romanize.mjs && esbuild src/lib/analysis.ts --bundle --format=esm --outfile=.test-build/analysis.mjs && esbuild electron/lyrics.ts --bundle --format=esm --platform=node --external:jsdom --outfile=.test-build/lyrics.mjs && esbuild src/lib/swipeNav.ts --bundle --format=esm --outfile=.test-build/swipeNav.mjs && esbuild src/lib/moodMix.ts --bundle --format=esm --outfile=.test-build/moodMix.mjs && esbuild electron/m4a-tags.ts --bundle --format=esm --platform=node --outfile=.test-build/m4a-tags.mjs && esbuild electron/audio-types.ts --bundle --format=esm --platform=node --outfile=.test-build/audio-types.mjs && esbuild electron/track-match.ts --bundle --format=esm --platform=node --outfile=.test-build/track-match.mjs && esbuild electron/spotify-web.ts --bundle --format=esm --platform=node --outfile=.test-build/spotify-web.mjs && node --test tests/*.test.mjs",
     "build": "npm run typecheck && npm run build:electron && vite build",
     "start": "electron .",
     "smoke": "node scripts/smoke.mjs",
@@ -31,16 +31,24 @@
     "directories": {
       "output": "release"
     },
+    "afterPack": "scripts/after-pack.cjs",
     "files": [
       "dist/**",
       "dist-electron/**",
+      "!dist-electron/ByTuneMedia.exe",
       "build/icon.png",
       "build/icon.ico"
     ],
     "win": {
       "target": "nsis",
       "icon": "build/icon.ico",
-      "artifactName": "ByTune-Setup.${ext}"
+      "artifactName": "ByTune-Setup.${ext}",
+      "extraResources": [
+        {
+          "from": "dist-electron/ByTuneMedia.exe",
+          "to": "ByTuneMedia.exe"
+        }
+      ]
     },
     "mac": {
       "target": [
@@ -68,11 +76,19 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
-        "LSMinimumSystemVersion": "11.0.0",
+        "LSMinimumSystemVersion": "13.0",
         "NSHighResolutionCapable": true,
         "NSPrincipalClass": "NSApplication",
         "NSSupportsAutomaticGraphicsSwitching": true,
-        "CFBundleDisplayName": "ByTune"
+        "CFBundleDisplayName": "ByTune",
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "Audio file",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "CFBundleTypeExtensions": ["mp3", "m4a", "aac", "flac", "ogg", "oga", "opus", "wav", "webm"]
+          }
+        ]
       }
     },
     "dmg": {
@@ -103,10 +119,19 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "deleteAppDataOnUninstall": false,
-      "shortcutName": "ByTune"
-    }
+      "shortcutName": "ByTune",
+      "include": "build/installer.nsh"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "rishiteja21",
+        "repo": "ByTune"
+      }
+    ]
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.10",
     "@resvg/resvg-js": "^2.6.2",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^22.10.0",
@@ -133,6 +158,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
     "bgutils-js": "^4.0.3",
+    "electron-updater": "^6.8.11",
     "jsdom": "^29.1.1",
     "music-metadata": "^11.15.0"
   }

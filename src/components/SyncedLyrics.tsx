@@ -13,10 +13,15 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getPlaybackPosition } from "../lib/audio";
+import { visibleLyricLines } from "../lib/lyricsLines";
+import { romanize } from "../lib/romanize";
 import { LYRICS_LOADING_LINES, pickLyricsLine } from "../lib/lyricsPhrases";
 import { usePlayer } from "../stores/player";
 import { useSettings } from "../stores/settings";
 import type { LyricsResult, SyncedLyricWord } from "../types";
+
+/** How long the lyrics take to glide to the next line. */
+const GLIDE_MS = 600;
 
 interface LyricsViewProps {
   lyrics: LyricsResult | null;
@@ -37,6 +42,18 @@ interface LyricsViewProps {
 type LyricsVariant = "compact" | "large" | "hero";
 
 /** Line type scale — `hero` is the fullscreen variant of `large`. */
+/** Background vocals and romanized readings: a quieter line under the lyric. */
+function subLineClass(variant: LyricsVariant): string {
+  switch (variant) {
+    case "hero":
+      return "font-display text-[clamp(17px,1.9vw,28px)] leading-[1.3] font-bold";
+    case "large":
+      return "font-display text-[22px] leading-[1.3] font-bold";
+    default:
+      return "font-display text-[15px] leading-[1.35] font-bold";
+  }
+}
+
 function lineSizeClass(variant: LyricsVariant): string {
   switch (variant) {
     case "hero":
@@ -181,12 +198,19 @@ export function LyricsView({
   // and the glow yields to reduced motion / reduced blur.
   const syncedOn = useSettings((s) => s.syncedLyrics);
   const blurOn = useSettings((s) => s.blurUnfocusedLyrics);
+  const romanOn = useSettings((s) => s.romanizeLyrics);
   const reduceMotion = useSettings((s) => s.reduceAnimation);
   const reduceBlur = useSettings((s) => s.reduceDynamicBlur);
   const blurLines = blurOn && !reduceBlur;
   const glowLines = blurOn && !reduceMotion && !reduceBlur;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const activeRef = useRef<HTMLButtonElement | null>(null);
+  const glide = useRef(0);
+  /** The glide in flight heads here; an anchor-only move retargets it. */
+  const glideTo = useRef<number | null>(null);
+  const lastIndex = useRef(-1);
+  /** The active line changed and no frame has moved the list for it yet. */
+  const lineMoved = useRef(false);
 
   // BitChord mobile's LyricsLoadingLine: the lookup's stand-in is one of the
   // loading phrases — no spinner — picked once per track and held there.
@@ -194,13 +218,7 @@ export function LyricsView({
 
   const synced = lyrics?.synced ?? null;
 
-  // Providers attach backing-vocal / credit lines wrapped in parentheses at
-  // the head of the song — they render as phantom lyrics before the first
-  // real line, so they're dropped here (gap lines stay).
-  const lines = useMemo(
-    () => synced?.filter((l) => l.gap || (!!l.text && !/^[[(]/.test(l.text.trim()) && l.time > 0)) ?? null,
-    [synced],
-  );
+  const lines = useMemo(() => (synced ? visibleLyricLines(synced) : null), [synced]);
 
   // Static text for the plain (unsynced) treatment: the provider's plain
   // lyrics when they exist, otherwise the synced lines' own words joined in
@@ -236,18 +254,63 @@ export function LyricsView({
   // `anchor` is the fraction of the container height where the live line's
   // centre comes to rest: 0.5 = centred (default), the fullscreen player
   // passes the album cover's measured centre so the line sits beside it.
+  // The move is a glide: an ease-out over GLIDE_MS, restarted from wherever it
+  // is when the next line comes. A long jump (a seek, lyrics opening
+  // mid-song) lands at once, as does every move under Reduce motion.
+  // When only the anchor moved (fullscreen's cover growing or re-centring,
+  // re-measured every frame), the line follows at once instead of easing in
+  // behind the cover; a glide already under way just takes the new target.
   useEffect(() => {
     if (activeIndex < 0) return;
+    if (activeIndex !== lastIndex.current) {
+      lastIndex.current = activeIndex;
+      lineMoved.current = true;
+    }
     const raf = window.requestAnimationFrame(() => {
       const container = containerRef.current;
       const el = activeRef.current;
       if (!container || !el) return;
-      const target =
-        el.offsetTop + el.clientHeight / 2 - container.clientHeight * anchor;
-      container.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
+      // The line's centre in the scroller's content, measured against the
+      // scroller itself: offsetTop would count from the list instead while
+      // the list has a layer of its own (fullscreen's .fs-moving), skipping
+      // the head spacer.
+      const r = el.getBoundingClientRect();
+      const mid = container.scrollTop + r.top - container.getBoundingClientRect().top + r.height / 2;
+      const target = Math.max(0, mid - container.clientHeight * anchor);
+      if (!lineMoved.current) {
+        if (glideTo.current != null) glideTo.current = target;
+        else container.scrollTop = target;
+        return;
+      }
+      lineMoved.current = false;
+      const from = container.scrollTop;
+      window.cancelAnimationFrame(glide.current);
+      glideTo.current = null;
+      const still =
+        document.documentElement.classList.contains("reduce-motion") ||
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (still || Math.abs(target - from) > container.clientHeight * 1.5) {
+        container.scrollTop = target;
+        return;
+      }
+      glideTo.current = target;
+      const start = performance.now();
+      const step = (now: number): void => {
+        const t = Math.min(1, (now - start) / GLIDE_MS);
+        const to = glideTo.current ?? target;
+        container.scrollTop = from + (to - from) * (1 - (1 - t) ** 4);
+        if (t < 1) glide.current = window.requestAnimationFrame(step);
+        else glideTo.current = null;
+      };
+      glide.current = window.requestAnimationFrame(step);
     });
     return () => window.cancelAnimationFrame(raf);
   }, [activeIndex, synced, anchor]);
+  const stopGlide = (): void => {
+    window.cancelAnimationFrame(glide.current);
+    glideTo.current = null;
+  };
+  useEffect(() => () => window.cancelAnimationFrame(glide.current), []);
 
   if (loading) {
     // Words, not a spinner — mobile's LyricsLoadingLine, dimmed like an
@@ -282,28 +345,21 @@ export function LyricsView({
   }
 
   if (synced && syncedOn) {
-    // Anchor spacers: the scroll target puts the active line's centre at
-    // `anchor` × container height. Without head room the first lines can't
-    // reach the anchor — scrollTop clamps at 0, so line 0 sticks to the very
-    // top where the vertical melt mask (transparent → black over the top
-    // 14%) dims it. That is why the opening line always looked grey next to
-    // the later, centred (fully bright) lines. Matching top/bottom spacers
-    // let every line — first through last — rest exactly on the anchor, in
-    // the mask's solid middle band.
-    // % heights resolve against the scroller's own (definite, absolute-
-    // positioned) height; the −fudge is ~half a line so the line *centre*
-    // lands on the anchor. `max(...,12px)` keeps a sane gap if the anchor
-    // ever measures near an edge.
+    // Spacers: the scroll target puts the active line's centre at `anchor` ×
+    // container height. The bottom spacer lets the last lines reach the
+    // anchor too. % heights resolve against the scroller's own (definite,
+    // absolute-positioned) height; the −fudge is ~half a line so the line
+    // *centre* lands on the anchor. `max(...,12px)` keeps a sane gap if the
+    // anchor ever measures near an edge.
     const headFudge = hero ? 36 : large ? 28 : 20;
-    // The non-fullscreen panel parks the lyric list at the top of the area:
-    // a small fixed head spacer (just under the top melt mask's full-opacity
-    // line) instead of the anchor pre-centre, and it never changes size — the
-    // intro view and the first active line sit at exactly the same height, so
-    // singing starting cannot reposition the list. Later lines still glide to
-    // the anchor through the normal auto-scroll once their offset outgrows
-    // the scroll clamp. The fullscreen panel keeps its measured-anchor
-    // spacer, which must never move.
-    const topSpacer = hero ? `max(12px, calc(${anchor * 100}% - ${headFudge}px))` : "calc(10% + 4px)";
+    // Both panels park the lyric list at the top of the area: a small fixed
+    // head spacer (just under the top melt mask's full-opacity line) instead
+    // of the anchor pre-centre, and it never changes size — the intro view and
+    // the first active line sit at exactly the same height, so singing
+    // starting cannot reposition the list. Later lines glide down to the
+    // anchor (fullscreen: beside the cover) and stay on it through the normal
+    // auto-scroll once their offset outgrows the scroll clamp.
+    const topSpacer = "calc(10% + 4px)";
     const bottomSpacer = `max(12px, calc(${(1 - anchor) * 100}% - ${headFudge}px))`;
     return (
       <div
@@ -321,6 +377,9 @@ export function LyricsView({
       >
         <div
           ref={containerRef}
+          // Scrolling by hand stops a glide instead of fighting it.
+          onWheel={stopGlide}
+          onPointerDown={stopGlide}
           className="absolute inset-0 overflow-y-auto scroll-host px-6 py-0"
           style={{
             // Lines melt into the dark at the panel edges instead of stopping hard.
@@ -329,7 +388,7 @@ export function LyricsView({
           }}
         >
         <div aria-hidden="true" style={{ height: topSpacer, flexShrink: 0 }} />
-        <div className={hero ? "space-y-7" : large ? "space-y-5" : "space-y-4"}>
+        <div className={`lyrics-lines ${hero ? "space-y-7" : large ? "space-y-5" : "space-y-4"}`}>
           {(lines ?? []).map((line, i) => {
             const active = i === activeIndex;
             const dist = i - activeIndex;
@@ -373,6 +432,8 @@ export function LyricsView({
               spans = resolveWordSpans(ws, line.time, t1);
             }
 
+            // Background vocals and a romanized reading follow as quieter lines.
+            const roman = romanOn ? (line.roman ?? romanize(line.text)) : null;
             return (
               <button
                 key={`${line.time}-${i}`}
@@ -392,9 +453,16 @@ export function LyricsView({
                     {line.text}
                   </span>
                 )}
+                {line.bg && <span className={`block mt-1 opacity-70 ${subLineClass(variant)}`}>{line.bg.text}</span>}
+                {roman && (
+                  <span className={`block mt-1 text-ink-hi/60 ${subLineClass(variant)}`}>
+                    {roman}
+                  </span>
+                )}
               </button>
             );
           })}
+          {lyrics?.source && <p className="pt-4 text-[12px] font-medium text-ink-hi/45">Lyrics from {lyrics.source}</p>}
         </div>
         <div aria-hidden="true" style={{ height: bottomSpacer, flexShrink: 0 }} />
         </div>

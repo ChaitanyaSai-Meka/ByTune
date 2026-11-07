@@ -13,6 +13,8 @@ import { requireBridge } from "../lib/bridge";
 
 export interface ArtistMeta {
   id: string;
+  /** The found artist's own spelling ("Mumford & Sons"); "" when the search gave none. */
+  name?: string;
   thumb: string | null;
   resolvedAt: number;
 }
@@ -59,18 +61,19 @@ export function peekArtistMeta(name: string): ArtistMeta | null {
 /**
  * Resolve an artist name to its YouTube identity. Free path first (the
  * store), then one search. Results persist; failures stay null and are
- * retried on a later run.
+ * retried on a later run. `withName` searches again for an entry cached
+ * before the found artist's name was kept.
  */
-export async function resolveArtistMeta(name: string): Promise<ArtistMeta | null> {
+export async function resolveArtistMeta(name: string, withName = false): Promise<ArtistMeta | null> {
   const key = name.trim().toLowerCase();
   if (!key || key === "unknown artist") return null;
   const cached = useArtistMeta.getState().byName[key];
-  if (cached && Date.now() - cached.resolvedAt < FRESH_MS) return cached;
+  if (cached && Date.now() - cached.resolvedAt < FRESH_MS && (!withName || cached.name !== undefined)) return cached;
   try {
     const res = await requireBridge().search(name);
     const top = res.artists?.[0];
     if (!top?.id) return null;
-    const meta: ArtistMeta = { id: top.id, thumb: top.thumb ?? null, resolvedAt: Date.now() };
+    const meta: ArtistMeta = { id: top.id, name: top.name || "", thumb: top.thumb ?? null, resolvedAt: Date.now() };
     useArtistMeta.getState().put(key, meta);
     return meta;
   } catch {

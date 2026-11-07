@@ -16,13 +16,15 @@ import { useUI } from "../stores/ui";
 import type { LocalFolderEntry } from "../../electron/local-library";
 import type { Track } from "../types";
 import { getDownload, startDownload } from "./downloads";
-import { useTrackDrop } from "./dnd";
+import { draggingFromPlaylist, useTrackDrop } from "./dnd";
+import { addSongsToPlaylists } from "./devicePlaylists";
+import { shortTitle } from "./format";
 
-function addToOpenPlaylist(playlistId: string, track: Track): void {
-  const lib = useLibrary.getState();
-  const name = lib.playlists.find((p) => p.id === playlistId)?.name ?? "playlist";
-  const added = lib.addToPlaylist(playlistId, track);
-  useUI.getState().toast(added ? `Added to "${name}"` : `Already in "${name}"`, added ? "success" : "info");
+/** A song dropped on one of your playlists (the open one, or a card of it): added, or already there. */
+export function addSongToPlaylist(playlistId: string, track: Track): void {
+  const name = useLibrary.getState().playlists.find((p) => p.id === playlistId)?.name ?? "playlist";
+  const { added, told } = addSongsToPlaylists([playlistId], [track]);
+  if (!told) useUI.getState().toast(added ? `Added to "${name}"` : `Already in "${name}"`, added ? "success" : "info");
 }
 
 function likeTrack(track: Track): void {
@@ -61,7 +63,7 @@ function downloadIntoLocalFolder(track: Track, target?: string | null): void {
     if (getDownload(track.id)?.status !== "queued") {
       return;
     }
-    useUI.getState().toast(`Downloading "${track.title}" into the folder`, "success");
+    useUI.getState().toast(`Downloading "${shortTitle(track.title)}" into the folder`, "success");
     // Rescan when the file lands, then tell the open view to refresh. Cancel
     // counts as terminal too — the listener must not outlive its download.
     const off = window.bytune?.onDownloadEvent?.((e) => {
@@ -89,14 +91,15 @@ export function usePanelDrop(): {
   const accepts = (): boolean => {
     const v = useUI.getState().view;
     return (
-      (v.name === "playlist" && !!v.param) ||
+      // A playlist's own song moves within its list; it is never added to it again.
+      (v.name === "playlist" && !!v.param && !draggingFromPlaylist(v.param)) ||
       (v.name === "library" && v.param === "liked") ||
       v.name === "local"
     );
   };
   return useTrackDrop((track) => {
     const view = useUI.getState().view;
-    if (view.name === "playlist" && view.param) addToOpenPlaylist(view.param, track);
+    if (view.name === "playlist" && view.param) addSongToPlaylist(view.param, track);
     else if (view.name === "library" && view.param === "liked") likeTrack(track);
     else if (view.name === "local") downloadIntoLocalFolder(track, view.param);
   }, accepts);

@@ -6,13 +6,10 @@
  * playlists, folders, artists and Local Music. Main navigation lives in
  * the top bar (home beside the search field).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  ChevronDown,
-  ChevronRight,
   Download,
   Folder,
-  FolderOpen,
   Heart,
   Library,
   ListPlus,
@@ -21,17 +18,29 @@ import {
   PinOff,
   User,
 } from "lucide-react";
-import { useLibrary } from "../stores/library";
-import { usePlayer } from "../stores/player";
+import { isPinned, useLibrary, type PinnedSingleKey, type Playlist } from "../stores/library";
+import { playingFromRow, usePlayer } from "../stores/player";
 import { useUI } from "../stores/ui";
 import { EqBars } from "./primitives";
+import { FitText } from "./FitText";
+import { shortTitle } from "../lib/format";
+import { addSongsToPlaylists, staysOnDevice } from "../lib/devicePlaylists";
 import { upgradeArtwork } from "../lib/artwork";
 import { CreateMenu } from "./CreateMenu";
-import { playlistFolderItems, playlistHeaderItems } from "../lib/trackActions";
-import { dragHasAlbum, dragHasArtist, dragHasPlaylist, dragHasTrack, readAlbum, readArtist, readPlaylist, readTrack, type AlbumPayload, type ArtistPayload, type PlaylistPayload } from "../lib/dnd";
+import { askForNewFolder, folderMenuItems, rowIsOpen } from "../lib/collection";
+import { playlistOwnItems } from "../lib/trackActions";
+import { draggingFromPlaylist, dragHasAlbum, dragHasArtist, dragHasPlaylist, dragHasTrack, readAlbum, readArtist, readPlaylist, readTrack, type AlbumPayload, type ArtistPayload, type PlaylistPayload } from "../lib/dnd";
 import { requireBridge } from "../lib/bridge";
-import { startDownload } from "../lib/downloads";
+import { downloadAll, startDownload } from "../lib/downloads";
+import { DOWNLOADS_COVER, LIKED_COVER, LOCAL_COVER, REPLAY_COVER } from "../lib/libraryCovers";
+import { askToConnectSpotify, useSpotify } from "../lib/spotify";
+import { useEdgeFades } from "../lib/useEdgeFades";
+import { arrange, moveKey } from "../lib/libraryOrder";
+import { useSortable, type SortableRowProps } from "../lib/useSortable";
+import { SpotifyIcon } from "./SpotifyIcon";
 import type { Track } from "../types";
+
+const SPOTIFY_ROW = "__spotify__";
 
 /* ============================================================ nav */
 
@@ -40,7 +49,7 @@ interface LibRow {
   title: string;
   subtitle: string;
   thumb?: string;
-  kind: "playlist" | "artist" | "folder" | "local" | "downloads";
+  kind: "playlist" | "artist" | "folder" | "local" | "downloads" | "replay" | "spotify";
   /** artist-imported playlists open the artist page instead of the list */
   artistId?: string;
   /** playlists: the folder they're filed in; folders: their own id */
@@ -48,7 +57,14 @@ interface LibRow {
   /** Liked / Downloads / Local shortcut rows carry their pin state */
   pinned?: boolean;
   /** which shortcut pin this row toggles (liked / downloads / local) */
-  singleKey?: "liked" | "downloads" | "local";
+  singleKey?: PinnedSingleKey;
+}
+
+/** One place in the list: a row, or a folder with its open playlists, moved together. */
+interface Entry {
+  /** "single:<key>", "artist:<id>", "playlist:<id>" or "folder:<id>" (lib/libraryOrder) */
+  key: string;
+  rows: LibRow[];
 }
 
 function LibraryPill() {
@@ -58,13 +74,21 @@ function LibraryPill() {
   const followedArtists = useLibrary((s) => s.followedArtists);
   const downloads = useLibrary((s) => s.downloads);
   const pinnedSingles = useLibrary((s) => s.pinnedSingles);
+  const spotifyConnected = useSpotify((s) => s.status.connected);
+  const spotifyProblem = useSpotify((s) => s.status.problem);
+  const spotifyPlaylists = useSpotify((s) => s.playlists);
   const navigate = useUI((s) => s.navigate);
+  /** the page open in the middle panel: its row stays lit */
+  const view = useUI((s) => s.view);
   const openDialog = useUI((s) => s.openDialog);
   const openContextMenu = useUI((s) => s.openContextMenu);
-  const current = usePlayer((s) => s.queue[s.index] ?? null);
-  const playing = usePlayer((s) => s.playing);
+  const playingFrom = usePlayer(playingFromRow);
 
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const libraryOrder = useLibrary((s) => s.libraryOrder);
+  /** the scrolling list, and the rows inside it that a drag reorders */
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const rowsRef = useRef<HTMLDivElement | null>(null);
+  useEdgeFades(scrollRef);
   /** the row a drag is currently hovering — drives the drop highlight */
   const [dropHover, setDropHover] = useState<string | null>(null);
   /** a playlist drag is over the library panel — import-anywhere affordance */
@@ -108,17 +132,18 @@ function LibraryPill() {
   // folders (collapsible), followed artists and Local Music. Recently-played
   // history is NOT library material — it lives in the queue panel's
   // "Recently played" tab.
-  // Liked / Downloads / Local are pinned by default; unpinning sends the row
-  // to the bottom of the list (re-pin from its right-click menu).
+  // Shortcut rows: Liked, Spotify and Replay are pinned by default, Downloads and
+  // Local Music not; an unpinned one sits at the bottom of the list (re-pin from
+  // its right-click menu).
   const doneDownloads = Object.values(downloads).filter((d) => d.status === "done");
-  const singlePinned = (k: "liked" | "downloads" | "local"): boolean =>
-    pinnedSingles?.[k] ?? true;
+  const singlePinned = (k: PinnedSingleKey): boolean => isPinned(pinnedSingles, k);
 
   const likedRow: LibRow = {
     id: "__liked__",
     title: "Liked Songs",
     subtitle: `Playlist · ${liked.length} ${liked.length === 1 ? "track" : "tracks"}`,
-    thumb: liked[0]?.thumb,
+    // The four collections ByTune keeps carry sleeves of their own, the same from the first day.
+    thumb: LIKED_COVER,
     kind: "playlist",
     pinned: singlePinned("liked"),
     singleKey: "liked",
@@ -127,7 +152,7 @@ function LibraryPill() {
     id: "__downloads__",
     title: "Downloads",
     subtitle: `Playlist · ${doneDownloads.length} ${doneDownloads.length === 1 ? "track" : "tracks"}`,
-    thumb: doneDownloads[0]?.track.thumb,
+    thumb: DOWNLOADS_COVER,
     kind: "downloads",
     pinned: singlePinned("downloads"),
     singleKey: "downloads",
@@ -136,87 +161,86 @@ function LibraryPill() {
     id: "__local__",
     title: "Local Music",
     subtitle: "On this device",
+    thumb: LOCAL_COVER,
     kind: "local",
     pinned: singlePinned("local"),
     singleKey: "local",
   };
-  const singles: LibRow[] = [likedRow, downloadsRow, localRow];
-
-  const rows: LibRow[] = [];
-  for (const r of singles.filter((r) => r.pinned)) rows.push(r);
-  for (const a of followedArtists) {
-    rows.push({ id: a.id, title: a.name, subtitle: "Artist", thumb: a.thumb, kind: "artist" });
-  }
-  const unfiled = playlists.filter((p) => !p.folderId);
-  for (const p of [...unfiled.filter((x) => x.pinned), ...unfiled.filter((x) => !x.pinned)]) {
-    rows.push({
-      id: p.id,
-      title: p.name,
-      subtitle: `Playlist · ${p.tracks.length} ${p.tracks.length === 1 ? "track" : "tracks"}`,
-      thumb: p.artistThumb ?? p.tracks[0]?.thumb,
-      kind: "playlist",
-      artistId: p.artistId,
-    });
-  }
-  for (const f of folders) {
-    rows.push({ id: f.id, title: f.name, subtitle: "Folder", kind: "folder", folderId: f.id });
-    if (expanded.has(f.id)) {
-      for (const p of playlists.filter((pl) => pl.folderId === f.id)) {
-        rows.push({
-          id: p.id,
-          title: p.name,
-          subtitle: `Playlist · ${p.tracks.length} ${p.tracks.length === 1 ? "track" : "tracks"}`,
-          thumb: p.artistThumb ?? p.tracks[0]?.thumb,
-          kind: "playlist",
-          folderId: f.id,
-          artistId: p.artistId,
-        });
-      }
-    }
-  }
-  for (const r of singles.filter((r) => !r.pinned)) rows.push(r);
-
-  const toggleFolder = (id: string): void => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  // Always listed: connected, it opens the account's playlists; not yet, it asks to connect.
+  const spotifyLists = spotifyPlaylists.length;
+  const spotifyRow: LibRow = {
+    id: SPOTIFY_ROW,
+    title: "Spotify",
+    subtitle: !spotifyConnected
+      ? "Connect your playlists"
+      : spotifyProblem
+        ? "Needs reconnecting"
+        : spotifyLists // 0 until the first read: Liked Songs is always one
+          ? `Connected · ${spotifyLists} ${spotifyLists === 1 ? "playlist" : "playlists"}`
+          : "Connected",
+    kind: "spotify",
+    pinned: singlePinned("spotify"),
+    singleKey: "spotify",
   };
+  // Replay: listening stats, otherwise only reachable from Settings.
+  const replayRow: LibRow = {
+    id: "__replay__",
+    title: "Replay",
+    subtitle: "Your listening stats",
+    thumb: REPLAY_COVER,
+    kind: "replay",
+    pinned: singlePinned("replay"),
+    singleKey: "replay",
+  };
+  const singles: LibRow[] = [likedRow, spotifyRow, replayRow, downloadsRow, localRow];
+
+  // A playlist of nothing but songs from this computer stays here, and says so where "Playlist" would be.
+  const subtitleOf = (p: Playlist): string =>
+    `${staysOnDevice(p) ? "On this device" : "Playlist"} · ${p.tracks.length} ${p.tracks.length === 1 ? "track" : "tracks"}`;
+  const playlistRow = (p: Playlist): LibRow => ({
+    id: p.id,
+    title: p.name,
+    subtitle: subtitleOf(p),
+    thumb: p.artistThumb ?? p.tracks[0]?.thumb,
+    kind: "playlist",
+    artistId: p.artistId,
+    ...(p.folderId ? { folderId: p.folderId } : {}),
+  });
+  const unfiled = playlists.filter((p) => !p.folderId);
+  // Pinned rows stay on top where they are; every row below moves by drag, in the order last
+  // dragged (lib/libraryOrder), a folder together with its open playlists.
+  const fixed: Entry[] = [
+    ...singles.filter((r) => r.pinned).map((r) => ({ key: `single:${r.singleKey}`, rows: [r] })),
+    ...unfiled.filter((p) => p.pinned).map((p) => ({ key: `playlist:${p.id}`, rows: [playlistRow(p)] })),
+  ];
+  const movable: Entry[] = [
+    ...followedArtists.map((a) => ({ key: `artist:${a.id}`, rows: [{ id: a.id, title: a.name, subtitle: "Artist", thumb: a.thumb, kind: "artist" as const }] })),
+    ...unfiled.filter((p) => !p.pinned).map((p) => ({ key: `playlist:${p.id}`, rows: [playlistRow(p)] })),
+    // A folder is one row: it opens its page in the middle panel (FolderView), where its playlists are.
+    ...folders.map((f) => {
+      const filed = playlists.filter((p) => p.folderId === f.id);
+      return {
+        key: `folder:${f.id}`,
+        rows: [{ id: f.id, title: f.name, subtitle: `Folder · ${filed.length} ${filed.length === 1 ? "playlist" : "playlists"}`, kind: "folder" as const, folderId: f.id }],
+      };
+    }),
+    ...singles.filter((r) => !r.pinned).map((r) => ({ key: `single:${r.singleKey}`, rows: [r] })),
+  ];
+  const byKey = new Map(movable.map((e) => [e.key, e]));
+  const entries: Entry[] = [...fixed, ...arrange(movable.map((e) => e.key), libraryOrder ?? []).map((k) => byKey.get(k)!)];
+  const sortable = useSortable({
+    signature: entries.map((e) => `${e.key}:${e.rows.length}`).join("|"),
+    listRef: rowsRef,
+    scrollRef,
+    clamp: (_from, target) => Math.max(fixed.length, target),
+    canDrag: (i) => i >= fixed.length,
+    onCommit: (from, target) => {
+      const keys = entries.slice(fixed.length).map((e) => e.key);
+      useLibrary.getState().setLibraryOrder(moveKey(keys, from - fixed.length, target - fixed.length));
+    },
+  });
 
   /* ---------------------------------------------------------- drag & drop */
-
-  /**
-   * Write an imported track list into the library. A playlist with the same
-   * name is UPDATED in place (tracks + identity re-stamped) rather than
-   * duplicated — re-dragging an artist refreshes their entry.
-   * One write for the whole list — addToPlaylist would persist per song.
-   */
-  const upsertImported = (
-    name: string,
-    tracks: Track[],
-    extra: { artistId?: string; artistThumb?: string } | undefined,
-    folderId?: string
-  ): { updated: boolean } => {
-    const lib = useLibrary.getState();
-    const existing = lib.playlists.find((p) => p.name.trim().toLowerCase() === name.toLowerCase());
-    if (existing) {
-      useLibrary.setState((s) => ({
-        playlists: s.playlists.map((p) =>
-          p.id === existing.id ? { ...p, tracks, ...extra } : p
-        ),
-      }));
-      if (folderId) lib.setPlaylistFolder(existing.id, folderId);
-      return { updated: true };
-    }
-    const created = lib.createPlaylist(name);
-    useLibrary.setState((s) => ({
-      playlists: s.playlists.map((p) => (p.id === created.id ? { ...p, tracks, ...extra } : p)),
-    }));
-    if (folderId) lib.setPlaylistFolder(created.id, folderId);
-    return { updated: false };
-  };
 
   /** Import a YouTube playlist as a real library playlist (same name). */
   const importPlaylist = async (pl: PlaylistPayload, folderId?: string): Promise<void> => {
@@ -231,13 +255,8 @@ function LibraryPill() {
       );
       if (!tracks.length) throw new Error("no tracks");
       const n = tracks.length;
-      const { updated } = upsertImported(name, tracks, undefined, folderId);
-      ui.toast(
-        updated
-          ? `“${name}” · ${n} ${n === 1 ? "song" : "songs"} updated in your library`
-          : `“${name}” · ${n} ${n === 1 ? "song" : "songs"} added to your library`,
-        "success"
-      );
+      const created = useLibrary.getState().importPlaylist(name, tracks, folderId);
+      ui.toast(`“${created.name}” · ${n} ${n === 1 ? "song" : "songs"} added to your library`, "success");
     } catch {
       ui.toast(`Couldn't import “${pl.title}”`, "error");
     }
@@ -255,7 +274,7 @@ function LibraryPill() {
   /** Import a YouTube album as a real library playlist (same name). */
   const importAlbum = async (al: AlbumPayload, folderId?: string): Promise<void> => {
     const ui = useUI.getState();
-    ui.toast(`Importing “${al.title}”…`);
+    ui.toast(`Importing “${shortTitle(al.title)}”…`);
     try {
       const page = await requireBridge().getAlbum(al.id);
       const name = (page.album?.title || al.title).trim() || "Imported album";
@@ -265,15 +284,10 @@ function LibraryPill() {
       );
       if (!tracks.length) throw new Error("no tracks");
       const n = tracks.length;
-      const { updated } = upsertImported(name, tracks, undefined, folderId);
-      ui.toast(
-        updated
-          ? `“${name}” · ${n} ${n === 1 ? "song" : "songs"} updated in your library`
-          : `“${name}” · ${n} ${n === 1 ? "song" : "songs"} added to your library`,
-        "success"
-      );
+      const created = useLibrary.getState().importPlaylist(name, tracks, folderId);
+      ui.toast(`“${created.name}” · ${n} ${n === 1 ? "song" : "songs"} added to your library`, "success");
     } catch {
-      ui.toast(`Couldn't import “${al.title}”`, "error");
+      ui.toast(`Couldn't import “${shortTitle(al.title)}”`, "error");
     }
   };
 
@@ -288,7 +302,6 @@ function LibraryPill() {
     const name = localPlaylistName(id);
     if (!name) return;
     lib.setPlaylistFolder(id, folderId);
-    setExpanded((prev) => new Set(prev).add(folderId));
     toast(`Moved “${name}” into the folder`, "success");
     setPulse(folderId);
     window.setTimeout(() => setPulse((cur) => (cur === folderId ? null : cur)), 650);
@@ -300,20 +313,22 @@ function LibraryPill() {
     const toast = useUI.getState().toast;
     if (r.id === "__liked__") {
       if (lib.isLiked(track.id)) {
-        toast(`“${track.title}” is already in your Liked Songs`);
+        toast(`“${shortTitle(track.title)}” is already in your Liked Songs`);
       } else {
         lib.toggleLike(track);
-        toast(`Added “${track.title}” to Liked Songs`, "success");
+        toast(`Added “${shortTitle(track.title)}” to Liked Songs`, "success");
       }
     } else {
       const p = lib.playlists.find((pl) => pl.id === r.id);
       if (!p) return;
-      const added = lib.addToPlaylist(r.id, track);
-      toast(
-        added
-          ? `Added “${track.title}” to “${p.name}”`
-          : `“${track.title}” is already in “${p.name}”`
-      );
+      const { added, told } = addSongsToPlaylists([r.id], [track]);
+      if (!told) {
+        toast(
+          added
+            ? `Added “${shortTitle(track.title)}” to “${p.name}”`
+            : `“${shortTitle(track.title)}” is already in “${p.name}”`
+        );
+      }
     }
     setPulse(r.id);
     window.setTimeout(() => setPulse((cur) => (cur === r.id ? null : cur)), 650);
@@ -364,16 +379,16 @@ function LibraryPill() {
         );
       }
     } catch {
-      toast(`Couldn't add “${al.title}” here`, "error");
+      toast(`Couldn't add “${shortTitle(al.title)}” here`, "error");
     }
     setPulse(r.id);
     window.setTimeout(() => setPulse((cur) => (cur === r.id ? null : cur)), 650);
   };
 
   /**
-   * Hovering a collapsed folder mid-drag opens it after a beat so the drag
-   * can continue onto the playlists inside — one gesture, no re-drag. The
-   * highlight itself is immediate (set in onRowDragOver); only the expansion
+   * Hovering a folder with a song mid-drag opens the folder's page after a
+   * beat, so the drag can go on to one of its playlists there: one gesture,
+   * no re-drag. The highlight is immediate (onRowDragOver); only the opening
    * waits, the way file managers do.
    */
   const expandTimer = useRef<number | null>(null);
@@ -383,12 +398,14 @@ function LibraryPill() {
       expandTimer.current = null;
     }
   };
+  const openFolder = (folderId: string): void => navigate({ name: "folder", param: folderId });
   const scheduleExpand = (folderId: string): void => {
-    if (expanded.has(folderId)) return;
+    const v = useUI.getState().view;
+    if (v.name === "folder" && v.param === folderId) return;
     if (expandTimer.current !== null) return;
     expandTimer.current = window.setTimeout(() => {
       expandTimer.current = null;
-      setExpanded((prev) => new Set(prev).add(folderId));
+      openFolder(folderId);
     }, 650);
   };
   useEffect(() => {
@@ -406,8 +423,9 @@ function LibraryPill() {
     const isPlaylist = dragHasPlaylist(e);
     // Playlist rows (+ Downloads) take tracks and whole albums. __liked__
     // carries kind "playlist".
+    // A song dragged from its own playlist's page isn't offered back to that playlist.
     const acceptsTracks =
-      (r.kind === "playlist" || r.kind === "downloads") && (isTrack || isAlbum);
+      (r.kind === "playlist" || r.kind === "downloads") && (isTrack || isAlbum) && !draggingFromPlaylist(r.id);
     // Folders take playlists and albums (file/import into the folder). A
     // track hovering a folder previews the folder and opens it so the drag
     // can land on a playlist inside — the same gesture, no second attempt.
@@ -418,7 +436,7 @@ function LibraryPill() {
     e.stopPropagation();
     e.dataTransfer.dropEffect = "copy";
     setDropHover(r.id);
-    if (r.kind === "folder") scheduleExpand(r.id);
+    if (previewsFolder) scheduleExpand(r.id);
   };
 
   const onRowDragLeave = (e: React.DragEvent, r: LibRow): void => {
@@ -438,7 +456,11 @@ function LibraryPill() {
         const al = readAlbum(e);
         if (!al) return;
         if (r.kind === "downloads") {
-          useUI.getState().toast("Albums can't be downloaded whole — drop a song instead", "info");
+          // An album dropped on Downloads downloads every song on it.
+          void requireBridge()
+            .getAlbum(al.id)
+            .then((page) => downloadAll(page.tracks ?? [], `"${page.album?.title || al.title}"`))
+            .catch(() => useUI.getState().toast("Couldn't open that album to download it", "error"));
           return;
         }
         void dropAlbumOn(r, al);
@@ -467,12 +489,12 @@ function LibraryPill() {
       return;
     }
     if (r.kind === "folder" && dragHasTrack(e)) {
-      // Folders hold playlists, not songs: open the folder so the drag can
-      // finish on a playlist inside, and say so once.
+      // Folders hold playlists, not songs: open the folder's page so the next
+      // drag can land on a playlist there, and say so once.
       e.preventDefault();
       e.stopPropagation();
       setDropHover(null);
-      setExpanded((prev) => new Set(prev).add(r.id));
+      openFolder(r.id);
       setPulse(r.id);
       window.setTimeout(() => setPulse((cur) => (cur === r.id ? null : cur)), 650);
       useUI.getState().toast(`“${r.title}” holds playlists — drop onto one of them`, "info");
@@ -493,10 +515,17 @@ function LibraryPill() {
         navigate({ name: "downloads" });
         break;
       case "folder":
-        toggleFolder(r.id);
+        openFolder(r.id);
         break;
       case "local":
         navigate({ name: "local" });
+        break;
+      case "replay":
+        navigate({ name: "replay" });
+        break;
+      case "spotify":
+        if (spotifyConnected) navigate({ name: "spotify" });
+        else askToConnectSpotify();
         break;
     }
   };
@@ -543,32 +572,16 @@ function LibraryPill() {
           icon: playlist.pinned ? PinOff : Pin,
           action: () => useLibrary.getState().togglePinPlaylist(playlist.id),
         },
-        ...playlistHeaderItems(playlist),
-        ...playlistFolderItems(playlist),
+        ...playlistOwnItems(playlist),
       ]);
       return;
     }
     if (r.kind === "folder") {
+      const folder = folders.find((f) => f.id === r.id);
+      if (!folder) return;
       e.preventDefault();
       e.stopPropagation();
-      openContextMenu(e.clientX, e.clientY, [
-        {
-          label: "Rename folder",
-          action: () =>
-            openDialog({
-              title: "Rename folder",
-              initialValue: r.title,
-              placeholder: "Folder name",
-              confirmLabel: "Save",
-              onConfirm: (value) => useLibrary.getState().renameFolder(r.id, value),
-            }),
-        },
-        {
-          label: "Delete folder",
-          danger: true,
-          action: () => useLibrary.getState().deleteFolder(r.id),
-        },
-      ]);
+      openContextMenu(e.clientX, e.clientY, folderMenuItems(folder));
     }
   };
 
@@ -600,23 +613,104 @@ function LibraryPill() {
       {
         label: "Create folder",
         icon: Folder,
-        action: () => {
-          const suggested = `New Folder ${useLibrary.getState().folders.length + 1}`;
-          openDialog({
-            title: "New folder",
-            body: "Give your folder a name.",
-            initialValue: suggested,
-            placeholder: "Folder name",
-            confirmLabel: "Create",
-            onConfirm: (value) => {
-              const f = useLibrary.getState().createFolder(value.trim() || suggested);
-              setExpanded((prev) => new Set(prev).add(f.id));
-            },
-          });
-        },
+        action: askForNewFolder,
       },
     ]);
   };
+
+  function renderRow(r: LibRow, drag: SortableRowProps | undefined): ReactNode {
+    const filed = r.kind === "folder" ? playlists.filter((p) => p.folderId === r.id) : [];
+    // A folder plays when one of its playlists (or the folder itself) does.
+    const isCurrent =
+      playingFrom !== null && (playingFrom === r.id || playingFrom === r.artistId || filed.some((p) => p.id === playingFrom));
+    const open = rowIsOpen(r, view);
+    /** a folder's face: its playlists' covers, four up once it has four */
+    const folderArt = [...new Set(filed.map((p) => p.artistThumb ?? p.tracks[0]?.thumb).filter((t): t is string => !!t))].slice(0, 4);
+    return (
+      <div
+        key={`${r.kind}-${r.id}`}
+        {...drag}
+        role="button"
+        tabIndex={0}
+        aria-current={open ? "page" : undefined}
+        onClick={() => onClickRow(r)}
+        onKeyDown={(e) => {
+          if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+            e.preventDefault();
+            onClickRow(r);
+          } else drag?.onKeyDown(e);
+        }}
+        onContextMenu={(e) => onRowContextMenu(e, r)}
+        onDragOver={(e) => onRowDragOver(e, r)}
+        onDragLeave={(e) => onRowDragLeave(e, r)}
+        onDrop={(e) => onRowDrop(e, r)}
+        // The open page's row keeps the hover's light, a touch stronger, so it reads as "you're here".
+        className={`fit-host group w-full flex items-center gap-3 p-2 rounded-lg text-left cursor-pointer select-none ${
+          open ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.05]"
+        } active:bg-ink-hi/[0.1] transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${
+          dropHover === r.id ? "ring-2 ring-inset ring-accent/60 bg-ink-hi/[0.08] scale-[1.02]" : ""
+        } ${
+          pulse === r.id ? "animate-drop-pulse" : ""
+        }`}
+      >
+        {r.kind === "artist" ? (
+          r.thumb ? (
+            <img
+              src={upgradeArtwork(r.thumb)}
+              alt=""
+              draggable={false}
+              className="w-12 h-12 rounded-full object-cover art-hairline shrink-0"
+            />
+          ) : (
+            <span className="w-12 h-12 rounded-full bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
+              <User className="w-5 h-5 text-ink-hi/55" />
+            </span>
+          )
+        ) : r.kind === "folder" ? (
+          folderArt.length === 4 ? (
+            <span className="w-12 h-12 rounded-md overflow-hidden art-hairline shrink-0 grid grid-cols-2">
+              {folderArt.map((src) => (
+                <img key={src} src={upgradeArtwork(src)} alt="" draggable={false} className="w-full h-full object-cover" />
+              ))}
+            </span>
+          ) : folderArt.length ? (
+            <img src={upgradeArtwork(folderArt[0])} alt="" draggable={false} className="w-12 h-12 rounded-md object-cover art-hairline shrink-0" />
+          ) : (
+            <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
+              <Folder className="w-5 h-5 text-ink-hi/55" />
+            </span>
+          )
+        ) : r.kind === "spotify" ? (
+          <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
+            <SpotifyIcon className="w-6 h-6" />
+          </span>
+        ) : r.thumb ? (
+          <img src={upgradeArtwork(r.thumb)} alt="" draggable={false} className="w-12 h-12 rounded-md object-cover art-hairline shrink-0" />
+        ) : (
+          <div className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
+            {r.kind === "downloads" ? (
+              <Download className="w-4 h-4 text-ink-hi/35" />
+            ) : r.kind === "playlist" ? (
+              <Music2 className="w-4 h-4 text-ink-hi/35" />
+            ) : (
+              <Heart className="w-4 h-4 text-ink-hi/35" />
+            )}
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
+          <FitText text={r.title} className="text-[14px] font-semibold text-ink-hi" />
+          <FitText text={r.subtitle} className="text-[12.5px] text-ink-hi/55 mt-0.5" />
+        </div>
+        {isCurrent && <EqBars />}
+        {((r.singleKey && r.pinned) ||
+          (r.kind === "playlist" &&
+            !r.singleKey &&
+            playlists.find((p) => p.id === r.id)?.pinned)) && (
+          <Pin className="w-3.5 h-3.5 text-accent shrink-0 fill-accent/20" aria-label="Pinned" />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -630,7 +724,9 @@ function LibraryPill() {
         e.dataTransfer.dropEffect = "copy";
         refreshGlow();
       }}
-      onDragLeave={refreshGlow}
+      onDragLeave={(e) => {
+        if (dragHasPlaylist(e) || dragHasArtist(e) || dragHasAlbum(e)) refreshGlow();
+      }}
       onDrop={(e) => {
         clearGlow();
         const isPlaylist = dragHasPlaylist(e);
@@ -676,93 +772,34 @@ function LibraryPill() {
         </button>
         <div className="ml-auto flex items-center gap-1">
           {/* + opens Spotify's create dropdown — Playlist / Folder, no modal. */}
-          <CreateMenu onFolderCreated={(f) => setExpanded((prev) => new Set(prev).add(f.id))} />
+          <CreateMenu />
         </div>
       </div>
 
       {/* Rows — drops bubble to the panel root, which imports playlists and
           artists anywhere they land; specific rows handle their own targets. */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2 pt-1 space-y-0.5">
-        {rows.length === 0 ? (
+      <div ref={scrollRef} className="edge-fades flex-1 min-h-0 overflow-y-auto px-2 pb-2 pt-1">
+        {entries.length === 0 ? (
           <div className="px-3 py-8 text-center text-[13px] text-ink-hi/55">
             Nothing here yet — play a track to fill your library.
           </div>
         ) : (
-          rows.map((r) => {
-            const isCurrent = current?.id === r.id;
-            return (
-              <button
-                key={`${r.kind}-${r.id}`}
-                onClick={() => onClickRow(r)}
-                onContextMenu={(e) => onRowContextMenu(e, r)}
-                onDragOver={(e) => onRowDragOver(e, r)}
-                onDragLeave={(e) => onRowDragLeave(e, r)}
-                onDrop={(e) => onRowDrop(e, r)}
-                className={`group w-full flex items-center gap-3 p-2 rounded-lg text-left hover:bg-ink-hi/[0.05] active:bg-ink-hi/[0.09] transition-all duration-150 ${
-                  r.kind === "playlist" && r.folderId ? "pl-6" : ""
-                } ${dropHover === r.id ? "ring-2 ring-inset ring-accent/60 bg-ink-hi/[0.08] scale-[1.02]" : ""} ${
-                  pulse === r.id ? "animate-drop-pulse" : ""
-                }`}
+          <div ref={rowsRef} className="space-y-0.5">
+            {entries.map((entry, i) => (
+              <div
+                key={entry.key}
+                style={sortable.styleFor(i)}
+                tabIndex={-1}
+                // Alt+↑/↓ refocuses the moved entry: hand that on to its row.
+                onFocus={(e) => {
+                  if (e.target === e.currentTarget) (e.currentTarget.firstElementChild as HTMLElement | null)?.focus();
+                }}
+                className="space-y-0.5 rounded-lg outline-none"
               >
-                {r.kind === "artist" ? (
-                  r.thumb ? (
-                    <img
-                      src={upgradeArtwork(r.thumb)}
-                      alt=""
-                      className="w-12 h-12 rounded-full object-cover art-hairline shrink-0"
-                    />
-                  ) : (
-                    <span className="w-12 h-12 rounded-full bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
-                      <User className="w-5 h-5 text-ink-hi/55" />
-                    </span>
-                  )
-                ) : r.kind === "folder" ? (
-                  <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
-                    <Folder className="w-5 h-5 text-ink-hi/55" />
-                  </span>
-                ) : r.kind === "local" ? (
-                  <span className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
-                    <FolderOpen className="w-5 h-5 text-ink-hi/55" />
-                  </span>
-                ) : r.thumb ? (
-                  <img src={upgradeArtwork(r.thumb)} alt="" className="w-12 h-12 rounded-md object-cover art-hairline shrink-0" />
-                ) : (
-                  <div className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
-                    {r.kind === "downloads" ? (
-                      <Download className="w-4 h-4 text-ink-hi/35" />
-                    ) : r.kind === "playlist" ? (
-                      <Music2 className="w-4 h-4 text-ink-hi/35" />
-                    ) : (
-                      <Heart className="w-4 h-4 text-ink-hi/35" />
-                    )}
-                  </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <div
-                    className={`text-[14px] font-semibold truncate ${
-                      isCurrent ? "text-ink-hi" : "text-ink-hi"
-                    }`}
-                  >
-                    {r.title}
-                  </div>
-                  <div className="text-[12.5px] text-ink-hi/55 truncate mt-0.5">{r.subtitle}</div>
-                </div>
-                {isCurrent && playing && <EqBars />}
-                {((r.singleKey && r.pinned) ||
-                  (r.kind === "playlist" &&
-                    !r.singleKey &&
-                    playlists.find((p) => p.id === r.id)?.pinned)) && (
-                  <Pin className="w-3.5 h-3.5 text-accent shrink-0 fill-accent/20" aria-label="Pinned" />
-                )}
-                {r.kind === "folder" &&
-                  (expanded.has(r.id) ? (
-                    <ChevronDown className="w-4 h-4 text-ink-hi/45 shrink-0" />
-                  ) : (
-                    <ChevronRight className="w-4 h-4 text-ink-hi/45 shrink-0" />
-                  ))}
-              </button>
-            );
-          })
+                {entry.rows.map((r, j) => renderRow(r, j === 0 && i >= fixed.length ? sortable.rowProps(i) : undefined))}
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>

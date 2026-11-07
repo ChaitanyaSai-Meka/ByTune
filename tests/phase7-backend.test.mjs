@@ -20,7 +20,7 @@ const row = (store_name, payload) => ({ store_name, payload, updated_at: "2026-0
 // Only Electron, the SDK transport, and unrelated main-process services are replaced.
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bytune-phase7-"));
-  const handlers = new Map(), modules = new Map(), events = [], calls = [], uploads = [];
+  const handlers = new Map(), modules = new Map(), events = [], calls = [], uploads = [], spotifyCalls = [], roomCalls = [], names = new Map();
   let rows = [], user = "A", expired = false, authChanged, failUpload, failWrite, statsNotify = () => {};
   const sdk = {
     auth: {
@@ -33,6 +33,11 @@ function fixture() {
       async signOut() { authChanged?.("SIGNED_OUT", null); return { error: null }; },
     },
     from(table) {
+      // Display names (supabase/migrations/0003) sit in their own table, apart from the store rows.
+      if (table === "display_names") return {
+        select: () => ({ eq: (_field, id) => ({ maybeSingle: async () => ({ data: names.has(id) ? { name: names.get(id) } : null, error: null }) }) }),
+        async upsert(value) { names.set(value.user_id, value.name); return { error: null }; },
+      };
       calls.push(table);
       return {
         select: () => ({ eq: (_field, id) => {
@@ -84,6 +89,13 @@ function fixture() {
           if (name === "./local-library") return { resetLocalLibrary: async () => {}, readLocalLibrary: () => ({ folders: [] }) };
           if (name === "./stats") return { resetStats() {}, initStats() {}, flushSync() {}, reloadStore() {}, recordListening() {}, summary: () => ({ totalMs: 0 }), HISTORY_STORE: "listening-history", onStoreWrite(fn) { statsNotify = fn; } };
           if (name === "./pip") return { registerPipIpc() {}, isTrustedSender: () => true };
+          if (name === "./stream-proxy") return { setDownloadedFileLookup() {} };
+          if (name === "./downloaded-files") return { noteLibrary() {}, noteDownloaded() {}, downloadedFilePath: () => null };
+          if (name === "./spotify") return {
+            forgetSpotify: async () => { spotifyCalls.push("forget"); },
+            moveGuestSpotify: async (owner) => { spotifyCalls.push(`moveGuest:${owner}`); },
+          };
+          if (name === "./rooms") return { onRoomChange() {}, leaveRoom: async () => { roomCalls.push("leave"); return {}; }, roomView: () => ({ state: null }) };
           return {};
         }
         if (name.startsWith(".")) return load(path.resolve(path.dirname(file), `${name}.ts`));
@@ -101,9 +113,11 @@ function fixture() {
   sync.bindRestoredNotifier((stores, seq) => events.push({ stores: [...stores], seq }));
   load(path.join(root, "electron", "main.ts")).registerIpc();
   return {
-    dir, disk, auth, sync, transition, events, calls, uploads,
+    dir, disk, auth, sync, transition, events, calls, uploads, spotifyCalls, roomCalls, names,
     invoke: (name, ...args) => handlers.get(name)({}, ...args),
     statsNotify: () => statsNotify?.(),
+    /** The real Replay module sync.ts uses (main.ts gets a stand-in). */
+    stats: load(path.join(root, "electron", "stats.ts")),
     rows(value) { rows = value; },
     user(value) { user = value; },
     expired(value) { expired = value; },
@@ -124,8 +138,10 @@ test("guest data migrates into an account CREATED by sign-up", async () => {
     await h.invoke("data:write", "recent-searches", envelope({ searches: ["guest query"] }), doc);
     assert.equal(h.calls.length, 0, "guest writes are local-only");
     h.rows([row("library", library("remote"))]);
-    await h.invoke("auth:signUp", "alice", "valid-password-123");
+    await h.invoke("auth:signUp", "alice", "valid-password-123", "Alice");
     assert.equal(h.transition.currentOwner(), "A");
+    assert.equal(h.names.get("A"), "Alice", "the display name reaches the account");
+    assert.equal(h.auth.sessionInfo().displayName, "Alice");
     assert.deepEqual(new Set(h.disk.readData("library").state.liked.map(t => t.id)), new Set(["guest", "remote"]));
     assert.equal(h.disk.readData("library").state.playlists[0].id, "p");
     assert.deepEqual(plain(h.disk.readData("recent-searches").state.searches), ["guest query"]);
@@ -133,6 +149,82 @@ test("guest data migrates into an account CREATED by sign-up", async () => {
     assert.deepEqual(new Set(uploaded.payload.state.liked.map(t => t.id)), new Set(["guest", "remote"]));
     assert.equal(uploaded.user_id, "A");
     assert.ok(h.uploads.some(v => v.store_name === "recent-searches"));
+  } finally { await h.close(); }
+});
+
+test("a fresh install's first settings sync keeps the account's AutoPlay choice", async () => {
+  const h = fixture();
+  try {
+    await h.invoke("auth:signIn", "alice", "password");
+    // An install whose settings have never synced: the app writes them (with
+    // the new default, AutoPlay on) before the first settings sync runs…
+    h.sync.resetSyncState("A");
+    const doc = await h.invoke("data:scope");
+    await h.invoke("data:write", "settings", envelope({ autoplay: true, crossfadeSeconds: 6 }), doc);
+    // …while the account already says AutoPlay off.
+    h.rows([row("settings", { state: { autoplay: false, crossfadeSeconds: 0 }, version: 0 })]);
+    await h.sync.syncNow();
+    const settings = h.disk.readData("settings").state;
+    assert.equal(settings.autoplay, false, "the account's AutoPlay choice is not overwritten by a default");
+    assert.equal(settings.crossfadeSeconds, 6, "other local settings still win, as before");
+  } finally { await h.close(); }
+});
+
+test("local songs never upload their absolute file path", async () => {
+  const h = fixture();
+  try {
+    await h.invoke("auth:continueGuest");
+    const doc = await h.invoke("data:scope");
+    // Library data saved by older builds carried the file path on local tracks.
+    const local = { ...track("local:abc"), localPath: "C:\\Users\\someone\\Music\\song.mp3" };
+    const lib = library("guest");
+    lib.state.liked.push(local);
+    lib.state.history = [local];
+    lib.state.playlists = [{ id: "p", name: "Mixed", createdAt: 1, tracks: [local, track("yt")] }];
+    await h.invoke("data:write", "library", lib, doc);
+    h.rows([]);
+    await h.invoke("auth:signUp", "alice", "valid-password-123", "Alice");
+    const uploaded = h.uploads.find((v) => v.store_name === "library");
+    assert.ok(uploaded, "the library was uploaded");
+    assert.ok(!JSON.stringify(uploaded.payload).includes("localPath"), "no localPath anywhere in the upload");
+    assert.ok(!JSON.stringify(uploaded.payload).includes("song.mp3"));
+    assert.ok(uploaded.payload.state.liked.some((t) => t.id === "local:abc"), "the song itself still syncs");
+    assert.equal(h.disk.readData("library").state.liked.find((t) => t.id === "local:abc").localPath, local.localPath,
+      "the copy on this device is untouched");
+  } finally { await h.close(); }
+});
+
+test("songs from this computer never upload; their playlists sync without them and get them back on a restore", async () => {
+  const h = fixture();
+  try {
+    await h.invoke("auth:continueGuest");
+    const doc = await h.invoke("data:scope");
+    const lib = library("guest");
+    lib.state.playlists = [
+      { id: "mixed", name: "chills", createdAt: 3, device: true, tracks: [track("yt1"), track("local:a"), track("yt2")] },
+      { id: "here", name: "On this PC", createdAt: 2, tracks: [track("local:b")] },
+      { id: "plain", name: "Everywhere", createdAt: 1, tracks: [track("yt3")] },
+    ];
+    await h.invoke("data:write", "library", lib, doc);
+    h.rows([]);
+    await h.invoke("auth:signUp", "alice", "valid-password-123", "Alice");
+    const uploaded = h.uploads.find((v) => v.store_name === "library").payload.state.playlists;
+    assert.deepEqual(uploaded.map((p) => p.id), ["mixed", "plain"], "a playlist of only local songs stays here");
+    assert.deepEqual(uploaded[0].tracks.map((t) => t.id), ["yt1", "yt2"], "the rest of its songs sync, the local one doesn't");
+    assert.equal("device" in uploaded[0], false, "an earlier build's flag never reaches the account");
+
+    // The account's copy replaces the library (a restore; another device added yt9).
+    const remote = library("remote");
+    remote.state.playlists = [
+      { id: "mixed", name: "chills", createdAt: 3, tracks: [track("yt1"), track("yt2"), track("yt9")] },
+      { id: "cloud", name: "Cloud", createdAt: 4, tracks: [track("yt5")] },
+    ];
+    h.rows([row("library", remote)]);
+    await h.sync.restoreNow();
+    const restored = h.disk.readData("library").state.playlists;
+    assert.deepEqual(plain(restored.map((p) => p.id)), ["here", "mixed", "cloud"], "the local-only playlist comes back whole");
+    assert.deepEqual(plain(restored.find((p) => p.id === "mixed").tracks.map((t) => t.id)), ["yt1", "local:a", "yt2", "yt9"],
+      "the local song is back where it was");
   } finally { await h.close(); }
 });
 
@@ -195,6 +287,35 @@ test("logout and another login never migrate the previous account into the new o
     h.user("A");
     await h.invoke("auth:signIn", "alice", "password");
     assert.equal(h.disk.readData("library").state.liked[0].id, "A-only");
+  } finally { await h.close(); }
+});
+
+test("Spotify stays with the account through sign-out and back in; a guest who signs up brings theirs; only a reset forgets", async () => {
+  const h = fixture();
+  try {
+    await h.invoke("auth:continueGuest");
+    await h.invoke("auth:signUp", "alice", "valid-password-123", "Alice");
+    assert.deepEqual(h.spotifyCalls, ["moveGuest:A"], "the new account takes the guest's Spotify");
+    await h.invoke("auth:signOut");
+    await h.invoke("auth:signIn", "alice", "password");
+    h.user("B");
+    await h.invoke("auth:signOut");
+    await h.invoke("auth:signIn", "bob", "password");
+    assert.deepEqual(h.spotifyCalls, ["moveGuest:A"], "signing out, back in, or into an existing account forgets and moves nothing");
+    await h.invoke("app:resetData");
+    assert.deepEqual(h.spotifyCalls, ["moveGuest:A", "forget"]);
+  } finally { await h.close(); }
+});
+
+test("a room is left before every sign-in, sign-out and data reset, while its account can still say so", async () => {
+  const h = fixture();
+  try {
+    await h.invoke("auth:signIn", "alice", "password");
+    assert.equal(h.roomCalls.length, 1, "sign-in");
+    await h.invoke("auth:signOut");
+    assert.equal(h.roomCalls.length, 2, "sign-out");
+    await h.invoke("app:resetData");
+    assert.equal(h.roomCalls.length, 3, "reset");
   } finally { await h.close(); }
 });
 
@@ -361,6 +482,35 @@ test("manual restore with verified identity restores and retains device fields",
   } finally { await h.close(); }
 });
 
+test("a sync merge includes the last seconds of Replay listening still held in memory", async () => {
+  const h = fixture();
+  try {
+    const now = new Date();
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const replay = (tracks) => ({
+      state: { buckets: [{ month, tracks, artists: {}, albums: {}, hours: new Array(24).fill(0), days: {} }] },
+      version: 1,
+    });
+    const rec = (ms) => ({ title: "T", artist: "A", thumb: "", ms, plays: 1, lastAt: 1 });
+    h.rows([row("listening-history", replay({ fromCloud: rec(90_000) }))]);
+    await h.invoke("auth:signIn", "alice", "password");
+    // The app wires Replay writes into sync exactly like this (main.ts).
+    h.stats.onStoreWrite(() => h.sync.noteLocalWrite(h.stats.HISTORY_STORE));
+    h.stats.initStats();
+    // A few seconds of listening, still only in memory (Replay flushes every 5 s)…
+    h.stats.recordListening({ id: "heardHere", title: "Here", artist: "A", duration: 200, thumb: "" }, 20_000);
+    // …while another device moves the cloud copy on.
+    h.rows([{ ...row("listening-history", replay({ fromCloud: rec(120_000) })), updated_at: new Date(Date.now() + 60_000).toISOString() }]);
+    await h.sync.syncNow();
+    const tracks = h.disk.readData("listening-history").state.buckets.find((b) => b.month === month).tracks;
+    assert.equal(tracks.heardHere?.ms, 20_000, "this device's unflushed listening survives the sync");
+    assert.equal(tracks.fromCloud.ms, 120_000, "and the other device's newer listening arrives");
+  } finally {
+    h.stats.resetStats();
+    await h.close();
+  }
+});
+
 test("Replay keeps uploading as listening accumulates, not just once", async () => {
   const h = fixture();
   try {
@@ -398,5 +548,24 @@ test("Replay keeps uploading as listening accumulates, not just once", async () 
     h.statsNotify();
     await h.sync.syncNow();
     assert.equal(uploadsOf().length, before, "guest Replay stays local");
+  } finally { await h.close(); }
+});
+
+test("signed in, only a store's first unsynced write saves sync meta to disk at once", async () => {
+  const h = fixture();
+  try {
+    await signedIn(h);
+    await h.disk.writeData("library", library("local"));
+    await h.sync.syncNow();
+    const clean = plain(h.disk.readData("sync-meta")).stores.library;
+    assert.ok(clean.changedAt <= clean.syncedAt, "pushed: clean");
+    await new Promise((r) => setTimeout(r, 5));
+    h.sync.noteLocalWrite("library");
+    const dirty = plain(h.disk.readData("sync-meta")).stores.library;
+    assert.ok(dirty.changedAt > dirty.syncedAt, "the clean-to-dirty edge is on disk at once");
+    await new Promise((r) => setTimeout(r, 5));
+    h.sync.noteLocalWrite("library");
+    assert.equal(plain(h.disk.readData("sync-meta")).stores.library.changedAt, dirty.changedAt, "later writes stay in memory");
+    assert.ok(h.sync.syncStatus().pending > 0, "a push is still on its way");
   } finally { await h.close(); }
 });

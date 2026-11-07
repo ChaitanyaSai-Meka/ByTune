@@ -31,7 +31,8 @@ import {
   SpVolumeHigh,
   SpVolumeOff,
 } from "../components/SpotifyIcons";
-import { fmtTime } from "../lib/format";
+import { fmtTime, shortTitle } from "../lib/format";
+import { FitText } from "../components/FitText";
 import { upgradeArtwork } from "../lib/artwork";
 import { isWindows } from "../lib/platform";
 import type { PipCommand, PipSnapshot } from "./types";
@@ -185,15 +186,47 @@ export function PipApp() {
     const off = window.bytune?.onPipState((s) => setSnap(s as PipSnapshot));
     return off;
   }, []);
+  const snapRef = useRef(snap);
+  snapRef.current = snap;
 
   /* Space toggles playback while the PiP window is focused */
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.code !== "Space" || e.repeat) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      e.preventDefault();
-      send({ type: "toggle" });
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const arrow = e.code.startsWith("Arrow");
+      if (arrow && e.target instanceof HTMLInputElement) return;
+      if (e.repeat && (!arrow || e.shiftKey)) return;
+      const s = snapRef.current;
+      switch (e.code) {
+        case "Space":
+          e.preventDefault();
+          send({ type: "toggle" });
+          break;
+        case "ArrowRight":
+          if (e.shiftKey) send({ type: "next" });
+          else if (s) send({ type: "seek", sec: s.position + 5 });
+          break;
+        case "ArrowLeft":
+          if (e.shiftKey) send({ type: "prev" });
+          else if (s) send({ type: "seek", sec: Math.max(0, s.position - 5) });
+          break;
+        case "ArrowUp":
+        case "ArrowDown":
+          e.preventDefault();
+          if (s) send({ type: "volume", v: s.volume + (e.code === "ArrowUp" ? 0.05 : -0.05) });
+          break;
+        case "KeyM":
+          send({ type: "mute" });
+          break;
+        case "KeyS":
+          send({ type: "shuffle" });
+          break;
+        case "KeyR":
+          send({ type: "repeat" });
+          break;
+        default:
+          break;
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -212,7 +245,7 @@ export function PipApp() {
   const track = snap?.track ?? null;
   const trackId = track?.id ?? null;
   const thumb = track?.thumb ? upgradeArtwork(track.thumb) : "";
-  useEffect(() => setSeekValue(null), [trackId]);
+  useEffect(() => setSeek(null), [trackId]);
 
   /* Dominant artwork colour for ambient backdrops */
   useEffect(() => {
@@ -274,6 +307,7 @@ export function PipApp() {
     () => () => {
       if (volTimer.current !== null) window.clearTimeout(volTimer.current);
       if (likeBurstTimer.current !== null) window.clearTimeout(likeBurstTimer.current);
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
     },
     []
   );
@@ -284,17 +318,38 @@ export function PipApp() {
   const duration = snap?.duration ?? 0;
   const position = Math.min(snap?.position ?? 0, duration > 0 ? duration : Infinity);
   const max = duration > 0 ? duration : 1;
-  const shownSeek = Math.min(seekValue ?? position, max);
+  const shownSeek = Math.min(seek?.v ?? position, max);
+  /* Sent once per drag or key adjustment: on a key let go, on blur, or on a
+     release anywhere in the window — a drag whose pointer the window loses
+     mid-way (focus stolen, say) never gets its release on the slider, and
+     would otherwise sit unsent with the time frozen. Reads refs only, so the
+     window listener's first copy serves for good. */
   const commitSeek = (): void => {
-    if (seekValue === null) return;
-    send({ type: "seek", sec: Math.min(seekValue, max) });
-    setSeekValue(null);
+    const s = seekRef.current;
+    if (!s || s.sent) return;
+    seekRef.current = { v: s.v, sent: true };
+    send({ type: "seek", sec: s.v });
+    setSeek(seekRef.current);
   };
+  useEffect(() => {
+    window.addEventListener("pointerup", commitSeek);
+    return () => window.removeEventListener("pointerup", commitSeek);
+  }, []);
+  // A dropped thumb lets go once a snapshot puts playback next to it — or
+  // after 1.5s, should the seek never land.
+  useEffect(() => {
+    if (seek?.sent && Math.abs(position - seek.v) < 1.5) setSeek(null);
+  }, [seek, position]);
+  useEffect(() => {
+    if (!seek?.sent) return;
+    const t = window.setTimeout(() => setSeek(null), 1500);
+    return () => window.clearTimeout(t);
+  }, [seek]);
   const canShare = sharableId(track?.id ?? null);
 
-  const onCardFocus = (e: FocusEvent<HTMLDivElement>): void => {
-    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocusWithin(true);
-  };
+  // Keyboard focus holds the controls up; the focus a mouse click leaves on a
+  // button doesn't, so they still hide once the cursor leaves the window.
+  const onCardFocus = (e: FocusEvent<HTMLDivElement>): void => setFocusWithin((e.target as Element).matches(":focus-visible"));
   const onCardBlur = (e: FocusEvent<HTMLDivElement>): void => {
     if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocusWithin(false);
   };
@@ -317,6 +372,7 @@ export function PipApp() {
   const copyShareLink = async (): Promise<void> => {
     if (!track || !canShare) return;
     const url = `https://music.youtube.com/watch?v=${track.id}`;
+    let ok = true;
     try {
       await navigator.clipboard.writeText(url);
     } catch {
@@ -327,12 +383,23 @@ export function PipApp() {
         ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
         document.body.appendChild(ta);
         ta.select();
-        document.execCommand("copy");
+        ok = document.execCommand("copy");
         ta.remove();
       } catch {
-        /* clipboard unavailable */
+        ok = false; // clipboard unavailable
       }
     }
+    if (!ok) return;
+    setCopied(true);
+    if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+    copiedTimer.current = window.setTimeout(() => setCopied(false), 1500);
+  };
+
+  /* Title → its album, artist → their page, in the main window (brought
+     forward); with nothing playing, a click just brings ByTune forward. */
+  const openInMain = (to: "album" | "artist"): void => {
+    window.bytune?.pipShowMain();
+    if (track) send({ type: "open", to });
   };
 
   const toggleLike = (): void => {
@@ -399,7 +466,7 @@ export function PipApp() {
       onBlur={onCardBlur}
       onPointerEnter={() => setCursorInside(true)}
       onContextMenu={(e) => e.preventDefault()}
-      className="animate-pip-in fixed inset-0 flex select-none flex-col overflow-hidden bg-black text-white"
+      className="pip-root animate-pip-in fixed inset-0 flex select-none flex-col overflow-hidden bg-black text-white"
     >
       {isHorizontal ? (
         /* ===================================================================

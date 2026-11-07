@@ -12,14 +12,18 @@
  * synchronously keeps the PiP's slider live even while the main window is
  * minimized.
  */
+import { creditNames } from "../lib/replayFormat";
+import { searchPageOnce } from "../lib/searchOnce";
+import { resolveArtistMeta } from "../stores/artistMeta";
 import { useLibrary } from "../stores/library";
-import { usePlayer } from "../stores/player";
+import { shownTrack, usePlayer } from "../stores/player";
 import { useUI } from "../stores/ui";
+import type { SearchPageResult, Track } from "../types";
 import type { PipCommand, PipSnapshot } from "./types";
 
 function buildSnapshot(): PipSnapshot {
   const p = usePlayer.getState();
-  const track = p.queue[p.index] ?? null;
+  const track = shownTrack(p);
   const lib = useLibrary.getState();
   return {
     track: track
@@ -41,6 +45,22 @@ function buildSnapshot(): PipSnapshot {
     repeat: p.repeat,
     liked: track ? lib.liked.some((t) => t.id === track.id) : false,
   };
+}
+
+/** The album / artist page a song links to. Songs played from a search row
+ *  often come without an album id and local files carry neither, so the
+ *  album falls back to the song's twin on the Songs search tab (whose rows
+ *  carry it), the artist to a lookup by the first credited name. */
+async function pageOf(t: Track, to: "album" | "artist"): Promise<string | undefined> {
+  if (to === "artist") return t.artistId ?? (await resolveArtistMeta(creditNames(t.artist)[0] ?? t.artist))?.id;
+  if (t.albumId) return t.albumId;
+  try {
+    const { rows } = (await searchPageOnce(`${t.title} ${t.artist}`, "songs")) as SearchPageResult;
+    const songs = rows.flatMap((r) => (r.kind === "browse" ? [] : [r.song]));
+    return (songs.find((s) => s.id === t.id) ?? songs.find((s) => s.title === t.title && s.artist === t.artist))?.albumId;
+  } catch {
+    return undefined;
+  }
 }
 
 function execute(command: PipCommand): void {
@@ -72,13 +92,25 @@ function execute(command: PipCommand): void {
       p.cycleRepeat();
       break;
     case "like": {
-      const t = p.queue[p.index];
+      // The song the PiP shows — mid-crossfade that's the one fading in.
+      const t = shownTrack(p);
       if (t) useLibrary.getState().toggleLike(t);
       break;
     }
-    case "lyrics":
-      useUI.getState().toggleLyrics();
+    case "open": {
+      // The PiP's title / artist links. The page must not open hidden behind
+      // the full-screen player.
+      const t = shownTrack(p);
+      const to = command.to;
+      if (!t || (to !== "album" && to !== "artist")) break;
+      void pageOf(t, to).then((param) => {
+        if (!param) return;
+        const ui = useUI.getState();
+        if (ui.nowPlayingOpen) ui.toggleNowPlaying();
+        ui.navigate({ name: to, param });
+      });
       break;
+    }
     default:
       break;
   }

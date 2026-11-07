@@ -20,6 +20,7 @@ import {
   play,
   read,
   restartedFrom,
+  setAnalysis,
   sounding,
   startsOf,
   track,
@@ -109,4 +110,83 @@ test("automix off: the next track starts at 0:00 and nothing plays early", async
   assert.equal(s.id, "B");
   assert.ok(s.position > 0.2, "song B should be playing after the switch");
   assert.equal(sounding(h).length, 1, "only one deck may sound");
+});
+
+test("repeat-all: the last song blends into the first, which starts once and plays on", async (t) => {
+  const h = await boot();
+  t.after(() => h.restore());
+  const { usePlayer } = h.engine;
+  h.setDuration("A", 4.0);
+  h.setDuration("B", 3.0);
+  usePlayer.setState({ repeat: "all" });
+  await play(h, [track("A", 4.0), track("B", 3.0)], 1);
+  await h.advance(3500);
+  assert.equal(read(h).index, 0);
+  assert.equal(read(h).id, "A");
+  assert.ok(firstSoundAt(h, "A") < endedAt(h, "B"), "A came in under the end of B");
+  assert.equal(restartedFrom(h, "A"), false, "promoted, not restarted");
+});
+
+test("the incoming song loads once while its blend waits to start, and the OS flyout follows the blend", async (t) => {
+  const h = await boot();
+  t.after(() => h.restore());
+  h.setDuration("A", 3.0);
+  h.setDuration("B", 4.0);
+  await play(h, [track("A", 3.0), track("B", 4.0)]);
+  await h.advance(2300);
+  assert.equal(globalThis.__loads.filter((src) => src === "fake:B").length, 1, "one load, not one per timeupdate");
+  await h.advance(1200);
+  assert.equal(read(h).id, "B");
+  assert.equal(globalThis.__media.at(-1)?.title, "B", "the flyout shows the song the blend landed on");
+});
+
+test("the screen moves to the incoming song half way through a blend; the queue moves when it ends", async (t) => {
+  const h = await boot();
+  t.after(() => h.restore());
+  const { usePlayer, shownTrack } = h.engine;
+  h.setDuration("A", 3.0);
+  h.setDuration("B", 4.0);
+  await play(h, [track("A", 3.0), track("B", 4.0)]);
+  await h.advance(2500);
+  assert.equal(usePlayer.getState().blendInto, null, "before the crossover the screen shows A");
+  await h.advance(300);
+  assert.equal(shownTrack(usePlayer.getState()).id, "B", "past the crossover it shows B");
+  assert.equal(read(h).id, "A", "the queue still plays A until the blend completes");
+  await h.advance(700);
+  assert.equal(read(h).id, "B");
+  assert.equal(usePlayer.getState().blendInto, null, "cleared together with the index");
+});
+
+test("the blend planner: real edges, and beats in phase when the tempos match", async (t) => {
+  const h = await boot();
+  t.after(() => h.restore());
+  const { planBlend } = h.engine;
+  const an = (p) => ({ head: 0, tail: 0, lufs: null, onset: null, intro: null, outro: null, ...p });
+  assert.deepEqual(planBlend(null, 200, null, 6, false, false), { outAt: 194, inAt: 0 }, "plain crossfade");
+  assert.deepEqual(planBlend(an({ tail: 3 }), 200, an({ head: 1 }), 6, true, false), { outAt: 191, inAt: 1 }, "ends where the sound ends");
+  assert.deepEqual(planBlend(an({ tail: 3 }), 200, an({ head: 1 }), 6, false, false), { outAt: 194, inAt: 0 }, "edges off: as before");
+  // A's last beat at 2.25 s (120 BPM); B joins at 0.2 s and its first beat is at 0.45 s.
+  const out = an({ outro: { bpm: 120, at: 2.25 } });
+  const inc = an({ head: 0.2, intro: { bpm: 120, at: 0.45 } });
+  const matched = planBlend(out, 3.0, inc, 0.6, true, true);
+  assert.ok(Math.abs(matched.outAt - 2.0) < 1e-9 && matched.inAt === 0.2, `B's beat lands on A's: ${JSON.stringify(matched)}`);
+  const slow = an({ head: 0.2, intro: { bpm: 100, at: 0.45 } });
+  const mismatched = planBlend(out, 3.0, slow, 0.6, true, true);
+  assert.ok(Math.abs(mismatched.outAt - 2.25) < 1e-9, "tempos apart: B's first sound lands on an A beat");
+});
+
+test("with Automix, B joins at its first sound and A is never heard past the end of its sound", async (t) => {
+  const h = await boot({ smartFade: true });
+  t.after(() => h.restore());
+  h.setDuration("A", 10.0);
+  h.setDuration("B", 20.0);
+  setAnalysis("A", { tail: 3.0 });
+  setAnalysis("B", { head: 1.0 });
+  await play(h, [track("A", 10.0), track("B", 20.0)]);
+  await h.advance(6700);
+  const firstB = h.trace.find((s) => s.src === "fake:B" && s.currentTime > 1.0);
+  assert.ok(firstB && firstB.currentTime < 1.4, `B plays on from its first sound (${firstB?.currentTime})`);
+  await h.advance(600);
+  assert.equal(read(h).id, "B", "the blend is done by the end of A's sound");
+  assert.deepEqual(sounding(h).map((d) => d.src), ["fake:B"]);
 });

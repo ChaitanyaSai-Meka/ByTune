@@ -25,7 +25,7 @@ import { validateCloudRows } from "./cloud-payload";
 import { authenticatedUserId, readProfile, sessionInfo } from "./supabase";
 import * as stats from "./stats";
 import { SYNCED_STORES } from "../src/lib/config";
-import { mergeArtistMeta, mergeLibrary, mergeListening, mergeListeningHistory, mergeRecentSearches, mergeSettings, mergeSyncMeta, stripDeviceSettings } from "./sync-merge";
+import { DEVICE_SETTINGS_FIELDS, mergeArtistMeta, mergeLibrary, mergeListening, mergeListeningHistory, mergeRecentSearches, mergeSettings, mergeSyncMeta, stripDeviceSettings } from "./sync-merge";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 type SbClient = SupabaseClient<any, "public", any>;
@@ -97,11 +97,12 @@ function loadMeta(): SyncMeta {
 }
 
 /**
- * Meta reaches disk immediately. `changedAt` is what tells the next boot
- * "this store has local edits the cloud has not seen" — a debounced (or
- * lost-at-quit) save is precisely how a stale cloud copy could overwrite
- * newer local data on the next start. The file is tiny and store writes are
- * user-frequency (never per-timeupdate), so there is nothing to debounce.
+ * A store going from clean to dirty reaches disk immediately: `changedAt >
+ * syncedAt` is what tells the next boot "this store has local edits the cloud
+ * has not seen", and a lost save is precisely how a stale cloud copy could
+ * overwrite newer local data on the next start. Later writes to a store that
+ * is already dirty only move `changedAt` in memory (Replay writes every 5s
+ * while you listen); every push saves meta, and quitting runs flushMetaSync.
  */
 function saveMeta(): void {
   persist.writeDataSync("sync-meta", meta);
@@ -180,7 +181,7 @@ export function noteLocalWrite(name: string): void {
   if (sessionInfo().mode !== "account") return;
   const m = storeMeta(name);
   meta.stores[name] = { ...m, changedAt: Date.now() };
-  saveMeta();
+  if (m.changedAt <= m.syncedAt) saveMeta(); // clean → dirty: the edge the next boot must see
   schedulePush(name);
 }
 
@@ -217,6 +218,21 @@ export function noteSyncFailure(err: unknown): void {
   lastError = err instanceof Error ? err.message : String(err);
 }
 
+/** A store envelope with one state key left out. */
+function withoutKey(envelope: unknown, key: string): unknown {
+  const e = envelope as { state?: Record<string, unknown> };
+  if (!e?.state || !(key in e.state)) return envelope;
+  const { [key]: _drop, ...state } = e.state;
+  return { ...(envelope as object), state };
+}
+
+/** A track without its absolute file path (older local songs carried one). */
+function withoutPath(track: unknown): unknown {
+  if (!track || typeof track !== "object" || !("localPath" in track)) return track;
+  const { localPath: _path, ...rest } = track as Record<string, unknown>;
+  return rest;
+}
+
 /** Device-owned fields never leave the machine. */
 function stripForUpload(name: string, data: unknown): unknown {
   if (!data || typeof data !== "object") return data;
@@ -224,26 +240,96 @@ function stripForUpload(name: string, data: unknown): unknown {
   if (!envelope.state) return data;
   if (name === "library") {
     const { downloads: _drop, ...keep } = envelope.state;
-    return { ...envelope, state: keep };
+    const tracks = (list: unknown): unknown => (Array.isArray(list) ? list.map(withoutPath) : list);
+    return {
+      ...envelope,
+      state: {
+        ...keep,
+        liked: tracks(keep.liked),
+        history: tracks(keep.history),
+        // Songs from this computer never leave it: a playlist uploads without them, and one made
+        // only of them doesn't upload at all. (`device` was a flag of an earlier build.)
+        playlists: Array.isArray(keep.playlists)
+          ? keep.playlists
+              .filter((p) => !staysOnDevice(p))
+              .map((p) => {
+                if (!p || typeof p !== "object") return p;
+                const { device: _device, ...rest } = p as Record<string, unknown>;
+                return { ...rest, tracks: tracksOf(p).filter((t) => !isLocalTrack(t)).map(withoutPath) };
+              })
+          : keep.playlists,
+      },
+    };
   }
   if (name === "settings") return stripDeviceSettings(data);
   if (name === "listening-history") return stats.fitForSync(data as { state?: { buckets?: unknown } });
   return data;
 }
 
+const idOf = (item: unknown): unknown => (item as { id?: unknown } | null)?.id;
+const isLocalTrack = (t: unknown): boolean => typeof idOf(t) === "string" && (idOf(t) as string).startsWith("local:");
+const tracksOf = (p: unknown): unknown[] => {
+  const list = (p as { tracks?: unknown } | null)?.tracks;
+  return Array.isArray(list) ? list : [];
+};
+/** Every song is from this computer: the playlist stays on this device altogether (src/lib/devicePlaylists.ts). */
+const staysOnDevice = (p: unknown): boolean => tracksOf(p).length > 0 && tracksOf(p).every(isLocalTrack);
+
+/** The cloud copy's songs, with this device's songs from this computer put back where they were: after
+ *  the streamed song they followed here (or first, when none did or it's gone). */
+function withLocalSongs(remote: unknown[], here: unknown[]): unknown[] {
+  const out = remote.filter((t) => !isLocalTrack(t));
+  let anchor: unknown = null;
+  let run = 0; // local songs already put back after that anchor
+  for (const t of here) {
+    if (!isLocalTrack(t)) {
+      anchor = idOf(t);
+      run = 0;
+      continue;
+    }
+    const at = anchor === null ? -1 : out.findIndex((o) => idOf(o) === anchor);
+    out.splice(at + 1 + run, 0, t);
+    run += 1;
+  }
+  return out;
+}
+
 /** Local device-owned fields, re-attached after any pull. */
 function localDeviceState(name: string): Record<string, unknown> {
   const local = persist.readData(name) as { state?: Record<string, unknown> } | null;
   const state = local?.state ?? {};
-  if (name === "library") return { downloads: state.downloads ?? {} };
+  if (name === "library") {
+    // This device's playlists that hold songs from this computer, as they are here.
+    const playlists = Array.isArray(state.playlists) ? state.playlists.filter((p) => tracksOf(p).some(isLocalTrack)) : [];
+    return { downloads: state.downloads ?? {}, localPlaylists: playlists };
+  }
   if (name === "settings") {
     const out: Record<string, unknown> = {};
-    for (const f of ["downloadDir", "localMusicFolder"]) {
+    for (const f of DEVICE_SETTINGS_FIELDS) {
       if (state[f] !== undefined) out[f] = state[f];
     }
     return out;
   }
   return {};
+}
+
+/** A cloud copy that replaces a local store, with this device's own fields put back. */
+function withDeviceState(name: string, payload: unknown, device: Record<string, unknown>): unknown {
+  const state = (payload as { state?: Record<string, unknown> })?.state;
+  if (!state || Object.keys(device).length === 0) return payload;
+  if (name !== "library") return { ...(payload as object), state: { ...state, ...device } };
+  const { localPlaylists, ...fields } = device;
+  const mine = Array.isArray(localPlaylists) ? localPlaylists : [];
+  const here = new Map(mine.map((p) => [idOf(p), p]));
+  const remote = Array.isArray(state.playlists) ? state.playlists : [];
+  const remoteIds = new Set(remote.map(idOf));
+  // A playlist of nothing but songs from this computer was never uploaded: it comes back whole.
+  // The others get their songs from this computer put back.
+  const playlists = [
+    ...mine.filter((p) => staysOnDevice(p) && !remoteIds.has(idOf(p))),
+    ...remote.map((p) => (here.has(idOf(p)) ? { ...(p as object), tracks: withLocalSongs(tracksOf(p), tracksOf(here.get(idOf(p)))) } : p)),
+  ];
+  return { ...(payload as object), state: { ...state, ...fields, playlists } };
 }
 
 /** Merge a fresh cloud payload into the local store when both sides changed. */
@@ -385,6 +471,10 @@ export async function syncNowExclusive(): Promise<{ pushed: string[]; pulled: st
     const pulled: string[] = [];
     const merged: string[] = [];
     for (const name of SYNCED_STORES) {
+      // Replay holds its last few seconds of listening in memory. Write them
+      // out before reading the store, so the merge below includes them — the
+      // reload that follows a write would otherwise drop them.
+      if (name === stats.HISTORY_STORE) stats.flushSync();
       const local = persist.readData(name);
       const m = storeMeta(name);
       const remoteRow = cloud.get(name);
@@ -418,7 +508,12 @@ export async function syncNowExclusive(): Promise<{ pushed: string[]; pulled: st
         // Both sides moved — merge records, back up both inputs first.
         await backupStore(name, local);
         await backupStore(name, remote.payload);
-        const mergedEnvelope = mergeStore(name, local, remote.payload);
+        // A fresh install's first sync: its AutoPlay value is only the new
+        // default (on), so the account's own choice wins rather than being
+        // overwritten on every device.
+        const firstSettings = name === "settings" && m.syncedAt === 0 && local && typeof local === "object";
+        const localForMerge = firstSettings ? withoutKey(local, "autoplay") : local;
+        const mergedEnvelope = mergeStore(name, localForMerge, remote.payload);
         const next = mergedEnvelope ?? (remote.updatedAt > m.syncedAt ? remote.payload : local);
         await writeLocalStore(name, next);
         restored.add(name);
@@ -431,12 +526,7 @@ export async function syncNowExclusive(): Promise<{ pushed: string[]; pulled: st
         // Cloud is newer: keep a local backup, take the cloud copy, re-attach
         // device fields.
         await backupStore(name, local);
-        const device = localDeviceState(name);
-        const remoteState = (remote.payload as { state?: Record<string, unknown> })?.state;
-        let payload = remote.payload;
-        if (remoteState && Object.keys(device).length > 0) {
-          payload = { ...(remote.payload as object), state: { ...remoteState, ...device } };
-        }
+        const payload = withDeviceState(name, remote.payload, localDeviceState(name));
         await writeLocalStore(name, payload);
         restored.add(name);
         meta.stores[name] = { syncedAt: remote.updatedAt, changedAt: remote.updatedAt };
@@ -497,12 +587,7 @@ async function restoreNowExclusive(): Promise<string[]> {
       if (!isSyncedStore(name)) continue;
       const local = persist.readData(name);
       await backupStore(name, local);
-      const device = localDeviceState(name);
-      const remoteState = (row.payload as { state?: Record<string, unknown> })?.state;
-      let payload = row.payload;
-      if (remoteState && Object.keys(device).length > 0) {
-        payload = { ...(row.payload as object), state: { ...remoteState, ...device } };
-      }
+      const payload = withDeviceState(name, row.payload, localDeviceState(name));
       await writeLocalStore(name, payload);
       pulled.push(name);
       meta.stores[name] = { syncedAt: Date.now(), changedAt: Date.now() };

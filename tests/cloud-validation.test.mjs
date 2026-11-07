@@ -69,6 +69,7 @@ for (const method of ["syncNow", "restoreNow"]) {
         playlists: [{ id: "ok", name: "P", createdAt: 1, tracks: [{ id: "t", title: "S", artist: "A", thumb: "", duration: 1 }] }],
         downloads: { planted: { path: "C:\\evil" } },
         pinnedSingles: { liked: true, local: "yes" },
+        libraryOrder: ["playlist:ok", 42, "", "x".repeat(201), { key: "folder:f" }, "single:local"],
       },
       version: 1,
     };
@@ -85,7 +86,30 @@ for (const method of ["syncNow", "restoreNow"]) {
     assert.equal(Object.keys(write[1].state.downloads ?? {}).length, 0, "device-owned registry must never arrive");
     assert.equal(plain(write[1].state.pinnedSingles).liked, true);
     assert.equal(plain(write[1].state.pinnedSingles).local, undefined);
+    assert.deepEqual(plain(write[1].state.libraryOrder), ["playlist:ok", "single:local"], "only short row keys survive");
     assert.equal({}.polluted, undefined);
+  });
+
+  test(`${method} keeps a valid equalizer and drops a malformed one`, async () => {
+    const bass = [6, 5, 4, 2, 0, 0, 0, 0, 0, 0];
+    const kept = await fixture([row({ state: { eqEnabled: true, eqGains: bass } }, "settings")]);
+    await kept.api[method]();
+    assert.deepEqual(plain(written(kept.writes, "settings")[1].state), { eqEnabled: true, eqGains: bass });
+    for (const eqGains of ["junk", [1, 2], [99, 0, 0, 0, 0, 0, 0, 0, 0, 0], [null, 0, 0, 0, 0, 0, 0, 0, 0, 0], Array(10).fill("1")]) {
+      const h = await fixture([row({ state: { eqEnabled: true, eqGains } }, "settings")]);
+      await h.api[method]();
+      assert.deepEqual(plain(written(h.writes, "settings")[1].state), { eqEnabled: true }, JSON.stringify(eqGains));
+    }
+  });
+
+  test(`${method} keeps valid saved EQ presets and drops malformed ones`, async () => {
+    const eqPresets = [{ name: "Night", gains: [3, 2, 1, 0, 0, 0, 0, -1, -2, -3] }];
+    const kept = await fixture([row({ state: { eqPresets } }, "settings")]);
+    await kept.api[method]();
+    assert.deepEqual(plain(written(kept.writes, "settings")[1].state), { eqPresets });
+    const dropped = await fixture([row({ state: { eqPresets: [{ name: "x", gains: [99] }] } }, "settings")]);
+    await dropped.api[method]();
+    assert.deepEqual(plain(written(dropped.writes, "settings")[1].state), {});
   });
 
   test(`${method} sanitizes settings and listening rows instead of rejecting them`, async () => {

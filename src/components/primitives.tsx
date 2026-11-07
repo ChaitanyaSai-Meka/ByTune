@@ -495,6 +495,42 @@ export function ExplicitBadge() {
 /* ============================================================ equalizer */
 
 /** Animated "now playing" indicator. */
+/** The on/off toggle used by Settings rows and the queue's AutoPlay header. */
+export function Switch({
+  checked,
+  onChange,
+  disabled,
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+  /** accessible name, when no visible label is tied to the switch */
+  label?: string;
+}) {
+  return (
+    <button
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!disabled) onChange(!checked);
+      }}
+      className={`relative shrink-0 w-[42px] h-[26px] rounded-full transition-colors duration-200 disabled:opacity-40 ${
+        checked ? "bg-primary" : "bg-ink-hi/[0.16]"
+      }`}
+    >
+      <span
+        className={`absolute top-[3px] w-[20px] h-[20px] rounded-full transition-all duration-200 ${
+          checked ? "left-[19px] bg-on-primary" : "left-[3px] bg-white"
+        }`}
+      />
+    </button>
+  );
+}
+
 export function EqBars() {
   return (
     <span className="flex items-end gap-0.5 h-3.5" aria-label="Playing">
@@ -538,7 +574,7 @@ export function PlayOverlay({ onClick, title = "Play" }: { onClick: () => void; 
 export function Dialog() {
   const req = useUI((s) => s.dialog);
   const close = useUI((s) => s.closeDialog);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     if (!req) return;
@@ -547,6 +583,8 @@ export function Dialog() {
         e.stopPropagation();
         close();
       } else if (e.key === "Enter") {
+        // A multi-line field takes Enter as a new line; Ctrl/Cmd+Enter confirms.
+        if (req.multiline && !e.ctrlKey && !e.metaKey) return;
         e.preventDefault();
         // One keystroke must not confirm the dialog AND activate whatever
         // control behind it the focus chain reached (e.g. the search field's
@@ -584,7 +622,7 @@ export function Dialog() {
         role="dialog"
         aria-modal="true"
         aria-label={req.title}
-        className="relative w-[min(420px,calc(100vw-48px))] rounded-2xl glass-strong p-6 animate-pop-in"
+        className={`relative ${req.multiline ? "w-[min(560px,calc(100vw-48px))]" : "w-[min(420px,calc(100vw-48px))]"} rounded-2xl glass-strong p-6 animate-pop-in`}
         tabIndex={-1}
         ref={(el) => {
           if (el && !hasInput) el.focus();
@@ -595,9 +633,23 @@ export function Dialog() {
         </h2>
         {req.body && <p className="text-[13px] text-ink-dim mt-1.5 leading-relaxed">{req.body}</p>}
 
-        {hasInput && (
+        {hasInput && req.multiline && (
+          <textarea
+            ref={(el) => {
+              inputRef.current = el;
+            }}
+            defaultValue={req.initialValue}
+            placeholder={req.placeholder}
+            rows={7}
+            spellCheck={false}
+            className="mt-4 w-full px-3.5 py-2.5 rounded-xl bg-ink-hi/[0.06] border border-ink-hi/10 text-sm text-ink placeholder:text-ink-ghost outline-none focus:border-accent/60 transition-colors resize-none leading-relaxed"
+          />
+        )}
+        {hasInput && !req.multiline && (
           <input
-            ref={inputRef}
+            ref={(el) => {
+              inputRef.current = el;
+            }}
             type="text"
             defaultValue={req.initialValue}
             placeholder={req.placeholder}
@@ -606,9 +658,11 @@ export function Dialog() {
         )}
 
         <div className="flex items-center justify-end gap-2 mt-6">
-          <Btn variant="ghost" size="md" className="!rounded-xl" onClick={close}>
-            {req.cancelLabel ?? "Cancel"}
-          </Btn>
+          {!req.notice && (
+            <Btn variant="ghost" size="md" className="!rounded-xl" onClick={close}>
+              {req.cancelLabel ?? "Cancel"}
+            </Btn>
+          )}
           <button
             onClick={() => {
               const value = hasInput ? (inputRef.current?.value ?? req.initialValue ?? "") : "";

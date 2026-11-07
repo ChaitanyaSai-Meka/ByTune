@@ -12,26 +12,38 @@
  */
 import { useEffect, useRef, useState } from "react";
 import {
+  ArrowDownToLine,
+  ArrowUpLeft,
   ChevronLeft,
   ChevronRight,
   Compass,
   Copy,
-  CornerDownLeft,
   History,
   Home,
   Minus,
   RefreshCw,
+  RotateCw,
   Search,
   Square,
   X,
 } from "lucide-react";
+import { withSearchRows } from "../../electron/ytm";
 import { reloadHomeFeed } from "../lib/recs/feed";
-import { useSession } from "../lib/session";
+import { searchPageOnce } from "../lib/searchOnce";
+import { browseMenuItems, trackMenuItems } from "../lib/trackActions";
+import { shownName, useSession } from "../lib/session";
 import { isMac } from "../lib/platform";
+import { avatarFor } from "../lib/avatar";
 import { useUI } from "../stores/ui";
 import { usePlayer } from "../stores/player";
 import { useRecents } from "../stores/recents";
+import { useRecentItems } from "../stores/recentItems";
 import type { SearchSuggestion } from "../types";
+import { Artwork } from "./primitives";
+import { FitText } from "./FitText";
+import { useMenuLight } from "./ContextMenu";
+import { StreakChip } from "./Streak";
+import { useUpdates } from "../lib/updates";
 import brandLogo from "../assets/brand/bytune-logo.svg";
 import brandText from "../assets/brand/bytune-Text.svg";
 
@@ -42,7 +54,7 @@ import brandText from "../assets/brand/bytune-Text.svg";
     packaged app — a string like "/brand/x.svg" only works on the dev server. */
 function BrandHeader() {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2" data-intro-target>
       <img
         src={brandLogo}
         alt=""
@@ -58,40 +70,46 @@ function BrandHeader() {
   );
 }
 
-/* Palette for the avatar disc. Every tone is mid-saturation and light enough
-   that near-black text stays readable on it. */
-const AVATAR_COLORS = [
-  "#d97757", "#e0a458", "#d4c95a", "#8fc74f", "#5fc9a2",
-  "#59a5d8", "#8f9bf4", "#c58af9", "#e17bb0", "#e06c75",
-];
-
-/* Deterministic per-user colour: a simple FNV-1a hash of the username picks
-   the palette entry, so an account always gets the same colour across
-   launches while different users land on effectively random ones. */
-function avatarColor(seed: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < seed.length; i++) {
-    h ^= seed.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+/**
+ * A newer ByTune: Update (downloads it on Windows, opens the download page on a Mac), its progress,
+ * then Restart to update. Only there while there's one; a failed download sends you to Settings › About.
+ */
+function UpdateChip() {
+  const u = useUpdates();
+  // A known version stays up while Check for updates looks again ("checking" keeps it).
+  if (!u?.version || u.status === "current") return null;
+  const ready = u.status === "ready";
+  const label = u.status === "downloading" ? `Updating ${u.percent ?? 0}%` : ready ? "Restart to update" : "Update";
+  const act = (): void => {
+    if (ready) void window.bytune?.restartToUpdate();
+    else if (u.status === "available") void window.bytune?.installUpdate();
+    else useUI.getState().openSettings("about");
+  };
+  return (
+    <button
+      onClick={act}
+      title={ready ? `Restart ByTune to install version ${u.version}` : `ByTune ${u.version} is available`}
+      aria-label={ready ? `Restart to install ByTune ${u.version}` : `${label}: ByTune ${u.version}`}
+      className="update-chip"
+    >
+      {ready ? <RotateCw className="w-4 h-4" strokeWidth={2.5} /> : <ArrowDownToLine className="w-4 h-4" strokeWidth={2.5} />}
+      <span className="update-label">{label}</span>
+    </button>
+  );
 }
 
+/** The profile button: opens Settings, and closes it again while it's showing. */
 function Avatar({ onClick, active }: { onClick: () => void; active?: boolean }) {
   const mode = useSession((s) => s.mode);
   const username = useSession((s) => s.username);
-  // Signed-in users show their username's first letter; guest accounts (and
-  // sessions that haven't loaded yet) fall back to "G".
-  const letter =
-    mode === "account" && username?.trim()
-      ? username.trim().charAt(0).toUpperCase()
-      : "G";
-  const color = avatarColor(mode === "account" && username?.trim() ? username.trim().toLowerCase() : "guest");
+  const displayName = useSession((s) => s.displayName);
+  // The first letter of the display name (an account without one yet: its username's).
+  const { color, letter } = avatarFor(mode, username, shownName({ mode, username, displayName }));
   return (
     <button
       onClick={onClick}
-      title="Settings"
-      aria-label="Settings"
+      title={active ? "Close settings" : "Settings"}
+      aria-label={active ? "Close settings" : "Settings"}
       className={`w-11 h-11 rounded-full grid place-items-center transition-colors select-none ${
         active ? "bg-ink-hi/[0.16]" : "bg-ink-hi/[0.10] hover:bg-ink-hi/[0.16]"
       }`}
@@ -158,6 +176,9 @@ export function TopBar() {
   const goForward = useUI((s) => s.goForward);
   const canBack = useUI((s) => s.navPast.length > 0);
   const canForward = useUI((s) => s.navFuture.length > 0);
+  /** Settings is what you're looking at (not hidden under the lyrics): the profile button closes it. */
+  const settingsShown = useUI((s) => s.view.name === "settings" && !s.lyricsCenter);
+  const toggleSettings = useUI((s) => s.toggleSettings);
   const recents = useRecents((s) => s.searches);
   const removeSearch = useRecents((s) => s.removeSearch);
   const clearSearches = useRecents((s) => s.clearSearches);
@@ -167,46 +188,84 @@ export function TopBar() {
   // results page is where songs get chosen; navigation happens on Enter or
   // a completion click, and the dropdown closes either way.
 
-  // Type-ahead dropdown — BitChord mobile's model: plain text completions
-  // only, no artwork rows while typing. Row 0 offers the typed query itself.
+  // Type-ahead dropdown — YouTube Music's typeahead model: row 0 offers the
+  // typed query itself, then up to 3 text completions (each with a fill
+  // arrow), then up to 12 rich rows that play or open straight away. The
+  // main process drops a completion that just echoes the query.
   const [suggests, setSuggests] = useState<SearchSuggestion[]>([]);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [fieldFocused, setFieldFocused] = useState(false);
-  /** keyboard highlight: 0 = the typed-query row, 1..n = completions, -1 = none */
+  /** keyboard highlight: 0 = the typed-query row, 1..n = suggestions (text, then rich), -1 = none */
   const [activeIdx, setActiveIdx] = useState(-1);
   const suggestSeq = useRef(0);
+  /** finished dropdowns per query — retyping one never refetches */
+  const suggestCache = useRef(new Map<string, SearchSuggestion[]>());
   const inputRef = useRef<HTMLInputElement | null>(null);
   /** the field + both dropdowns — blur is ignored while focus stays inside */
   const searchClusterRef = useRef<HTMLDivElement | null>(null);
+  const suggestListRef = useRef<HTMLDivElement | null>(null);
+  /** the dropdowns' lights, as on every menu: one glides to the row under the pointer or the keys */
+  const suggestLight = useMenuLight();
+  const recentLight = useMenuLight();
 
   useEffect(() => {
     const q = query.trim();
     if (!fieldFocused || q.length < 2) {
+      // Invalidate any request still in flight, or it reopens the dropdown
+      // after Enter, a blur or a cleared field.
+      suggestSeq.current++;
       setSuggests([]);
       setSuggestOpen(false);
       setActiveIdx(-1);
       return;
     }
     const seq = ++suggestSeq.current;
+    const show = (items: SearchSuggestion[]): void => {
+      if (suggestSeq.current !== seq) return; // a newer keystroke won
+      setSuggests(items);
+      setSuggestOpen(items.length > 0);
+    };
+    const cached = suggestCache.current.get(q);
+    if (cached) {
+      show(cached);
+      setActiveIdx(-1);
+      return;
+    }
     const timer = window.setTimeout(() => {
-      window.bytune
-        ?.suggestions(q)
-        .then((res) => {
-          if (suggestSeq.current !== seq) return; // a newer keystroke won
-          // Row 0 already offers the typed query — don't echo it back.
-          const items = ((res?.items ?? []) as SearchSuggestion[]).filter(
-            (s) => s.text.trim().toLowerCase() !== q.toLowerCase()
-          );
-          setSuggests(items.slice(0, 8));
-          setSuggestOpen(items.length > 0);
-          setActiveIdx(-1);
-        })
-        .catch(() => undefined);
+      const api = window.bytune;
+      if (!api) return;
+      const first = api.suggestions(q).then((res) => res?.items ?? [], () => null);
+      void first.then((items) => {
+        show(items ?? []);
+        setActiveIdx(-1);
+      });
+      // The search page's own rows top the rich rows up to 12, appended once
+      // the suggestions have painted — never ahead of them.
+      void Promise.all([first, searchPageOnce(q, "all").catch(() => null)]).then(([items, page]) => {
+        if (!page) return;
+        const full = withSearchRows(items ?? [], page.rows ?? []);
+        if (items) {
+          suggestCache.current.set(q, full);
+          const oldest = suggestCache.current.keys().next().value;
+          if (suggestCache.current.size > 30 && oldest !== undefined) suggestCache.current.delete(oldest);
+        }
+        show(full);
+      });
     }, 160);
     return () => window.clearTimeout(timer);
   }, [query, fieldFocused]);
 
+  // Arrow keys can walk past the dropdown's fold, and the light follows them.
+  useEffect(() => {
+    const row = suggestListRef.current?.querySelector('[data-active="true"]') ?? null;
+    row?.scrollIntoView({ block: "nearest" });
+    if (activeIdx >= 0) suggestLight.to(row);
+  }, [activeIdx]);
+  // New rows: the light would sit on whatever row now holds its old place.
+  useEffect(() => suggestLight.to(null), [suggests]);
+
   const closeDropdown = (): void => {
+    suggestSeq.current++;
     setSuggestOpen(false);
     setActiveIdx(-1);
   };
@@ -230,10 +289,53 @@ export function TopBar() {
     const t = text.trim();
     if (!t) return;
     setQuery(t);
+    useRecents.getState().pushSearch(t);
     closeDropdown();
     setFieldFocused(false);
     inputRef.current?.blur();
     navigate({ name: "search" });
+  };
+
+  /** The fill arrow: the completion goes into the field to keep typing — no search. */
+  const fillSuggestion = (text: string): void => {
+    setQuery(text);
+    setActiveIdx(-1);
+    inputRef.current?.focus();
+  };
+
+  /** A rich row, as the search page's row does it: a song, video or episode
+      plays on its own (AutoPlay carries on); a page opens. */
+  const openSuggestion = (s: SearchSuggestion): void => {
+    const q = query.trim();
+    if (q) useRecents.getState().pushSearch(q);
+    closeDropdown();
+    setFieldFocused(false);
+    inputRef.current?.blur();
+    const recent = useRecentItems.getState();
+    if (s.track) {
+      recent.add({ kind: "song", id: s.track.id, title: s.track.title, subtitle: s.track.artist, thumb: s.track.thumb, track: s.track });
+      usePlayer.getState().playQueue([s.track], 0);
+    } else if (s.browse) {
+      const b = s.browse;
+      if (b.type === "artist" || b.type === "album" || b.type === "playlist") {
+        recent.add({ kind: b.type, id: b.browseId, title: b.title, subtitle: b.subtitle, thumb: b.thumb });
+      }
+      if (b.type === "artist" || b.browseId.startsWith("UC")) navigate({ name: "artist", param: b.browseId });
+      else if (b.type === "album") navigate({ name: "album", param: b.browseId });
+      else if (b.type === "playlist") navigate({ name: "ytplaylist", param: b.browseId });
+      else navigate({ name: "podcast", param: b.browseId });
+    }
+  };
+
+  /** The search page's menu for the same kind of row; it takes over from the dropdown. */
+  const openSuggestionMenu = (e: React.MouseEvent, s: SearchSuggestion): void => {
+    const items = s.track ? trackMenuItems(s.track) : s.browse ? browseMenuItems(s.browse) : [];
+    if (!items.length) return;
+    e.preventDefault();
+    closeDropdown();
+    setFieldFocused(false);
+    inputRef.current?.blur();
+    useUI.getState().openContextMenu(e.clientX, e.clientY, items);
   };
 
   const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
@@ -250,10 +352,11 @@ export function TopBar() {
       setActiveIdx((i) => Math.max(-1, i - 1));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      // Keyboard-highlighted completion runs itself; anything else runs the
-      // typed query. Either way the dropdown goes away.
-      const pick = suggestOpen && activeIdx >= 1 ? suggests[activeIdx - 1]?.text : query;
-      submitSearch(pick);
+      // A keyboard-highlighted row runs itself; anything else runs the typed
+      // query. Either way the dropdown goes away.
+      const pick = suggestOpen && activeIdx >= 1 ? suggests[activeIdx - 1] : undefined;
+      if (pick?.kind) openSuggestion(pick);
+      else submitSearch(pick?.text ?? query);
     }
   };
 
@@ -381,40 +484,90 @@ export function TopBar() {
               query.trim() !== "" ? "pr-[104px]" : "pr-[72px]"
             }`}
           />
-          {/* Type-ahead dropdown — BitChord mobile's model: the typed query
-              plus plain text completions, no artwork rows while typing. */}
-          {suggestOpen && suggests.length > 0 && (
+          {/* Type-ahead dropdown — the typed query, text completions (the
+              arrow fills one in without searching), then rich rows in the
+              queue's compact row style: round art for artists, rounded
+              squares for the rest. */}
+          {fieldFocused && suggestOpen && suggests.length > 0 && (
             <div
-              className="absolute left-0 right-0 top-full mt-2 z-50 glass-strong-solid rounded-2xl p-1.5 shadow-float max-h-[420px] overflow-y-auto animate-pop-in"
+              ref={suggestListRef}
+              className="menu absolute left-0 right-0 top-full mt-2 z-50 max-h-[min(600px,calc(100vh_-_88px))] overflow-y-auto"
+              style={{ "--menu-origin": "top center" } as React.CSSProperties}
               role="listbox"
               aria-label="Search suggestions"
             >
+              <div className="menu-list" {...suggestLight.track}>
+              {suggestLight.light}
               <button
+                data-active={activeIdx === 0}
+                data-menu-row=""
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => submitSearch(query)}
-                className={`w-full flex items-center gap-3 px-2.5 h-11 rounded-lg text-left transition-colors ${
-                  activeIdx === 0 ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.06]"
-                }`}
+                className="fit-host relative w-full flex items-center gap-3 px-2.5 h-11 rounded-[10px] text-left"
               >
                 <Search className="w-4 h-4 text-ink-hi/55 shrink-0" />
-                <span className="text-[14px] font-medium text-ink-hi truncate">
-                  Search “{query.trim()}”
-                </span>
+                <FitText text={`Search “${query.trim()}”`} className="text-[14px] font-medium text-ink-hi" />
               </button>
-              {suggests.map((s, i) => (
-                <button
-                  key={`${s.text}-${i}`}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => submitSearch(s.text)}
-                  className={`w-full flex items-center gap-3 px-2.5 h-11 rounded-lg text-left transition-colors ${
-                    activeIdx === i + 1 ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.06]"
-                  }`}
-                >
-                  <Search className="w-4 h-4 text-ink-hi/55 shrink-0" />
-                  <span className="min-w-0 flex-1 text-[14px] text-ink-hi truncate">{s.text}</span>
-                  <CornerDownLeft className="w-4 h-4 text-ink-hi/35 shrink-0" />
-                </button>
-              ))}
+              {suggests.map((s, i) =>
+                s.kind ? (
+                  <button
+                    key={s.id}
+                    data-active={activeIdx === i + 1}
+                    data-menu-row=""
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => openSuggestion(s)}
+                    onContextMenu={(e) => openSuggestionMenu(e, s)}
+                    className="fit-host relative w-full flex items-center gap-3 px-2.5 h-14 rounded-[10px] text-left"
+                  >
+                    <Artwork
+                      src={s.thumb}
+                      rounded={s.kind === "artist" ? "rounded-full" : "rounded-md"}
+                      className="w-11 h-11 shrink-0"
+                      iconClassName="w-4 h-4"
+                      alt=""
+                    />
+                    <span className="min-w-0 flex-1">
+                      <FitText text={s.text} className="text-[14px] font-semibold text-ink-hi" />
+                      <FitText text={s.subtitle ?? ""} className="text-[12px] text-ink-hi/55 mt-0.5" />
+                    </span>
+                  </button>
+                ) : (
+                  <div
+                    key={`t:${s.text}`}
+                    data-active={activeIdx === i + 1}
+                    data-menu-row=""
+                    /* Whole row is the click target, as in Recent searches. */
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => submitSearch(s.text)}
+                    className="fit-host relative w-full flex cursor-pointer items-center gap-3 pl-2.5 pr-1.5 h-11 rounded-[10px]"
+                  >
+                    <button
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        submitSearch(s.text);
+                      }}
+                      className="min-w-0 flex-1 flex items-center gap-3 text-left cursor-pointer"
+                    >
+                      <Search className="w-4 h-4 text-ink-hi/55 shrink-0" />
+                      <FitText text={s.text} className="text-[14px] text-ink-hi" />
+                    </button>
+                    <button
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        fillSuggestion(s.text);
+                      }}
+                      title="Fill in"
+                      aria-label={`Fill in "${s.text}"`}
+                      className="p-1.5 rounded-full text-ink-hi/35 hover:text-ink-hi hover:bg-ink-hi/10 transition-colors cursor-pointer"
+                    >
+                      <ArrowUpLeft className="w-4 h-4" />
+                    </button>
+                  </div>
+                )
+              )}
+              </div>
             </div>
           )}
           {/* Recent searches — BitChord mobile's model: an empty focused field
@@ -422,31 +575,44 @@ export function TopBar() {
               per-row ✕. Choosing a row runs that search. */}
           {historyOpen && (
             <div
-              className="absolute left-0 right-0 top-full mt-2 z-50 glass-strong-solid rounded-2xl p-1.5 shadow-float max-h-[420px] overflow-y-auto animate-pop-in"
+              className="menu absolute left-0 right-0 top-full mt-2 z-50 max-h-[420px] overflow-y-auto"
+              style={{ "--menu-origin": "top center" } as React.CSSProperties}
               role="listbox"
               aria-label="Recent searches"
             >
               <div className="flex items-center justify-between pl-3 pr-1.5 h-9">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-hi/45">
-                  Recent searches
-                </span>
+                <span className="text-[12px] font-semibold text-ink-hi/45">Recent searches</span>
                 <button
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={clearSearches}
-                  className="px-2 h-6 rounded-full text-[11.5px] text-ink-hi/55 hover:text-ink-hi hover:bg-ink-hi/[0.08] transition-colors"
+                  className="px-2.5 h-7 rounded-full text-[12px] font-medium text-ink-hi/55 hover:text-ink-hi hover:bg-ink-hi/[0.08] transition-colors"
                 >
                   Clear all
                 </button>
               </div>
+              <div className="menu-list" {...recentLight.track}>
+              {recentLight.light}
               {recents.map((q) => (
                 <div
                   key={q}
+                  data-menu-row=""
                   /* Whole row is the click target: the inner button only spans
                      its content height, so the rest of the highlighted row
                      showed the arrow cursor and ate clicks. */
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => submitSearch(q)}
-                  className="group w-full flex cursor-pointer items-center gap-3 pl-2.5 pr-1.5 h-11 rounded-lg hover:bg-ink-hi/[0.06] transition-colors"
+                  onContextMenu={(e) => {
+                    // The menu takes over from the dropdown, as a typeahead row's does.
+                    e.preventDefault();
+                    closeDropdown();
+                    setFieldFocused(false);
+                    inputRef.current?.blur();
+                    useUI.getState().openContextMenu(e.clientX, e.clientY, [
+                      { label: `Search "${q}"`, icon: Search, action: () => submitSearch(q) },
+                      { label: "Remove from recent searches", icon: X, separatorBefore: true, action: () => removeSearch(q) },
+                    ]);
+                  }}
+                  className="fit-host group relative w-full flex cursor-pointer items-center gap-3 pl-2.5 pr-1.5 h-11 rounded-[10px]"
                 >
                   <button
                     onMouseDown={(e) => e.preventDefault()}
@@ -457,7 +623,7 @@ export function TopBar() {
                     className="min-w-0 flex-1 flex items-center gap-3 text-left cursor-pointer"
                   >
                     <History className="w-4 h-4 text-ink-hi/55 shrink-0" />
-                    <span className="text-[14px] text-ink-hi truncate">{q}</span>
+                    <FitText text={q} className="text-[14px] text-ink-hi" />
                   </button>
                   <button
                     onMouseDown={(e) => e.preventDefault()}
@@ -473,6 +639,7 @@ export function TopBar() {
                   </button>
                 </div>
               ))}
+              </div>
             </div>
           )}
           {/* Spotify's right side of the field: clear (once there's text), a
@@ -520,8 +687,12 @@ export function TopBar() {
           caption buttons flush to the window edge. macOS uses the native
           traffic lights, so nothing is drawn here. */}
       <div className="ml-auto h-full flex items-center gap-1 shrink-0">
+        <div className="app-no-drag flex items-center gap-1">
+          <UpdateChip />
+          <StreakChip />
+        </div>
         <div className="app-no-drag ml-1 mr-2 flex items-center">
-          <Avatar onClick={() => navigate({ name: "settings" })} active={view.name === "settings"} />
+          <Avatar onClick={toggleSettings} active={settingsShown} />
         </div>
         {!isMac && <CaptionButtons />}
       </div>

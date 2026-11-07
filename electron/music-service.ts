@@ -13,33 +13,28 @@
  */
 import { Innertube } from "youtubei.js";
 import { app } from "electron";
-import { pickAudio } from "./audio-format";
-import { fetchLyrics } from "./lyrics";
+import * as path from "path";
+import { localTrackById } from "./local-library";
+import { pickAudio, streamTtlMs } from "./audio-format";
+import { embeddedLrc, fetchLyrics } from "./lyrics";
 import { largestThumbUrl, upgradeThumb } from "./artwork";
 import { getPoToken, invalidatePoToken } from "./po-token";
 import { resolveMarket, type ResolvedMarket } from "./market";
-import {
-  SEARCH_FILTER_PARAMS,
-  callBrowse,
-  callSearch,
-  callSearchContinuation,
-  parseArtistPage,
-  parseChartsShelves,
-  parseMoods,
-  parseQueueCredits,
-  parseRemotePlaylistPage,
-  parseReleasePage,
-  parseSearchPage,
-} from "./ytm";
+import { SEARCH_FILTER_PARAMS, callBrowse, callBrowseContinuation, callSearch, callSearchContinuation, callSearchSuggestions, parseArtistPage, parseChartsShelves, pageCredit, parseMoodCovers, parseMoodPage, parseMoods, parsePodcastEpisodes, parsePodcastPage, parsePodcastShelves, parsePlaylistContinuation, parsePlaylistShelf, parseQueueCredits, parseRadioPage, parseRemotePlaylistPage, parseReleasePage, parseSearchPage, parseSearchSuggestions } from "./ytm";
+import type { Credits, ParsedSong } from "./ytm";
 import type { MoodEntry } from "./moods";
 import type {
   Album,
+  PodcastPage,
+  PodcastShelf,
+  MoodPage,
   Artist,
   ArtistPageData,
   HomeItem,
   HomeShelf,
   LyricsResult,
   PlaylistCard,
+  RadioPage,
   RemotePlaylistPage,
   SearchFilter,
   SearchPageResult,
@@ -322,11 +317,14 @@ function parsePlaylistItem(item: any): PlaylistCard | null {
     if (itemKind(item) !== "playlist") return null;
     const id = item?.id;
     if (!id) return null;
+    // "Arijit Singh, Pritam, …" on YouTube's own playlists; "Name • 15M views" on community ones.
+    const subtitle = text(item?.subtitle).trim();
     return {
       id,
-      title: text(item?.title) || "Playlist",
+      title: text(item?.title).trim() || "Playlist",
       thumb: pickThumb(item?.thumbnail ?? item?.thumbnails),
       count: undefined,
+      ...(subtitle ? { subtitle } : {}),
     };
   } catch {
     return null;
@@ -506,36 +504,18 @@ export interface SuggestionsResult {
 }
 
 /**
- * Type-ahead suggestions — YouTube Music's own autocomplete, the same list
- * Spotify's search dropdown shows while you type. Rich hits (with artwork and
- * the artist name) are preferred over plain text when YouTube supplies them.
+ * Type-ahead suggestions — YouTube Music's own typeahead: a few text
+ * completions, then its rich rows (songs, videos, albums, artists, playlists,
+ * podcasts, episodes) read by the search page's row parsers. The dropdown
+ * tops the rich rows up from the search page itself (ytm.withSearchRows).
  */
 export async function getSuggestions(query: string): Promise<SuggestionsResult> {
   const q = query.trim();
   if (!q) return { items: [] };
   const yt = await getYT();
   try {
-    const sections: any[] = await withRetry(() => (yt.music as any).getSearchSuggestions(q));
-    const nodes: any[] = [];
-    for (const section of Array.isArray(sections) ? sections : []) {
-      if (Array.isArray(section?.contents)) nodes.push(...section.contents);
-    }
-    const items: SearchSuggestion[] = [];
-    const seen = new Set<string>();
-    for (const node of nodes) {
-      // Plain text completions only — BitChord mobile's typeahead model. Rich
-      // hits (thumbnails, playable rows) belong on the results page the user
-      // lands on after Enter, not in the dropdown while they're still typing.
-      if (String(node?.type ?? "") === "SearchSuggestion") {
-        const t = text(node?.suggestion);
-        if (t && !seen.has(t.toLowerCase())) {
-          seen.add(t.toLowerCase());
-          items.push({ text: t });
-        }
-      }
-      if (items.length >= 10) break;
-    }
-    return { items };
+    const response = await withRetry(() => callSearchSuggestions(yt, q));
+    return { items: parseSearchSuggestions(response, q) };
   } catch {
     return { items: [] };
   }
@@ -573,6 +553,59 @@ export async function getArtistPage(artistId: string): Promise<ArtistPageData> {
   };
 }
 
+const PODCAST_EPISODES_MAX = 100;
+
+/** A podcast show with its episodes — the first page plus a few more, newest 100 at most. */
+export async function getPodcast(browseId: string): Promise<PodcastPage> {
+  const yt = await getYT();
+  const response = await withRetry(() => callBrowse(yt, browseId));
+  const { continuation, ...page } = parsePodcastPage(response, browseId);
+  const seen = new Set(page.episodes.map((e) => e.id));
+  let token = continuation;
+  for (let n = 0; token && n < 4 && page.episodes.length < PODCAST_EPISODES_MAX; n++) {
+    const more = await withRetry(() => callBrowseContinuation(yt, token as string)).catch(() => null);
+    if (!more) break;
+    const next = parsePodcastEpisodes(more, page);
+    const fresh = next.episodes.filter((e) => !seen.has(e.id) && seen.add(e.id));
+    if (!fresh.length) break;
+    page.episodes.push(...fresh);
+    token = next.continuation;
+  }
+  // Long-running shows have hundreds of episodes; the newest 100 keep the page light.
+  page.episodes = page.episodes.slice(0, PODCAST_EPISODES_MAX);
+  return page;
+}
+
+/**
+ * YouTube Music's podcasts page (music.youtube.com/podcasts) for the device
+ * market: popular shows, popular episodes and topic shelves. Anonymous, like
+ * every other browse; any failure throws and Explore hides the section.
+ */
+export async function getPodcasts(): Promise<PodcastShelf[]> {
+  const yt = await getYT();
+  return parsePodcastShelves(await withRetry(() => callBrowse(yt, "FEmusic_non_music_audio")));
+}
+
+/** A long playlist/album is paged; this many pages (~100 songs each) at most. */
+const MAX_SHELF_PAGES = 50;
+
+/**
+ * The rest of a paged shelf, following continuation tokens. A page that still
+ * fails after its retry ends the list: the songs already fetched still show.
+ */
+async function restOfShelf(yt: any, token: string | null, credit: Credits): Promise<ParsedSong[]> {
+  const out: ParsedSong[] = [];
+  for (let page = 0; token && page < MAX_SHELF_PAGES; page++) {
+    const response = await withRetry(() => callBrowseContinuation(yt, token as string)).catch(() => null);
+    if (!response) break;
+    const next = parsePlaylistContinuation(response, credit);
+    if (!next.songs.length) break;
+    out.push(...next.songs);
+    token = next.continuation;
+  }
+  return out;
+}
+
 /**
  * Album page — the mobile app's pageOf: the page's own header (title, credit
  * line, cover, artist link), its track list and the "About the album" blurb.
@@ -581,6 +614,12 @@ export async function getAlbum(albumId: string): Promise<{ album: Album; tracks:
   const yt = await getYT();
   const response = await withRetry(() => callBrowse(yt, albumId));
   const parsed = parseReleasePage(response, albumId);
+  if (parsed.continuation) {
+    const more = await restOfShelf(yt, parsed.continuation, pageCredit(response));
+    const seen = new Set(parsed.tracks.map((t) => t.id));
+    const thumb = parsed.header?.thumb ?? "";
+    for (const t of more) if (!seen.has(t.id) && seen.add(t.id)) parsed.tracks.push({ ...t, thumb: t.thumb || thumb });
+  }
   // The header line reads "Album • Artist • 2014" (older shape) or the strapline
   // carries the artist while the subtitle keeps "Album • 2014". Split like the
   // mobile DetailScreen does.
@@ -613,7 +652,8 @@ export async function getPlaylistPage(playlistId: string): Promise<RemotePlaylis
   const yt = await getYT();
   const id = /^VL|^PL|^OLAK5uy/.test(playlistId) ? playlistId : `VL${playlistId}`;
   const response = await withRetry(() => callBrowse(yt, id));
-  return parseRemotePlaylistPage(response, id);
+  const more = await restOfShelf(yt, parsePlaylistShelf(response)?.continuation ?? null, pageCredit(response));
+  return parseRemotePlaylistPage(response, id, more);
 }
 
 export async function getPlaylist(
@@ -621,8 +661,16 @@ export async function getPlaylist(
 ): Promise<{ title: string; tracks: Track[] }> {
   const yt = await getYT();
   const pl: any = await withRetry(() => (yt.music as any).getPlaylist(playlistId));
+  const items = [...collectItems(pl)];
+  // Follow the pages: imports and Home playlist cards used to stop at ~100 songs.
+  let page: any = pl;
+  for (let n = 0; page?.has_continuation && n < MAX_SHELF_PAGES; n++) {
+    page = await withRetry(() => page.getContinuation()).catch(() => null);
+    if (!page) break;
+    items.push(...collectItems(page));
+  }
   const tracks = dedupeById(
-    collectItems(pl)
+    items
       .map((i) => parseTrackItem(i, ["song", "video"]))
       .filter(Boolean) as Track[]
   );
@@ -630,10 +678,18 @@ export async function getPlaylist(
   return { title, tracks };
 }
 
+/** The feed's first page is Quick picks and community playlists; YouTube's own playlist shelves follow on the next ones. */
+const HOME_PAGES = 4;
+
 export async function getHome(): Promise<HomeShelf[]> {
   const yt = await getYT();
-  const feed: any = await withRetry(() => (yt.music as any).getHomeFeed());
-  const sections: any[] = Array.isArray(feed?.sections) ? feed.sections : [];
+  let feed: any = await withRetry(() => (yt.music as any).getHomeFeed());
+  const sections: any[] = [];
+  for (let page = 0; feed; page++) {
+    if (Array.isArray(feed.sections)) sections.push(...feed.sections);
+    // A later page that fails just ends the feed: the shelves already read still show.
+    feed = page + 1 < HOME_PAGES && feed.has_continuation ? await feed.getContinuation().catch(() => null) : null;
+  }
   const shelves: HomeShelf[] = [];
   for (const section of sections) {
     const title = text(section?.header?.title) || text(section?.title) || "For you";
@@ -656,8 +712,16 @@ export async function getHome(): Promise<HomeShelf[]> {
  */
 export async function getCharts(): Promise<HomeShelf[]> {
   const yt = await getYT();
-  const res = await withRetry(() => callBrowse(yt, "FEmusic_charts"));
-  return parseChartsShelves(res) as HomeShelf[];
+  const [res, explore] = await Promise.all([
+    withRetry(() => callBrowse(yt, "FEmusic_charts")),
+    // New albums & singles for this market ride along as "New releases".
+    withRetry(() => callBrowse(yt, "FEmusic_explore")).catch(() => null),
+  ]);
+  const shelves = parseChartsShelves(res) as HomeShelf[];
+  const fresh = explore
+    ? (parseChartsShelves(explore) as HomeShelf[]).find((s) => s.items.length >= 3 && s.items.every((i) => i.kind === "album"))
+    : undefined;
+  return fresh ? [...shelves, { ...fresh, title: "New releases" }] : shelves;
 }
 
 /**
@@ -667,16 +731,35 @@ export async function getCharts(): Promise<HomeShelf[]> {
  */
 export async function getMoods(): Promise<MoodEntry[]> {
   const yt = await getYT();
+  // The moods page heads its grids ("Moods & moments", "Genres"); Explore's
+  // carousel, the same buttons without headings, is the fallback.
+  try {
+    const grouped = parseMoods(await withRetry(() => callBrowse(yt, "FEmusic_moods_and_genres")));
+    if (grouped.length >= 6) return grouped;
+  } catch {
+    /* the carousel below */
+  }
   const res = await withRetry(() => callBrowse(yt, "FEmusic_explore"));
   return parseMoods(res);
 }
 
+/** A mood or genre page: its title and every shelf, for the category's own page. */
+export async function getMoodPage(browseId: string, params: string): Promise<MoodPage> {
+  const yt = await getYT();
+  return parseMoodPage(await withRetry(() => callBrowse(yt, browseId, params)));
+}
+
+/** A mood or genre page's first playlist covers: the art on its Explore card. */
+export async function getMoodCovers(browseId: string, params: string): Promise<string[]> {
+  const yt = await getYT();
+  return parseMoodCovers(await withRetry(() => callBrowse(yt, browseId, params)));
+}
+
 /* ------------------------------------------------------------------ */
 /* Lyrics: BitChord mobile's provider sweep — word-synced Apple TTML   */
-/* (BiniLyrics/BetterLyrics/PaxSenix/LyricsPlus), QQ karaoke, Musix-   */
-/* match richsync, then line-synced KuGou/LRCLIB/Megalobiz, captions   */
-/* and plain text last. Returns time-synced lines when any source has  */
-/* them.                                                               */
+/* (lrc.red/BetterLyrics/PaxSenix/LyricsPlus), QQ karaoke, then the   */
+/* video's captions, line-synced KuGou/LRCLIB, and Genius's plain    */
+/* text last. Returns time-synced lines when any source has them.     */
 /* ------------------------------------------------------------------ */
 
 export interface LyricsMeta {
@@ -732,6 +815,30 @@ async function resolveQueueCredits(
     return undefined;
   }
 }
+
+/**
+ * One page of YouTube Music's radio for a song — the endless AutoPlay source.
+ * The first page asks for the RDAMVM<id> station; later pages resend the same
+ * request with the continuation token the previous page returned.
+ */
+export async function getRadio(videoId: string, token?: string): Promise<RadioPage> {
+  const yt = await getYT();
+  const res: any = await withRetry(() =>
+    yt.actions.execute("next", {
+      videoId,
+      playlistId: `RDAMVM${videoId}`,
+      enablePersistentPlaylistPanel: true,
+      tunerSettingValue: "AUTOMIX_SETTING_NORMAL",
+      watchEndpointMusicSupportedConfigs: {
+        watchEndpointMusicConfig: { hasPersistentPlaylistPanel: true, musicVideoType: "MUSIC_VIDEO_TYPE_ATV" },
+      },
+      ...(token ? { continuation: token } : {}),
+      client: "YTMUSIC",
+    })
+  );
+  return parseRadioPage(res?.data ?? null, videoId);
+}
+
 const lyricCacheAt = new Map<string, number>();
 const LRCLIB_UA = "ByTune/1.0.0";
 
@@ -760,8 +867,10 @@ function stripSyncedTimestamps(synced: string): string {
 async function ytMusicPlain(videoId: string): Promise<string | null> {
   try {
     const yt = await getYT();
+    // A MusicDescriptionShelf: the words are its description (the footer names the licensor).
     const ytl: any = await withRetry(() => (yt.music as any).getLyrics(videoId));
-    return ytl?.text && ytl.text.trim() ? ytl.text : null;
+    const text = ytl?.description?.toString()?.trim();
+    return text || null;
   } catch {
     return null;
   }
@@ -798,45 +907,18 @@ const CAPTION_NOISE = /^(\[(music|applause|laughter|cheering|instrumental)\]|[�
 
 /**
  * Timed captions for the exact playing video — innertube's get_transcript,
- * keyed on the engagement-panel continuation the video's own `next` response
- * carries. YouTube has been hardening this endpoint (it now demands a
- * session-bound precondition innertube clients are still catching up with),
- * so the first refusal parks the source for the session rather than paying
- * two dead requests per track; a session where YouTube answers again picks it
- * back up on its own.
+ * asked the way BitChord asks: straight from the video id (a tiny protobuf,
+ * field 1 = the id), no watch-page lookup first. A video without captions is
+ * a miss for that video only — nothing is switched off for the session.
  */
-let transcriptRefused = false;
-
 async function fetchYouTubeTranscriptCues(videoId: string): Promise<SyncedLyricLine[] | null> {
-  if (transcriptRefused || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) return null;
+  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) return null;
   try {
     const yt = await getYT();
-    const next: any = await withRetry(() => yt.actions.execute("next", { videoId }));
-    const data = next?.data ?? next;
-    if (!data) return null;
-    let params: string | null = null;
-    const walk = (node: unknown): void => {
-      if (params || !node || typeof node !== "object") return;
-      if (Array.isArray(node)) {
-        for (const item of node) walk(item);
-        return;
-      }
-      const obj = node as Record<string, any>;
-      const endpointParams = obj?.getTranscriptEndpoint?.params;
-      if (typeof endpointParams === "string" && endpointParams) {
-        params = endpointParams;
-        return;
-      }
-      for (const value of Object.values(obj)) walk(value);
-    };
-    walk(data);
-    if (!params) return null; // video carries no transcript panel at all
+    const params = Buffer.concat([Buffer.from([10, videoId.length]), Buffer.from(videoId)]).toString("base64");
     const res: any = await yt.actions.execute("/get_transcript", { params });
     const body = res?.data ?? res;
-    if (!body) {
-      transcriptRefused = true;
-      return null;
-    }
+    if (!body) return null;
     let lines: SyncedLyricLine[] = [];
     const segments = collectByName(body, "transcriptSegmentRenderer");
     if (segments.length) {
@@ -857,16 +939,9 @@ async function fetchYouTubeTranscriptCues(videoId: string): Promise<SyncedLyricL
         lines.push({ time, text });
       }
     }
-    if (!lines.length) {
-      // A 200 that names neither renderer shape means the endpoint moved on —
-      // same refusal, park it.
-      transcriptRefused = true;
-      return null;
-    }
     lines = lines.filter((l) => Number.isFinite(l.time)).sort((a, b) => a.time - b.time);
     return lines.length ? lines : null;
   } catch {
-    transcriptRefused = true;
     return null;
   }
 }
@@ -890,6 +965,11 @@ export async function getLyrics(meta: LyricsMeta): Promise<LyricsResult | null> 
     if (Date.now() - cachedAt < 10 * 60 * 1000) return cached;
   }
 
+  // BitChord reads a local file's own timed lyrics before asking anybody; an untimed tag falls through to the sweep.
+  const file = meta.id.startsWith("local:") ? localTrackById(meta.id)?.path : undefined;
+  const embedded = file ? await readEmbeddedLyrics(file) : null;
+  if (embedded) return rememberLyrics(meta.id, embedded);
+
   // The mixed "All" search page credits rows it has no links for "Unknown
   // artist" (BitChord mobile prints the same). The lyric databases key on
   // artist + title, so recover the track's real credits from its own
@@ -900,11 +980,16 @@ export async function getLyrics(meta: LyricsMeta): Promise<LyricsResult | null> 
   // A NaN duration serializes to JSON `null`, which the cloud validator (and
   // any consumer) reads back as a broken track — never let one through.
   let duration = typeof meta.duration === "number" && Number.isFinite(meta.duration) ? Math.round(meta.duration) : 0;
-  if (!artist || PLACEHOLDER_ARTISTS.has(artist.toLowerCase())) {
+  const placeholder = !artist || PLACEHOLDER_ARTISTS.has(artist.toLowerCase());
+  // BitChord never matches without the length, and the "All" search tab and Home's quick picks queue songs with
+  // none — so a YouTube track's length comes from the same row. Its album doesn't: a credited row keeps its own.
+  if (placeholder || (!duration && /^[A-Za-z0-9_-]{11}$/.test(meta.id))) {
     const credits = await resolveQueueCredits(meta.id);
     if (credits) {
-      if (credits.artist) artist = credits.artist;
-      album = album || credits.album;
+      if (placeholder) {
+        if (credits.artist) artist = credits.artist;
+        album = album || credits.album;
+      }
       duration = duration || credits.durationSec;
     }
   }
@@ -917,18 +1002,48 @@ export async function getLyrics(meta: LyricsMeta): Promise<LyricsResult | null> 
       album,
       duration,
     },
-    { prioritizeWordSync: true },
+    // BitChord's default: the highest-priority source with timed lyrics wins, word or line timing.
+    { prioritizeWordSync: false },
     { ytMusicPlain, ytTranscript: fetchYouTubeTranscriptCues }
   );
-  const result: LyricsResult | null = found
-    ? { synced: found.synced, plain: found.plain, source: found.source, wordSynced: found.wordSynced }
-    : null;
-  // Misses included — see the read path above.
-  lyricCache.set(meta.id, result);
-  lyricCacheAt.set(meta.id, Date.now());
+  return rememberLyrics(
+    meta.id,
+    found ? { synced: found.synced, plain: found.plain, source: found.source, wordSynced: found.wordSynced } : null
+  );
+}
+
+function rememberLyrics(id: string, result: LyricsResult | null): LyricsResult | null {
+  // Misses included — see the read path in getLyrics.
+  lyricCache.set(id, result);
+  lyricCacheAt.set(id, Date.now());
   evictOldest(lyricCache, LYRIC_CACHE_MAX);
   evictOldest(lyricCacheAt, LYRIC_CACHE_MAX);
   return result;
+}
+
+/** A local file's own timed lyrics tag (BitChord's EmbeddedLyrics); null when untagged, unreadable or untimed. */
+async function readEmbeddedLyrics(file: string): Promise<LyricsResult | null> {
+  try {
+    const { parseFile } = await import("music-metadata");
+    const { common } = await parseFile(file, { duration: false, skipCovers: true });
+    for (const tag of common.lyrics ?? []) {
+      // Tag text is untrusted (crafted frames can be multi-MB): bound it. A SYLT frame carries no text, and may be
+      // timed in MPEG frames rather than milliseconds — BitChord reads no ID3 at all.
+      if (typeof tag.text !== "string" || tag.text.length > 256 * 1024) continue;
+      // music-metadata already split an LRC string into millisecond rows (word stamps left in the text): rebuilt as
+      // LRC so lyrics.ts keeps the word timing.
+      const stamp = (t: number): string =>
+        `[${Math.floor(t / 60000)}:${String(Math.floor(t / 1000) % 60).padStart(2, "0")}.${String(t % 1000).padStart(3, "0")}]`;
+      const raw = tag.syncText?.length
+        ? tag.syncText.map(({ timestamp, text }) => stamp(Math.round(timestamp ?? 0)) + text).join("\n")
+        : tag.text;
+      const found = embeddedLrc(raw);
+      if (found) return { synced: found.synced, plain: null, source: found.source, wordSynced: found.wordSynced };
+    }
+  } catch {
+    /* unreadable or untagged: the sources answer as before */
+  }
+  return null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -984,7 +1099,9 @@ export async function enrichDurations(ids: string[]): Promise<Record<string, num
  */
 async function probeUrl(url: string): Promise<boolean> {
   try {
-    const res = await fetch(url, { headers: { "User-Agent": UA, Range: "bytes=0-" } });
+    // Only the first chunk is read; a hung connection must not pin this
+    // track's resolution (and everything waiting on it) for minutes.
+    const res = await fetch(url, { headers: { "User-Agent": UA, Range: "bytes=0-" }, signal: AbortSignal.timeout(10_000) });
     if (res.status !== 206 && res.status !== 200) {
       try {
         await res.arrayBuffer();
@@ -1039,35 +1156,43 @@ export interface ResolvedStream {
   mime: string;
   /** Integrated loudness in LUFS when YouTube reports it (null = unknown). */
   lufs: number | null;
+  /** the picked file (see PickedAudio) */
+  itag?: number;
+  clen?: number;
 }
 
 /**
  * Resolved-stream cache. The media element re-requests the proxy for every
  * seek and buffer refill, and each request used to run the full client
- * rotation again; a rendition is valid for hours, so a short-TTL cache makes
- * repeat requests instant and lets the renderer's `?meta=1` loudness lookup
- * share a single resolution with the playback request. forceRotate (the 403
- * self-heal path) bypasses and refreshes it.
+ * rotation again; a URL is valid for hours, so the cache keeps it until a
+ * little before its own expiry, makes repeat requests instant and lets the
+ * renderer's `?meta=1` loudness lookup share a single resolution with the
+ * playback request. `refresh` (the 403 self-heal) bypasses it, and both an
+ * expired and a refreshed entry ask for the same file again.
  */
-const RESOLVE_TTL_MS = 10 * 60 * 1000;
-const resolveCache = new Map<string, { value: ResolvedStream; ts: number }>();
+const resolveCache = new Map<string, { value: ResolvedStream; ts: number; expiresAt: number }>();
 const resolving = new Map<string, Promise<ResolvedStream>>();
+
+/** A local file's ReplayGain track gain from its tags, dB (null when it has none). */
+export function localGainDb(id: string): number | null {
+  return localTrackById(id)?.gainDb ?? null;
+}
 
 export function resolveStream(
   videoId: string,
-  forceRotate = false,
+  refresh = false,
   maxKbps?: number,
   mp4Only = false
 ): Promise<ResolvedStream> {
   const key = `${videoId}|${maxKbps ?? ""}|${mp4Only ? "mp4" : ""}`;
-  if (!forceRotate) {
+  if (!refresh) {
     const hit = resolveCache.get(key);
-    if (hit && Date.now() - hit.ts < RESOLVE_TTL_MS) return Promise.resolve(hit.value);
+    if (hit && Date.now() < hit.expiresAt) return Promise.resolve(hit.value);
     const pending = resolving.get(key);
     if (pending) return pending;
   }
+  const pin = resolveCache.get(key)?.value;
   const run = (async (): Promise<ResolvedStream> => {
-    if (forceRotate) preferredClientIdx = (preferredClientIdx + 1) % STREAM_CLIENTS.length;
     let lastErr: unknown = null;
 
     // Two rounds: the second one runs on a freshly built session (new PO token).
@@ -1086,15 +1211,22 @@ export function resolveStream(
           console.log(
             `[bytune] stream ${client}: playability=${String((info as any)?.playability_status?.status ?? "?")} audio=${audioOnly.length} plainUrl=${audioOnly.filter((f: any) => typeof f.url === "string").length} sig=${audioOnly.filter((f: any) => typeof f.signature_cipher === "string" || typeof f.cipher === "string").length} hls=${sd?.hls_manifest_url ? "y" : "n"}`
           );
-          const picked = await pickAudio(info, yt, maxKbps, mp4Only);
+          const picked = await pickAudio(info, yt, maxKbps, mp4Only, pin);
           if (!picked) throw new Error(`no audio format for client ${client}`);
           // Validate from the same network path the proxy will use; a bad URL
           // (e.g. SABR-gated) moves us to the next client instead of failing
           // at the media element.
           if (!(await probeUrl(picked.url))) throw new Error(`stream rejected for client ${client}`);
           preferredClientIdx = idx;
-          const value: ResolvedStream = { url: picked.url, mime: picked.mime, lufs: picked.lufs };
-          resolveCache.set(key, { value, ts: Date.now() });
+          const value: ResolvedStream = {
+            url: picked.url,
+            mime: picked.mime,
+            lufs: picked.lufs,
+            itag: picked.itag,
+            clen: picked.clen,
+          };
+          const ts = Date.now();
+          resolveCache.set(key, { value, ts, expiresAt: ts + streamTtlMs(value.url, ts) });
           evictOldest(resolveCache, RESOLVE_CACHE_MAX);
           return value;
         } catch (err) {
@@ -1114,7 +1246,8 @@ export function resolveStream(
       const url = await resolveViaPiped(videoId);
       // Piped mirrors don't report loudness; the renderer keeps its fallback.
       const value: ResolvedStream = { url, mime: "audio/mp4", lufs: null };
-      resolveCache.set(key, { value, ts: Date.now() });
+      const ts = Date.now();
+      resolveCache.set(key, { value, ts, expiresAt: ts + streamTtlMs(url, ts) });
       evictOldest(resolveCache, RESOLVE_CACHE_MAX);
       return value;
     } catch (err) {
@@ -1135,12 +1268,11 @@ export function resolveStream(
   return run;
 }
 
-/** URL-only view of resolveStream — for analysers and other url-shape callers. */
-export async function resolveStreamUrl(
-  videoId: string,
-  forceRotate = false,
-  maxKbps?: number,
-  mp4Only = false
-): Promise<string> {
-  return (await resolveStream(videoId, forceRotate, maxKbps, mp4Only)).url;
+/**
+ * A fresh load after a playback error: forget this song's renditions (it may
+ * take the best one again) and start from the next client.
+ */
+export function retryStream(videoId: string): void {
+  for (const key of [...resolveCache.keys()]) if (key.startsWith(`${videoId}|`)) resolveCache.delete(key);
+  preferredClientIdx = (preferredClientIdx + 1) % STREAM_CLIENTS.length;
 }

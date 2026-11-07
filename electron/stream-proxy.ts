@@ -13,8 +13,9 @@ import fs from "fs";
 import http from "http";
 import path from "path";
 import type { AddressInfo } from "net";
+import { audioMime } from "./audio-types";
 import { localStreamPath } from "./local-library";
-import { resolveStream } from "./music-service";
+import { resolveStream, evictOldest } from "./music-service";
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -69,10 +70,14 @@ export function getStreamProxyPort(): number {
   return proxyPort;
 }
 
-export function proxyUrlFor(trackId: string, forceRotate = false, maxKbps?: number): string {
+/** `retry` gives the URL a fresh query, so Chromium never reuses the failed URL's cached bytes. */
+export function proxyUrlFor(trackId: string, retry = false, maxKbps?: number): string {
   const kbps = typeof maxKbps === "number" && maxKbps > 0 ? `&kbps=${Math.floor(maxKbps)}` : "";
-  return `http://127.0.0.1:${proxyPort}/?id=${encodeURIComponent(trackId)}${forceRotate ? "&rotate=1" : ""}${kbps}`;
+  return `http://127.0.0.1:${proxyPort}/?id=${encodeURIComponent(trackId)}${retry ? `&retry=${Date.now().toString(36)}` : ""}${kbps}`;
 }
+
+/** Which file each proxy URL has served, so a later range of it is never answered from another file. */
+const served = new Map<string, string>();
 
 /* Local library files travel through the proxy too: the renderer runs on an
  * http origin (dev server / packaged build), and Chromium refuses to load
@@ -84,22 +89,13 @@ export function proxyUrlForLocalTrack(localId: string): string | null {
   return `http://127.0.0.1:${proxyPort}/?lid=${encodeURIComponent(localId)}`;
 }
 
-const LOCAL_MIME: Record<string, string> = {
-  ".mp3": "audio/mpeg",
-  ".m4a": "audio/mp4",
-  ".mp4": "audio/mp4",
-  ".aac": "audio/aac",
-  ".flac": "audio/flac",
-  ".ogg": "audio/ogg",
-  ".oga": "audio/ogg",
-  ".opus": "audio/ogg",
-  ".wav": "audio/wav",
-  ".webm": "audio/webm",
-  ".wma": "audio/x-ms-wma",
-};
+/** A song downloaded to this device, by YouTube id → its file, when it's still there (set by main.ts). */
+let downloadedFile: (trackId: string) => string | null = () => null;
+export function setDownloadedFileLookup(lookup: (trackId: string) => string | null): void {
+  downloadedFile = lookup;
+}
 
-function serveLocalFile(id: string, range: string | undefined, res: http.ServerResponse, req: http.IncomingMessage): void {
-  const filePath = localStreamPath(id);
+function serveLocalFile(filePath: string | null, range: string | undefined, res: http.ServerResponse, req: http.IncomingMessage): void {
   if (!filePath) {
     res.writeHead(404);
     res.end("local file missing");
@@ -118,7 +114,7 @@ function serveLocalFile(id: string, range: string | undefined, res: http.ServerR
     "Access-Control-Allow-Origin": "*",
     "Cache-Control": "no-store",
     "Accept-Ranges": "bytes",
-    "Content-Type": LOCAL_MIME[path.extname(filePath).toLowerCase()] ?? "audio/mpeg",
+    "Content-Type": audioMime(filePath),
   };
 
   // Range support is what makes seeking work: the media element re-requests
@@ -157,10 +153,24 @@ function serveLocalFile(id: string, range: string | undefined, res: http.ServerR
   stream.pipe(res);
 }
 
-function fetchUpstream(streamUrl: string, range: string | undefined): Promise<Response> {
+/** Waiting this long for headers, or for the next chunk mid-song, means the stream is dead. */
+const UPSTREAM_TIMEOUT_MS = 20_000;
+
+/** The upstream request plus its abort switch (also used by the idle watchdog). */
+async function fetchUpstream(
+  streamUrl: string,
+  range: string | undefined,
+  ctl = new AbortController()
+): Promise<Response> {
   const headers: Record<string, string> = { "User-Agent": UA };
   if (range) headers.Range = range;
-  return fetch(streamUrl, { headers });
+  // A timeout on headers only: the body of a long song streams for minutes.
+  const timer = setTimeout(() => ctl.abort(new Error("upstream timed out")), UPSTREAM_TIMEOUT_MS);
+  try {
+    return await fetch(streamUrl, { headers, signal: ctl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -175,12 +185,35 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
     const range = req.headers.range;
     if (localId) {
-      serveLocalFile(localId, range, res, req);
+      serveLocalFile(localStreamPath(localId), range, res, req);
       return;
     }
-    const forceRotate = url.searchParams.get("rotate") === "1";
     const kbpsRaw = Number(url.searchParams.get("kbps") ?? 0);
     const maxKbps = Number.isFinite(kbpsRaw) && kbpsRaw > 0 ? Math.floor(kbpsRaw) : undefined;
+    const key = req.url ?? "";
+
+    // A song downloaded to this device plays from its file: it works offline and
+    // costs no data. Its loudness has no YouTube value, so the player measures it.
+    const file = downloadedFile(trackId as string);
+    if (file) {
+      if (url.searchParams.get("meta") === "1") {
+        res.writeHead(200, { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store", "Content-Type": "application/json" });
+        res.end(JSON.stringify({ lufs: null }));
+        return;
+      }
+      // Same rule as a stream: a mid-song range must come from the file this URL served before
+      // (a download finishing while its stream plays must not splice two files together).
+      const before = served.get(key);
+      if (range && !/^bytes=0-/.test(range) && before && before !== `file:${file}`) {
+        res.writeHead(409, { "Access-Control-Allow-Origin": "*" });
+        res.end();
+        return;
+      }
+      served.set(key, `file:${file}`);
+      evictOldest(served, 500);
+      serveLocalFile(file, range, res, req);
+      return;
+    }
 
     // Metadata-only request: the renderer asks `?id=…&meta=1` to learn the
     // track's loudness (for Spotify-style −14 LUFS normalisation) without
@@ -203,14 +236,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       return;
     }
 
-    let stream = await resolveStream(trackId as string, forceRotate, maxKbps);
-    let upstream = await fetchUpstream(stream.url, range);
+    let stream = await resolveStream(trackId as string, false, maxKbps);
+    let ctl = new AbortController();
+    let upstream = await fetchUpstream(stream.url, range, ctl);
 
     // Self-heal: a URL that just went bad gets one more resolution.
     if (upstream.status === 403 && trackId) {
-      console.warn(`[bytune] proxy upstream 403 for ${trackId}, rotating client`);
+      console.warn(`[bytune] proxy upstream 403 for ${trackId}, re-resolving`);
       stream = await resolveStream(trackId, true, maxKbps);
-      upstream = await fetchUpstream(stream.url, range);
+      ctl = new AbortController();
+      upstream = await fetchUpstream(stream.url, range, ctl);
     }
 
     if (!upstream.ok || !upstream.body) {
@@ -219,6 +254,22 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       res.end();
       return;
     }
+
+    // A range past the start must come from the file this URL served before:
+    // its byte offsets mean nothing in another file. Refusing makes the deck
+    // error, and the player reloads at its position on a fresh URL. (A later
+    // bytes=0- request on the old URL is served and re-recorded.)
+    const identity = `${stream.itag ?? "?"}:${stream.clen ?? "?"}`;
+    const before = served.get(key);
+    if (range && !/^bytes=0-/.test(range) && before && before !== identity) {
+      void upstream.body.cancel().catch(() => undefined);
+      console.warn(`[bytune] proxy: rendition changed mid-song for ${trackId}, refusing the range`);
+      res.writeHead(409, { "Access-Control-Allow-Origin": "*" });
+      res.end();
+      return;
+    }
+    served.set(key, identity);
+    evictOldest(served, 500);
 
     const outHeaders: Record<string, string> = {
       "Access-Control-Allow-Origin": "*",
@@ -234,21 +285,52 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     req.on("close", () => {
       void reader.cancel().catch(() => undefined);
     });
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value && value.length > 0 && !res.write(value)) {
-        await new Promise<void>((resolve) => res.once("drain", () => resolve()));
+    // Idle watchdog: an upstream that stops sending mid-song is aborted, so
+    // the player gets an error (and retries) instead of buffering forever.
+    let idle = setTimeout(() => ctl.abort(new Error("upstream stalled")), UPSTREAM_TIMEOUT_MS);
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        clearTimeout(idle);
+        if (done || res.destroyed) break;
+        if (value && value.length > 0 && !res.write(value)) {
+          // Wait for room, or for the player to hang up (a seek or skip
+          // closes the request; waiting on `drain` alone never returned).
+          await new Promise<void>((resolve) => {
+            const settle = (): void => {
+              res.off("drain", settle);
+              res.off("close", settle);
+              resolve();
+            };
+            res.once("drain", settle);
+            res.once("close", settle);
+          });
+          if (res.destroyed) break;
+        }
+        idle = setTimeout(() => ctl.abort(new Error("upstream stalled")), UPSTREAM_TIMEOUT_MS);
       }
+    } finally {
+      clearTimeout(idle);
+    }
+    if (res.destroyed) {
+      void reader.cancel().catch(() => undefined);
+      return;
     }
     res.end();
   } catch (err) {
     console.warn("[bytune] proxy error:", err instanceof Error ? err.message : err);
+    // Mid-body (headers already sent) the only honest answer is to drop the
+    // connection: Chromium then errors or re-requests the range. Writing a
+    // status here threw and left the response open, so playback hung.
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
     try {
       res.writeHead(502);
       res.end("proxy error");
     } catch {
-      /* response already gone */
+      res.destroy();
     }
   }
 }

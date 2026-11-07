@@ -100,6 +100,7 @@ class FakeAudio {
     this.preload = "";
     this.buffered = { length: 0, end: () => 0 };
     this.plays = 0; // play() calls actually accepted
+    this.__played = 0; // seconds of this src played (HTMLMediaElement.played, summed)
     registry.push(this);
   }
   get src() {
@@ -109,11 +110,20 @@ class FakeAudio {
     this.__srcValue = v == null ? "" : String(v);
     // Assigning a source resets the element, exactly like the real API.
     this.currentTime = 0;
+    this.__played = 0;
     this.ended = false;
     this.error = null;
+    if (this.__srcValue) (globalThis.__loads ||= []).push(this.__srcValue);
     const d = globalThis.__durations?.[this.__srcValue];
     this.duration = d == null ? NaN : d;
     this.__endAt = globalThis.__streamEnds?.[this.__srcValue] ?? d;
+    // Metadata lands after the src is set, as in a browser.
+    const loaded = this.__srcValue;
+    if (Number.isFinite(this.duration)) queueMicrotask(() => this.__srcValue === loaded && this.emit("durationchange"));
+  }
+  get played() {
+    const s = this.__played;
+    return { length: s > 0 ? 1 : 0, start: () => 0, end: () => s };
   }
   removeAttribute(name) {
     if (name === "src") this.src = "";
@@ -138,6 +148,7 @@ class FakeAudio {
   }
   load() {
     this.currentTime = 0;
+    this.__played = 0;
     this.ended = false;
     this.error = null;
   }
@@ -159,6 +170,7 @@ class FakeAudio {
     const step = (this.__tickMs / 1000) * (this.playbackRate || 1);
     const before = this.currentTime;
     this.currentTime = Math.min(this.duration, this.currentTime + step);
+    this.__played += this.currentTime - before;
     this.emit("timeupdate");
     if (this.currentTime >= endAt && !this.ended) {
       this.ended = true;
@@ -181,8 +193,17 @@ async function bundleEngine() {
       export function hasBridge() { return true; }
       export function requireBridge() {
         return {
-          getStreamUrl: async (id) => "fake:" + id,
+          getStreamUrl: async (id) => {
+            if (globalThis.__failIds?.has(id)) throw new Error("stream gone");
+            const ms = globalThis.__resolveDelay?.[id];
+            if (ms) await new Promise((r) => globalThis.window.setTimeout(r, ms));
+            return "fake:" + id;
+          },
           localTrackUrl: async (id) => "fake:" + id,
+          localGainDb: async (id) => globalThis.__gainDb?.[id] ?? null,
+          getRadio: async (id, token) =>
+            globalThis.__radio ? globalThis.__radio(id, token) : { tracks: [], next: null, seed: null },
+          getHome: async () => globalThis.__home ?? [],
         };
       }`,
     playEvents: `
@@ -190,11 +211,16 @@ async function bundleEngine() {
         (globalThis.__events ||= []).push({ type, id: track && track.id, position });
       }`,
     analysis: `
-      export const analyseTrackHead = {
-        getCached: () => (globalThis.__tempo ?? null),
-        ensure: async () => {},
-      };
-      export async function detectEdgeSilence() { return globalThis.__trims ?? null; }`,
+      export async function analyseTrack(t) {
+        (globalThis.__analysisCalls ||= []).push({ id: t.id, duration: t.duration });
+        const ms = globalThis.__analysisDelay?.[t.id];
+        if (ms) await new Promise((r) => globalThis.window.setTimeout(r, ms));
+        (globalThis.__analysed ||= new Set()).add(t.id);
+        return globalThis.__analysis?.[t.id] ?? null;
+      }
+      export function peekAnalysis(id) {
+        return globalThis.__analysisDelay?.[id] && !globalThis.__analysed?.has(id) ? null : globalThis.__analysis?.[id] ?? null;
+      }`,
     artwork: `export function upgradeArtwork(t) { return t || ""; }`,
     persist: `
       export const storage = globalThis.__storage;
@@ -206,9 +232,14 @@ async function bundleEngine() {
     stdin: {
       contents: `
         export * from "./src/lib/audio";
-        export { usePlayer } from "./src/stores/player";
+        export { initAutoplay, dontPlay } from "./src/lib/autoplay";
+        export { usePlayer, autoplayTail, nextPass, upNext, shownTrack, playingFromRow } from "./src/stores/player";
         export { useSettings } from "./src/stores/settings";
         export { useLibrary } from "./src/stores/library";
+        export { useUI } from "./src/stores/ui";
+        export { useRoom, stoppingHere } from "./src/stores/room";
+        export { useSleepTimer, parseSleepMinutes, formatSleepLeft } from "./src/lib/sleepTimer";
+        export { nextNudges, describeLyricsShift } from "./src/lib/lyricsOffset";
       `,
       resolveDir: fileURLToPath(new URL("..", import.meta.url)),
       sourcefile: "engine-harness.ts",
@@ -269,8 +300,16 @@ export async function createEngine({ tickMs = 20 } = {}) {
   globalThis.__storage = storage;
   globalThis.__events = events;
   globalThis.__clock = clock;
-  delete globalThis.__tempo;
-  delete globalThis.__trims;
+  globalThis.__analysis = {};
+  delete globalThis.__analysisDelay;
+  delete globalThis.__resolveDelay;
+  delete globalThis.__analysed;
+  globalThis.__analysisCalls = [];
+  delete globalThis.__gainDb;
+  delete globalThis.__lufs;
+  delete globalThis.__radio;
+  delete globalThis.__home;
+  delete globalThis.__failIds;
   globalThis.__registry = elements;
 
   const prev = {
@@ -287,13 +326,23 @@ export async function createEngine({ tickMs = 20 } = {}) {
     clearInterval: (id) => clock.clearInterval(id),
     addEventListener() {},
     removeEventListener() {},
+    bytune: { mediaSetMetadata: (m) => (globalThis.__media ||= []).push(m) },
   };
+  globalThis.__loads = [];
+  globalThis.__media = [];
   globalThis.Audio = class extends FakeAudio {
     constructor() {
       super(elements, tickMs);
     }
   };
-  globalThis.fetch = async () => ({ ok: false, json: async () => ({}) });
+  // `&meta=1` answers YouTube's reported loudness from __lufs (absent: unknown, as for Piped).
+  globalThis.fetch = async (url) => {
+    const id = String(url).replace(/^fake:/, "").split("&")[0];
+    if (/[?&]meta=1/.test(String(url)) && globalThis.__lufs && id in globalThis.__lufs) {
+      return { ok: true, json: async () => ({ lufs: globalThis.__lufs[id] }) };
+    }
+    return { ok: false, json: async () => ({}) };
+  };
 
   // The media clock ticks first so a boundary `ended` and a fade completion
   // landing on the same millisecond resolve the way a browser resolves them.
@@ -346,6 +395,11 @@ export async function createEngine({ tickMs = 20 } = {}) {
 
 export const track = (id, duration) => ({ id, title: id, artist: "Test", album: "T", duration, thumb: null });
 
+/** What the shared analysis knows about a song (defaults: no silence, no beats, unmeasured). */
+export function setAnalysis(id, partial = {}) {
+  (globalThis.__analysis ||= {})[id] = { head: 0, tail: 0, lufs: null, onset: null, intro: null, outro: null, ...partial };
+}
+
 /* ------------------------------ query helpers ------------------------------ */
 
 export const FADE_SEC = 0.6;
@@ -358,12 +412,15 @@ export async function boot(opts = {}) {
     crossfadeSeconds: opts.fadeSeconds ?? FADE_SEC,
     smartFade: opts.smartFade ?? false,
     skipSilence: opts.skipSilence ?? false,
-    autoplay: false,
+    autoplay: opts.autoplay ?? false,
     playbackSpeed: 1,
+    // the level these engine tests measure against, whatever a fresh install defaults to
+    loudnessLevel: "normal",
   });
   useLibrary.setState({ history: [] });
   while (!usePlayer.persist.hasHydrated()) await flushMicrotasks(2);
   h.engine.initAudioEngine();
+  if (opts.autoplay) h.engine.initAutoplay();
   return h;
 }
 

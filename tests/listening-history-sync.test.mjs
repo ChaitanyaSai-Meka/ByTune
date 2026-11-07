@@ -70,6 +70,21 @@ test("Replay survives a reload and follows the account-scoped store", async () =
   } finally { h.close(); }
 });
 
+test("a reload mid-listen never credits the same play twice", async () => {
+  const h = await loadStats();
+  try {
+    h.api.initStats();
+    h.api.noteTrackStart("x");
+    h.api.recordListening(track("x"), 31_000); // crosses the 30 s rule: one play
+    h.api.flushSync(); // a sync flushes, merges and rewrites the store…
+    h.api.reloadStore(); // …then reloads it while the song keeps playing
+    h.api.recordListening(track("x"), 31_000);
+    h.api.flushSync();
+    assert.equal(h.api.summary("month").plays, 1, "the listen in progress was already credited");
+    assert.equal(h.api.summary("month").totalMs, 62_000, "listening time still accrues");
+  } finally { h.close(); }
+});
+
 test("reloadStore drops the in-memory copy so a restore can never be overwritten", async () => {
   const h = await loadStats();
   try {
@@ -201,7 +216,10 @@ test("recovered months survive a reload racing in right after migration", async 
     h.api.flushSync();
     h.api.reloadStore();
     assert.equal(h.api.summary("all").totalMs, 93_000);
-    assert.deepEqual([...h.api.summary("all").months].map(String), ["2026-09", "2026-10"]);
+    // "fresh" lands in the current month (local time, as stats.ts keys it).
+    const now = new Date();
+    const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    assert.deepEqual([...h.api.summary("all").months].map(String), ["2026-09", thisMonth]);
   } finally { h.close(); }
 });
 

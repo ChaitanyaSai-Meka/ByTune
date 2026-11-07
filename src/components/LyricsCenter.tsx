@@ -12,7 +12,8 @@ import { LyricsView } from "./SyncedLyrics";
 import { usePlayer } from "../stores/player";
 import { useUI } from "../stores/ui";
 import { useArtworkPalette } from "../lib/palette";
-import { requestLyricsAlignment, useLyricsAlign } from "../lib/lyricsOffset";
+import { useLyricsOffset } from "../lib/lyricsOffset";
+import { LyricsTiming } from "./LyricsTiming";
 import type { LyricsResult, Track } from "../types";
 
 /* Lyrics are fetched the moment a track starts (see prefetchLyrics) so the
@@ -66,13 +67,6 @@ export function LyricsCenter() {
       if (!cancelled) {
         setLyrics(r ?? null);
         setLoading(false);
-        // Version-mismatch check: when the upload is much longer than the
-        // synced song, measure the intro offset from the audio itself.
-        const last = r?.synced?.[r.synced.length - 1];
-        const end = last?.end ?? last?.time ?? 0;
-        if (r?.synced?.length && track.duration) {
-          requestLyricsAlignment(track.id, track.duration, end);
-        }
       }
     });
     return () => {
@@ -80,14 +74,14 @@ export function LyricsCenter() {
     };
   }, [track?.id]);
 
-  // 0 until the audio-anchored alignment lands, then lyrics re-sync to it.
-  const offset = useLyricsAlign((s) => s.offsets[track?.id ?? ""] ?? 0);
+  // The listener's own timing: this song's nudge and this device's setting.
+  const offset = useLyricsOffset(track?.id);
 
   const palette = useArtworkPalette(track?.thumb ?? null);
 
   return (
     <div
-      className="relative flex-1 min-h-0 rounded-2xl overflow-hidden animate-fade-in"
+      className="group relative flex-1 min-h-0 rounded-2xl overflow-hidden animate-fade-in"
       style={{ background: `rgb(${palette.background})` }}
     >
       {/* Subtle artwork-coloured blobs over the palette floor. */}
@@ -107,6 +101,7 @@ export function LyricsCenter() {
       >
         <X className="w-[18px] h-[18px]" />
       </button>
+      {track && <LyricsTiming trackId={track.id} className="absolute top-4 right-16 z-10" />}
 
       <div className="relative h-full flex flex-col px-10 pt-14 pb-6">
         {track ? (

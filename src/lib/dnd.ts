@@ -41,6 +41,14 @@ export interface AlbumPayload {
   thumb?: string;
 }
 
+/** The local playlist whose own page a dragged song came from, while that drag lasts. */
+let fromPlaylist: string | null = null;
+
+/** Whether the song being dragged came from this playlist's page (it moves there, never gets added again). */
+export function draggingFromPlaylist(id: string): boolean {
+  return fromPlaylist === id;
+}
+
 export function dragHasTrack(e: React.DragEvent): boolean {
   return e.dataTransfer.types.includes(TRACK_MIME);
 }
@@ -281,7 +289,7 @@ export function useTrackDrop(
  */
 export function useDrag(
   payload:
-    | { track: Track }
+    | { track: Track; fromPlaylist?: string }
     | { playlist: PlaylistPayload }
     | { artist: ArtistPayload }
     | { album: AlbumPayload }
@@ -345,11 +353,13 @@ export function useDrag(
         else if ("playlist" in payload) beginPlaylistDrag(e, payload.playlist);
         else if ("artist" in payload) beginArtistDrag(e, payload.artist);
         else beginAlbumDrag(e, payload.album);
+        fromPlaylist = ("track" in payload && payload.fromPlaylist) || null;
         suppressClick.current = true;
         document.body.classList.add("bytune-dragging");
         setDragging(true);
       },
       onDragEnd: () => {
+        fromPlaylist = null;
         downOnControl.current = false;
         setDragging(false);
         // The browser suppresses the post-drag click itself in the common

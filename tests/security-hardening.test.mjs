@@ -26,7 +26,7 @@ async function bundle(entry, stubs, externals = []) {
         b.onResolve({ filter: /^\.\/|^\.\.\// }, (a) => ({ path: a.path, namespace: "stub" }));
         b.onLoad({ filter: /.*/, namespace: "stub" }, (a) => ({
           contents: a.path.endsWith("artwork")
-            ? "export function artworkUrlOk(u){return /^(https?:\\/\\/|data:image\\/|blob:|localart:)/i.test(u);}"
+            ? "export function artworkUrlOk(u){return /^(https?:\\/\\/|data:image\\/|blob:|localart:)/i.test(u);} export function upgradeThumb(u){return u;}"
             : stubs[a.path.replace(/^.*\//, "").replace(/\.ts$/, "")] ?? "module.exports = {};",
           loader: "js",
         }));
@@ -65,7 +65,7 @@ test("artwork scheme gate: web/data/blob/localart only, hostile schemes collapse
 });
 
 test("stream proxy: origins outside the app are refused; media/null/dev still allowed", async () => {
-  const outfile = await bundle("../electron/stream-proxy.ts", { "local-library": "export const localStreamPath = () => null;", "music-service": "export const resolveStream = async () => ({ url: 'https://x', mime: '', lufs: null });" }, []);
+  const outfile = await bundle("../electron/stream-proxy.ts", { "local-library": "export const localStreamPath = () => null;", "music-service": "export const resolveStream = async () => ({ url: 'https://x', mime: '', lufs: null }); export const evictOldest = () => {};" }, []);
   const { originAllowed } = require(outfile);
   assert.equal(originAllowed(undefined, "127.0.0.1:5000"), true, "media element sends no Origin");
   assert.equal(originAllowed("null", "127.0.0.1:5000"), true, "packaged renderer fetch (file:// origin)");
@@ -93,7 +93,12 @@ test("download filenames: traversal, reserved names and bidi spoofing are neutra
 });
 
 test("cloud validation strips scheme-unsafe thumbs and device-owned settings keys", async () => {
-  const outfile = await bundle("../electron/cloud-payload.ts", { config: "export const SYNCED_STORES = ['library','settings','player','recent-searches'];" }, []);
+  // The device-only list comes from the real module (built by `npm test`), so the stub can't drift.
+  const { DEVICE_SETTINGS_FIELDS } = await import("../.test-build/sync-merge.mjs");
+  const outfile = await bundle("../electron/cloud-payload.ts", {
+    config: "export const SYNCED_STORES = ['library','settings','player','recent-searches'];",
+    "sync-merge": `export const DEVICE_SETTINGS_FIELDS = ${JSON.stringify(DEVICE_SETTINGS_FIELDS)};`,
+  }, []);
   const { validateCloudPayload } = require(outfile);
   const payload = {
     version: 1,
@@ -108,9 +113,10 @@ test("cloud validation strips scheme-unsafe thumbs and device-owned settings key
   const good = { version: 1, state: { liked: [{ id: "a", title: "T", artist: "A", thumb: "https://i.ytimg.com/vi/x/hqdefault.jpg", duration: 60 }] } };
   validateCloudPayload("library", good);
   assert.ok(good.state.liked[0].thumb, "legit https thumbs survive");
-  const settings = { version: 1, state: { downloadDir: "C:\\hostile", downloadQuality: "high" } };
+  const settings = { version: 1, state: { downloadDir: "C:\\hostile", audioSinkId: "other-pc", downloadQuality: "high" } };
   validateCloudPayload("settings", settings);
   assert.equal(settings.state.downloadDir, undefined, "device-owned paths must be stripped from cloud data");
+  assert.equal(settings.state.audioSinkId, undefined, "another machine's output device must not arrive");
   assert.equal(settings.state.downloadQuality, "high", "legit settings survive");
 });
 

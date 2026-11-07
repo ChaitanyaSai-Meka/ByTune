@@ -4,6 +4,7 @@ import { Dialog } from "./components/primitives";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { prefetchLyrics, LyricsCenter } from "./components/LyricsCenter";
 import { NowPlaying } from "./components/NowPlaying";
+import { PlaylistPicker } from "./components/PlaylistPicker";
 import { Onboarding } from "./views/OnboardingView";
 import { PlayerBar } from "./components/PlayerBar";
 import { RightRail } from "./components/RightRail";
@@ -11,13 +12,23 @@ import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
 import { TopBar } from "./components/TopBar";
 import { engineBoot } from "./lib/audio";
+import { initAutoplay } from "./lib/autoplay";
 import { setAmbientFromArtwork } from "./lib/ambient";
 import { listenForDownloadProgress } from "./lib/downloads";
+import { listenForOpenedFiles } from "./lib/openedFiles";
+import { watchSpotify } from "./lib/spotify";
+import { listenForRooms } from "./lib/rooms";
+import { FileDropOverlay } from "./components/FileDropOverlay";
+import { LYRICS_NUDGE_STEP, useLyricsNudge } from "./lib/lyricsOffset";
 import { watchMenuCommands } from "./lib/menuCommands";
+import { watchUpdateNotice } from "./lib/updates";
 import { usePanelDrop } from "./lib/panelDrop";
-import { useArtworkPalette } from "./lib/palette";
+import { CoverGlow } from "./components/CoverGlow";
+import { PanelScrollbar } from "./components/PanelScrollbar";
 import { watchSession, useSession } from "./lib/session";
 import { watchSyncRestores } from "./lib/syncRestore";
+import { createSwipeNav, scrollsSideways, SWIPE_LIFT_MS, type SwipeDir, type SwipeUpdate } from "./lib/swipeNav";
+import { SwipeArrow, swipeArrow } from "./components/SwipeArrow";
 import { takeOnboardingIntent } from "./lib/onboardingIntent";
 import { startPipSync } from "./pip/pipSync";
 import { usePlayer } from "./stores/player";
@@ -27,40 +38,20 @@ import { useUI } from "./stores/ui";
 import { AlbumView } from "./views/AlbumView";
 import { ArtistView } from "./views/ArtistView";
 import { DownloadsView } from "./views/DownloadsView";
+import { FolderView } from "./views/FolderView";
 import { ExploreView } from "./views/ExploreView";
 import { HomeView } from "./views/HomeView";
 import { RemotePlaylistView } from "./views/RemotePlaylistView";
+import { MatchedPlaylistView } from "./views/MatchedPlaylistView";
+import { SpotifyView } from "./views/SpotifyView";
 import { LibraryView } from "./views/LibraryView";import { LocalMusicView } from "./views/LocalMusicView";
 import { PlaylistView } from "./views/PlaylistView";
 import { ReplayView } from "./views/ReplayView";
+import { PodcastView } from "./views/PodcastView";
+import { PodcastsView } from "./views/PodcastsView";
+import { MoodView } from "./views/MoodView";
 import { SearchView } from "./views/SearchView";
 import { SettingsView } from "./views/SettingsView";
-
-/**
- * The middle panel's artwork wash — the morphing gradient at the top of the
- * content pane, on every view except the artist page (its hero carries its
- * own full-bleed artwork treatment). At rest it wears the playing track's
- * colour; hovering any song / album / artist / playlist card borrows that
- * artwork's colour instead (cards feed `tintThumb` via tintHoverHandlers).
- * The colour itself is the ArtworkPalette background, crossfaded by the
- * registered `--home-tint` custom property.
- */
-function TintWash() {
-  const viewName = useUI((s) => s.view.name);
-  const tintThumb = useUI((s) => s.tintThumb);
-  const playingThumb = usePlayer((s) => s.queue[s.index]?.thumb ?? null);
-  const palette = useArtworkPalette(tintThumb ?? playingThumb);
-  const washRef = useRef<HTMLDivElement | null>(null);
-
-  // The colour lives on <main> (not the wash div) so the search filter bar's
-  // stuck backdrop reads the same morphing value — see `main` in index.css.
-  useEffect(() => {
-    washRef.current?.closest("main")?.style.setProperty("--home-tint", `rgb(${palette.elevated})`);
-  }, [palette]);
-
-  if (viewName === "artist" || viewName === "settings") return null;
-  return <div aria-hidden ref={washRef} className="home-tint pointer-events-none absolute inset-x-0 top-0 h-[332px]" />;
-}
 
 function useKeyboardShortcuts(): void {
   useEffect(() => {
@@ -71,7 +62,9 @@ function useKeyboardShortcuts(): void {
       if (e.ctrlKey || e.metaKey) {
         if (e.key.toLowerCase() === "f") {
           e.preventDefault();
-          const el = document.getElementById("global-search") as HTMLInputElement | null;
+          // On the Settings page Ctrl/Cmd+F searches the settings instead.
+          const el = (document.getElementById("settings-filter") ??
+            document.getElementById("global-search")) as HTMLInputElement | null;
           el?.focus();
           el?.select();
         }
@@ -84,7 +77,10 @@ function useKeyboardShortcuts(): void {
       // Enter via its own capture listener); without this guard Space toggled
       // playback behind a confirm dialog, and preventDefault kept the
       // focused Confirm button dead.
-      if (useUI.getState().dialog) return;
+      // A menu or the playlist picker drives the keyboard while open: arrows and
+      // Space must not also change the volume, seek or toggle playback.
+      const layer = useUI.getState();
+      if (layer.dialog || layer.contextMenu || layer.playlistPicker) return;
       if (e.key === "Escape") {
         const ui = useUI.getState();
         // A context menu is the topmost layer and owns Escape: its own
@@ -102,7 +98,7 @@ function useKeyboardShortcuts(): void {
       const ui = useUI.getState();
       if (e.key === "Escape") {
         if (ui.nowPlayingOpen) ui.toggleNowPlaying();
-        else if (ui.rightPanel === "queue" || ui.lyricsCenter) ui.closePanels();
+        else if (ui.rightPanel === "queue" || ui.rightPanel === "room" || ui.lyricsCenter) ui.closePanels();
         return;
       }
 
@@ -112,6 +108,7 @@ function useKeyboardShortcuts(): void {
       // whole track per repeat event.
       const isPlainArrow =
         !e.shiftKey &&
+        !e.altKey &&
         (e.code === "ArrowRight" || e.code === "ArrowLeft" || e.code === "ArrowUp" || e.code === "ArrowDown");
       if (e.repeat && !isPlainArrow) return;
 
@@ -122,11 +119,17 @@ function useKeyboardShortcuts(): void {
           player.toggle();
           break;
         case "ArrowRight":
-          if (e.shiftKey) player.next(true);
+          if (e.altKey) {
+            e.preventDefault();
+            ui.goForward();
+          } else if (e.shiftKey) player.next(true);
           else player.seek(player.position + 5);
           break;
         case "ArrowLeft":
-          if (e.shiftKey) player.prev();
+          if (e.altKey) {
+            e.preventDefault();
+            ui.goBack();
+          } else if (e.shiftKey) player.prev();
           else player.seek(player.position - 5);
           break;
         case "ArrowUp":
@@ -155,16 +158,74 @@ function useKeyboardShortcuts(): void {
         case "KeyN":
           ui.toggleNowPlaying();
           break;
-        case "Slash":
-          e.preventDefault();
-          document.getElementById("global-search")?.focus();
+        case "BracketLeft":
+        case "BracketRight": {
+          // This song's lyrics timing, while lyrics are on screen.
+          const id = player.queue[player.index]?.id;
+          if (!id || (!ui.lyricsCenter && !ui.nowPlayingOpen)) break;
+          useLyricsNudge.getState().nudge(id, e.code === "BracketLeft" ? -LYRICS_NUDGE_STEP : LYRICS_NUDGE_STEP);
           break;
+        }
+        case "Slash": {
+          e.preventDefault();
+          // Like Ctrl/Cmd+F: select the old query so typing replaces it.
+          const field = document.getElementById("global-search") as HTMLInputElement | null;
+          field?.focus();
+          field?.select();
+          break;
+        }
         default:
           break;
       }
     };
+    // The mouse's back/forward side buttons walk the view history.
+    const onMouseUp = (e: MouseEvent): void => {
+      if (e.button !== 3 && e.button !== 4) return;
+      e.preventDefault();
+      if (e.button === 3) useUI.getState().goBack();
+      else useUI.getState().goForward();
+    };
+    // So do two-finger trackpad swipes, as in Chrome: an arrow follows the
+    // swipe out of the panel's edge, and letting go past the line takes the
+    // step. Not under a dialog or a menu, nor in full-screen Now Playing,
+    // where the page that would change is out of sight.
+    const swipe = createSwipeNav();
+    let settle = 0;
+    const blocked = (): boolean => {
+      const ui = useUI.getState();
+      return !!(ui.dialog || ui.contextMenu || ui.playlistPicker || ui.nowPlayingOpen);
+    };
+    const apply = (u: SwipeUpdate | null): void => {
+      if (!u) return;
+      if (u.kind === "track") swipeArrow.track(u.dir, u.progress);
+      else if (u.kind === "cancel" || blocked()) swipeArrow.cancel();
+      else {
+        swipeArrow.commit();
+        const ui = useUI.getState();
+        if (u.dir === "back") ui.goBack();
+        else ui.goForward();
+      }
+    };
+    const onWheel = (e: WheelEvent): void => {
+      if (e.defaultPrevented) return;
+      const ui = useUI.getState();
+      const open = !blocked();
+      const can = (dir: SwipeDir): boolean => open && (dir === "back" ? ui.navPast.length > 0 : ui.navFuture.length > 0);
+      apply(swipe.wheel(e, (dx) => scrollsSideways(e.target, dx), can, window.innerWidth));
+      // The page never sees the fingers lift: a quiet wheel settles the swipe.
+      window.clearTimeout(settle);
+      settle = window.setTimeout(() => apply(swipe.quiet(performance.now())), SWIPE_LIFT_MS + 10);
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("wheel", onWheel, { passive: true });
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("wheel", onWheel);
+      window.clearTimeout(settle);
+      swipeArrow.cancel();
+    };
   }, []);
 }
 
@@ -216,8 +277,14 @@ function CurrentView(): ReactNode {
       return <LibraryView />;
     case "playlist":
       return <PlaylistView playlistId={view.param ?? ""} />;
+    case "folder":
+      return <FolderView folderId={view.param ?? ""} />;
     case "ytplaylist":
       return <RemotePlaylistView playlistId={view.param ?? ""} />;
+    case "import":
+      return <MatchedPlaylistView key={view.param} spotifyId={null} importId={view.param ?? ""} />;
+    case "spotify":
+      return view.param ? <MatchedPlaylistView key={view.param} spotifyId={view.param} /> : <SpotifyView />;
     case "album":
       return <AlbumView albumId={view.param ?? ""} />;
     case "artist":
@@ -228,6 +295,12 @@ function CurrentView(): ReactNode {
       return <LocalMusicView />;
     case "replay":
       return <ReplayView />;
+    case "podcast":
+      return view.param ? <PodcastView id={view.param} /> : null;
+    case "podcasts":
+      return <PodcastsView />;
+    case "mood":
+      return view.param ? <MoodView params={view.param} /> : null;
     case "settings":
       return <SettingsView />;
     default:
@@ -241,6 +314,7 @@ export default function App() {
   const pendingScroll = useUI((s) => s.pendingScroll);
   const lyricsCenter = useUI((s) => s.lyricsCenter);
   const shellRef = useRef<HTMLDivElement | null>(null);
+  const viewScrollRef = useRef<HTMLDivElement | null>(null);
   const session = useSession();
   const panelDrop = usePanelDrop();
 
@@ -268,6 +342,11 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  // Audio files opened with ByTune or dropped on the window play at once.
+  useEffect(() => listenForOpenedFiles(), []);
+  useEffect(() => watchSpotify(), []);
+  useEffect(() => listenForRooms(), []);
+
   // Native miniplayer bridge: push playback snapshots to the PiP window and
   // execute transport commands coming back from it.
   useEffect(() => startPipSync(), []);
@@ -275,6 +354,9 @@ export default function App() {
   // macOS application menu: commands in (play/pause, navigation…), playback
   // state out (menu checkmarks). No-op off macOS.
   useEffect(() => watchMenuCommands(), []);
+
+  // The old versions' synced "update available" playlist: this version is the update.
+  useEffect(() => watchUpdateNotice(), []);
 
   // Maximize / restore settle: the OS zooms the window while the layout snaps
   // underneath, and the seam reads as a jarring reflow. A short settle on the
@@ -312,17 +394,35 @@ export default function App() {
     // player (queue), settings (quality/speed/fades) and library (history)
     // alike, so the first load never reads a default over a saved value.
     const stores = [usePlayer.persist, useSettings.persist, useLibrary.persist];
-    if (stores.every((p) => p.hasHydrated())) {
+    const boot = (): void => {
       engineBoot();
+      initAutoplay();
+    };
+    if (stores.every((p) => p.hasHydrated())) {
+      boot();
       return;
     }
     const unsubs = stores.map((p) =>
       p.onFinishHydration(() => {
-        if (stores.every((x) => x.hasHydrated())) engineBoot();
+        if (stores.every((x) => x.hasHydrated())) boot();
       })
     );
     return () => unsubs.forEach((u) => u());
   }, []);
+
+  // The launch intro (src/intro.ts) shows the app once it's ready: its first screen rendered with
+  // the saved settings. With Reduce animation on, the intro stops there instead of finishing.
+  useEffect(() => {
+    if (!session.loaded) return;
+    const ready = (): void => {
+      window.dispatchEvent(new CustomEvent("bytune-startup-ready", { detail: { reduceMotion: useSettings.getState().reduceAnimation } }));
+    };
+    if (useSettings.persist.hasHydrated()) {
+      ready();
+      return;
+    }
+    return useSettings.persist.onFinishHydration(ready);
+  }, [session.loaded]);
 
   useKeyboardShortcuts();
   useAmbient();
@@ -361,32 +461,34 @@ export default function App() {
               panelDrop.hovering ? "opacity-100" : "opacity-0"
             }`}
           />
-          <TintWash />
+          <CoverGlow />
+          <SwipeArrow />
           {lyricsCenter ? (
             <LyricsCenter />
           ) : (
             <>
-              <div className="flex-1 min-h-0 overflow-y-auto scroll-host relative" id="view-scroll">
+              {/* No native scrollbar: it would take a strip of its own and cut
+                  full-bleed covers short of the panel's right edge.
+                  PanelScrollbar draws the thumb over the page instead. */}
+              <div ref={viewScrollRef} className="flex-1 min-h-0 overflow-y-auto no-scrollbar relative" id="view-scroll">
                 {/* The reload nonce rides in the key: a bump remounts the current
                     view so its data effects re-run — that is the Refresh button's
                     mechanism everywhere except Home (which re-orchestrates its
                     feed without a remount). */}
-                <div key={`${viewReloadNonce}:${viewName}`} className="animate-rise-in px-10 pt-5 pb-6">
+                <div key={`${viewReloadNonce}:${viewName}`} className="view-page animate-rise-in px-10 pt-5 pb-6">
                   <ErrorBoundary>
                     <CurrentView />
                   </ErrorBoundary>
                 </div>
               </div>
+              <PanelScrollbar target={viewScrollRef} />
               {/* Frosted band behind the search filter row. It lives OUTSIDE
-                  the scroller on purpose: in-flow content is clipped before
-                  the 14px scrollbar gutter, so a band inside the list can
-                  never touch the panel's right edge. From here it spans the
-                  full panel width (clipped by main's rounded corners) and
-                  reads the list's scroll through the shared timeline hoisted
-                  by timeline-scope on <main>. Tree order puts it above the
-                  scrolling rows; the sticky pills (z-10 inside the scroller)
-                  paint above it, so they stay sharp while the rows behind
-                  them blur. */}
+                  the scroller, so it stays put over the panel's full width
+                  (clipped by main's rounded corners) and reads the list's
+                  scroll through the shared timeline hoisted by timeline-scope
+                  on <main>. Tree order puts it above the scrolling rows; the
+                  sticky pills (z-10 inside the scroller) paint above it, so
+                  they stay sharp while the rows behind them blur. */}
               {viewName === "search" && (
                 <div aria-hidden className="search-band pointer-events-none absolute inset-x-0 top-0 h-16" />
               )}
@@ -398,7 +500,9 @@ export default function App() {
       <PlayerBar />
       <NowPlaying />
       <Dialog />
+      <PlaylistPicker />
       <ContextMenu />
+      <FileDropOverlay />
       <Toasts />
     </div>
   );

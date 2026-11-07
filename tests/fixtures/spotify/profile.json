@@ -1,0 +1,12 @@
+{
+ "data": {
+  "me": {
+   "profile": {
+    "__typename": "UserProfile",
+    "name": "Test Listener",
+    "username": "31abcxyz",
+    "avatar": null
+   }
+  }
+ }
+}

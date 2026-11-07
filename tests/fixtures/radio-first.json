@@ -1,0 +1,1504 @@
+{
+ "contents": {
+  "singleColumnMusicWatchNextResultsRenderer": {
+   "tabbedRenderer": {
+    "watchNextTabbedResultsRenderer": {
+     "tabs": [
+      {
+       "tabRenderer": {
+        "title": "Up next",
+        "content": {
+         "musicQueueRenderer": {
+          "content": {
+           "playlistPanelRenderer": {
+            "title": null,
+            "playlistId": "RDAMVMQLj6W87lWII",
+            "isInfinite": true,
+            "contents": [
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "QLj6W87lWII",
+               "title": {
+                "runs": [
+                 {
+                  "text": "Cool for the Summer"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "Demi Lovato",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UCwem2sj-QUJCiWiPAo9JuAw",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "Confident",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_0QMX0BmrCkk",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2015"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "3:35"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "3 minutes, 35 seconds"
+                 }
+                }
+               },
+               "badges": [
+                {
+                 "musicInlineBadgeRenderer": {
+                  "trackingParams": "COYHEKHtAhgAIhMIy_76_K3mlwMV0Uv1BR3J5zrE",
+                  "icon": {
+                   "iconType": "MUSIC_EXPLICIT_BADGE"
+                  },
+                  "accessibilityData": {
+                   "accessibilityData": {
+                    "label": "Explicit"
+                   }
+                  }
+                 }
+                }
+               ],
+               "selected": true,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/7sbfUeETImYAPOLcW2bwe_YVqz0hQ9Rv5HIE9Ux-yrfi6elVl-TmmGOJgBZ7Q43NuXtEfKGvxDV-djk=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "QLj6W87lWII",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "8DmPZaCLMcE",
+               "title": {
+                "runs": [
+                 {
+                  "text": "Heart Attack"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "Demi Lovato",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UCwem2sj-QUJCiWiPAo9JuAw",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "Demi",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_mXdQvyCqLnx",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2013"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "3:31"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "3 minutes, 31 seconds"
+                 }
+                }
+               },
+               "selected": false,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/UcbgzRJGaTlQlUCsoKYZBXSE4vXB_9BokfLKnr6VMlIZ3Ejks7EkHRTusp_nk8HZOoUp4vWC1GiPSHkK=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "8DmPZaCLMcE",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "EO4_qL7GCHQ",
+               "title": {
+                "runs": [
+                 {
+                  "text": "Harleys In Hawaii"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "Katy Perry",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UC_7s69e1mDS3lgcTMJEPjCg",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "Smile",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_h3KXgteP7ug",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2020"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "3:06"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "3 minutes, 6 seconds"
+                 }
+                }
+               },
+               "selected": false,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/c4VEWZqZ8rlODHfat1tnaErQPN9LHGLmu47wDdErUw0PeV1OdITYWgmlG26tuVAKiH-QX0tGikHWGSk=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "EO4_qL7GCHQ",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "9jdLnFYQh4s",
+               "title": {
+                "runs": [
+                 {
+                  "text": "All The Stars (From \"Black Panther: The Album\")"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "Kendrick Lamar",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UCprAFmT0C6O4X0ToEXpeFTQ",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " & "
+                 },
+                 {
+                  "text": "SZA",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UCeKDV9JgivrXehVluw5bKFA",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "All the Stars",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_GS8Kl4QRzI2",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2018"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "3:56"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "3 minutes, 56 seconds"
+                 }
+                }
+               },
+               "badges": [
+                {
+                 "musicInlineBadgeRenderer": {
+                  "trackingParams": "CKwHEKHtAhgAIhMIy_76_K3mlwMV0Uv1BR3J5zrE",
+                  "icon": {
+                   "iconType": "MUSIC_EXPLICIT_BADGE"
+                  },
+                  "accessibilityData": {
+                   "accessibilityData": {
+                    "label": "Explicit"
+                   }
+                  }
+                 }
+                }
+               ],
+               "selected": false,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/vJiUJUmTcE5r7l4kKyDzW8ma9PcSNuJzkY3CDeiXZfFBGq2ka5DYH4_l9gKB0yxgROoAE0W6c7GoxYg=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "9jdLnFYQh4s",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "kIft-LUHHVA",
+               "title": {
+                "runs": [
+                 {
+                  "text": "Espresso"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "Sabrina Carpenter",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UCz51ZodJbYUNfkdPHOjJKKw",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "Short n' Sweet",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_FN2r5jrFXVm",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2024"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "2:56"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "2 minutes, 56 seconds"
+                 }
+                }
+               },
+               "badges": [
+                {
+                 "musicInlineBadgeRenderer": {
+                  "trackingParams": "CJgHEKHtAhgAIhMIy_76_K3mlwMV0Uv1BR3J5zrE",
+                  "icon": {
+                   "iconType": "MUSIC_EXPLICIT_BADGE"
+                  },
+                  "accessibilityData": {
+                   "accessibilityData": {
+                    "label": "Explicit"
+                   }
+                  }
+                 }
+                }
+               ],
+               "selected": false,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/bTWlZSenrOAYgH4r6NAzyDraWQR_wLl3OuRexJ_8h3NZUVHEilRSzUmKNa9YMOFSVcF0YtOuzKdXrt2UHg=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "kIft-LUHHVA",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "3_g2un5M350",
+               "title": {
+                "runs": [
+                 {
+                  "text": "Starboy (feat. Daft Punk)"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "The Weeknd",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UClYV6hHlupm_S_ObS1W-DYw",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "Starboy",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_FWIMEPTHFsY",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2016"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "3:51"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "3 minutes, 51 seconds"
+                 }
+                }
+               },
+               "badges": [
+                {
+                 "musicInlineBadgeRenderer": {
+                  "trackingParams": "CIQHEKHtAhgAIhMIy_76_K3mlwMV0Uv1BR3J5zrE",
+                  "icon": {
+                   "iconType": "MUSIC_EXPLICIT_BADGE"
+                  },
+                  "accessibilityData": {
+                   "accessibilityData": {
+                    "label": "Explicit"
+                   }
+                  }
+                 }
+                }
+               ],
+               "selected": false,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/dcxXIIlest09vnvKznWM9VWQXu1EL7lKxBzXGzwgmVjmMNBm1dEWT_0qn1xrEZYyKF_qRE1TLq8P_JY_mQ=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "3_g2un5M350",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "sEPXrepgujY",
+               "title": {
+                "runs": [
+                 {
+                  "text": "Style"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "Taylor Swift",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UCPC0L1d253x-KuMNwa05TpA",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "1989 (Deluxe)",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_JiAQrbUtBdP",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2014"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "3:51"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "3 minutes, 51 seconds"
+                 }
+                }
+               },
+               "selected": false,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/GcrDhHXqrPm4BjS-4L1c0OHC9iz0ZxmFeRur2A6Aqo9Vm7OfFCBOSVbRzp1M1D1s_3rsvKaC7w6kku0=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "sEPXrepgujY",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "RG-D4bcg54s",
+               "title": {
+                "runs": [
+                 {
+                  "text": "Lush Life"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "Zara Larsson",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UCB-GmTOjewVU2F_7S4ZFmEA",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "So Good",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_WUoGz8CYlsr",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2017"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "3:22"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "3 minutes, 22 seconds"
+                 }
+                }
+               },
+               "selected": false,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/G0ZLSpmHG_Pwz9g85vwwghnldEcVKmw2uans0G9lnMeW1YS0xR5xBrK23BEB87HNNbM-ul0cA-260atTdA=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "RG-D4bcg54s",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "GvdKeZO8IzM",
+               "title": {
+                "runs": [
+                 {
+                  "text": "Solo (feat. Demi Lovato)"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "Clean Bandit",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UCdZLr2GYlZMZOQDPdH3J1Lw",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "Solo",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_tSYR5X16yM8",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2018"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "3:43"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "3 minutes, 43 seconds"
+                 }
+                }
+               },
+               "selected": false,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/dsnD-vxG85VgzsSHNs_GI8mP4_SCJU23g3aNKG4uuLsNOXaujjrupgrLsvNEdFSfusm49OfG3FU5lps=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "GvdKeZO8IzM",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "HfpR4tAmI7E",
+               "title": {
+                "runs": [
+                 {
+                  "text": "Love Me Not"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "Ravyn Lenae",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UCN8pGtbprga7vJL5B4dhXrg",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "Bird's Eye",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_lQ9SYtXVv8K",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2024"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "3:34"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "3 minutes, 34 seconds"
+                 }
+                }
+               },
+               "selected": false,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/9GvLqz3cbA2XyceqbS6IlraFkW5cipVpiINKUoEKPHH41K448Zm9WbBsHncoNG134LsLJq1E5NHsf3g=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "HfpR4tAmI7E",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "_QtN6qocpKU",
+               "title": {
+                "runs": [
+                 {
+                  "text": "greedy"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "Tate McRae",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UCz86IA7ooUetFnUGa_YlsVw",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "THINK LATER",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_jZyAKPIuY8h",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2023"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "2:10"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "2 minutes, 10 seconds"
+                 }
+                }
+               },
+               "badges": [
+                {
+                 "musicInlineBadgeRenderer": {
+                  "trackingParams": "CKUGEKHtAhgAIhMIy_76_K3mlwMV0Uv1BR3J5zrE",
+                  "icon": {
+                   "iconType": "MUSIC_EXPLICIT_BADGE"
+                  },
+                  "accessibilityData": {
+                   "accessibilityData": {
+                    "label": "Explicit"
+                   }
+                  }
+                 }
+                }
+               ],
+               "selected": false,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/UeCrCW0K_07-JzPFFkUn333j153pgVVvbK-eWt_qWJNctshLYai1ES-RdhMA7G02Gbg7_ANQv_6RDbc=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "_QtN6qocpKU",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "KEGZVv6KXL0",
+               "title": {
+                "runs": [
+                 {
+                  "text": "One Last Time"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "Ariana Grande",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UC0076UMUgEng8HORUw_MYHA",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "My Everything (Deluxe)",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_doJku3QBzcl",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2014"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "3:18"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "3 minutes, 18 seconds"
+                 }
+                }
+               },
+               "selected": false,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/sC_NN7UUnVPL2NIgKmJZvZUpX8F9dUQD4G_FVtfgNNnmGR0wCGXaeWXpSuCCs90BOF0VxEOgUy3I9aBy=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "KEGZVv6KXL0",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "fiFulIBZ8M0",
+               "title": {
+                "runs": [
+                 {
+                  "text": "Confident"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "Demi Lovato",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UCwem2sj-QUJCiWiPAo9JuAw",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "Confident",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_0QMX0BmrCkk",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2015"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "3:26"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "3 minutes, 26 seconds"
+                 }
+                }
+               },
+               "badges": [
+                {
+                 "musicInlineBadgeRenderer": {
+                  "trackingParams": "CP4FEKHtAhgAIhMIy_76_K3mlwMV0Uv1BR3J5zrE",
+                  "icon": {
+                   "iconType": "MUSIC_EXPLICIT_BADGE"
+                  },
+                  "accessibilityData": {
+                   "accessibilityData": {
+                    "label": "Explicit"
+                   }
+                  }
+                 }
+                }
+               ],
+               "selected": false,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/7sbfUeETImYAPOLcW2bwe_YVqz0hQ9Rv5HIE9Ux-yrfi6elVl-TmmGOJgBZ7Q43NuXtEfKGvxDV-djk=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "fiFulIBZ8M0",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "aWkPBCF8rFU",
+               "title": {
+                "runs": [
+                 {
+                  "text": "Beauty And A Beat (feat. Nicki Minaj)"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "Justin Bieber",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UCGvj8kfUV5Q6lzECIrGY19g",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "Believe",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_54Xz2HszG0n",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2012"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "3:48"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "3 minutes, 48 seconds"
+                 }
+                }
+               },
+               "selected": false,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/jXXzY2fTfxgr0_wR_I_V8W3Ai0L3ece217Biqm0tY36I9VAoce09xXmjgt8mXggTVgGGBHdJ3eAyICY=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "aWkPBCF8rFU",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "J7p4bzqLvCw",
+               "title": {
+                "runs": [
+                 {
+                  "text": "Blinding Lights"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "The Weeknd",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UClYV6hHlupm_S_ObS1W-DYw",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "Blinding Lights",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_4U7yfKKFZLv",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2019"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "3:22"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "3 minutes, 22 seconds"
+                 }
+                }
+               },
+               "selected": false,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/R_cjQK3wwLPEzri1jerx-79zgzGocoKvwGU3NMONaTsaMM0Idd641pfB8r5jgfpn6I8JAoFtf9RBIcI=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "J7p4bzqLvCw",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "6eW99oNNRvI",
+               "title": {
+                "runs": [
+                 {
+                  "text": "Love Me Like You Do (From \"Fifty Shades Of Grey\")"
+                 }
+                ]
+               },
+               "longBylineText": {
+                "runs": [
+                 {
+                  "text": "Ellie Goulding",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "UCZSxBlUEOKgXkzaj_VlBLlg",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "Delirium (Deluxe)",
+                  "navigationEndpoint": {
+                   "browseEndpoint": {
+                    "browseId": "MPREb_w1vZcotARQg",
+                    "browseEndpointContextSupportedConfigs": {
+                     "browseEndpointContextMusicConfig": {
+                      "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "text": " • "
+                 },
+                 {
+                  "text": "2015"
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "4:13"
+                 }
+                ],
+                "accessibility": {
+                 "accessibilityData": {
+                  "label": "4 minutes, 13 seconds"
+                 }
+                }
+               },
+               "selected": false,
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://yt3.googleusercontent.com/3RCDbhJsO0mTsAT7tKq7g3vuV5pzGN6lCLpO-vRTUWrYMxewvkRkkm7HmAOoAuE2nzPZa_ZeJQ7hZcI=w544-h544-l90-rj",
+                  "width": 544,
+                  "height": 544
+                 }
+                ]
+               },
+               "navigationEndpoint": {
+                "watchEndpoint": {
+                 "videoId": "6eW99oNNRvI",
+                 "playlistId": "RDAMVMQLj6W87lWII",
+                 "watchEndpointMusicSupportedConfigs": {
+                  "watchEndpointMusicConfig": {
+                   "hasPersistentPlaylistPanel": true,
+                   "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                  }
+                 }
+                }
+               }
+              }
+             }
+            ],
+            "continuations": [
+             {
+              "nextRadioContinuationData": {
+               "continuation": "CDISOBILQmM5aWpvZ0dtdFUiEVJEQU1WTVFMajZXODdsV0lJODHQAQH6ARBENjI1QUI0MDI5NEQzODFEGAo%3D",
+               "clickTrackingParams": "CCgQxyAiEwjL_vr8reaXAxXRS_UFHcnnOsTKAQSUKgsP"
+              }
+             }
+            ]
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   }
+  }
+ }
+}

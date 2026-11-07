@@ -7,14 +7,15 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { Heart, ListPlus, MoreHorizontal, MoreVertical, Play, Shuffle, User } from "lucide-react";
-import { Artwork, ErrorState, ExplicitBadge, HeroSkeleton, ListSkeleton, ShelfScroller } from "../components/primitives";
+import { Artwork, EqBars, ErrorState, ExplicitBadge, HeroSkeleton, ListSkeleton, ShelfScroller } from "../components/primitives";
 import { trackMenuItems } from "../lib/trackActions";
 import { useDrag } from "../lib/dnd";
-import { fmtTime } from "../lib/format";
-import { useArtworkPalette } from "../lib/palette";
+import { fmtTime, shortTitle, titleStep } from "../lib/format";
+import { FitText } from "../components/FitText";
+import { pageColors, useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
 import { useLibrary } from "../stores/library";
-import { usePlayer } from "../stores/player";
+import { usePlayer, useTrackPlayback } from "../stores/player";
 import { useUI } from "../stores/ui";
 import type { ArtistPageData, HomeItem, Track } from "../types";
 
@@ -42,43 +43,53 @@ function SectionCard({ item }: { item: HomeItem }) {
   };
 
   return (
-    <button onClick={onOpen} className="group w-[172px] shrink-0 text-left cursor-pointer">
+    <button onClick={onOpen} className="fit-host group w-[172px] shrink-0 text-left cursor-pointer">
       <Artwork
         src={thumb}
         className={round ? "w-[172px] h-[172px] rounded-full" : "w-[172px] h-[172px] rounded-[10px]"}
         iconClassName="w-7 h-7"
         alt=""
       />
-      <div className="mt-2 text-[14px] font-semibold text-ink-hi truncate leading-snug">{title}</div>
-      <div className="text-[12.5px] text-ink-dim truncate mt-0.5">{subtitle}</div>
+      <FitText lines={2} text={shortTitle(title)} full={title} className="mt-2 text-[14px] font-semibold text-ink-hi leading-snug" />
+      <FitText text={subtitle} className="text-[12.5px] text-ink-dim mt-0.5" />
     </button>
   );
 }
 
-function SongRow({ song, songs, index }: { song: Track; songs: Track[]; index: number }) {
+function SongRow({ song, songs, index, from }: { song: Track; songs: Track[]; index: number; from: string }) {
   const playQueue = usePlayer((s) => s.playQueue);
   const openContextMenu = useUI((s) => s.openContextMenu);
   const drag = useDrag({ track: song });
+  const state = useTrackPlayback(song.id);
   const openMenu = (x: number, y: number): void => {
     openContextMenu(x, y, trackMenuItems(song));
   };
   return (
     <div
       {...drag.props}
-      onClick={() => playQueue(songs, index)}
+      onClick={() => playQueue(songs, index, from)}
       onContextMenu={(e) => {
         e.preventDefault();
         openMenu(e.clientX, e.clientY);
       }}
-      className={`group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none hover:bg-ink-hi/[0.05] ${drag.dragging ? "opacity-40" : ""}`}
+      className={`fit-host group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
+        state ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.05]"
+      } ${drag.dragging ? "opacity-40" : ""}`}
     >
-      <Artwork src={song.thumb} className="w-[52px] h-[52px] rounded-lg shrink-0" iconClassName="w-4 h-4" alt="" />
+      <span className="relative shrink-0">
+        <Artwork src={song.thumb} className="w-[52px] h-[52px] rounded-lg" iconClassName="w-4 h-4" alt="" />
+        {state === "playing" && (
+          <span className="absolute inset-0 grid place-items-center rounded-lg bg-black/50">
+            <EqBars />
+          </span>
+        )}
+      </span>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 text-[16px] font-semibold tracking-[-0.2px] text-ink-hi">
           {song.explicit && <ExplicitBadge />}
-          <span className="truncate">{song.title}</span>
+          <FitText text={shortTitle(song.title)} full={song.title} />
         </div>
-        <div className="text-[14px] truncate text-ink-dim mt-0.5">{song.artist}</div>
+        <FitText text={song.artist} className="text-[14px] text-ink-dim mt-0.5" />
       </div>
       <div className="shrink-0 text-[13px] text-ink-faint tabular-nums">
         {song.duration > 0 ? fmtTime(song.duration) : ""}
@@ -153,7 +164,7 @@ export function ArtistView({ artistId }: { artistId: string }) {
   const [nonce, setNonce] = useState(0);
   const playQueue = usePlayer((s) => s.playQueue);
 
-  useArtworkPalette(state?.artist.thumb ?? null);
+  const pagePalette = useArtworkPalette(state?.artist.thumb ?? null);
 
   useEffect(() => {
     let cancelled = false;
@@ -196,7 +207,7 @@ export function ArtistView({ artistId }: { artistId: string }) {
   const shuffle = (): void => {
     if (!top.length) return;
     usePlayer.setState({ shuffle: true });
-    playQueue(top, Math.floor(Math.random() * top.length));
+    playQueue(top, Math.floor(Math.random() * top.length), artistId);
   };
 
   const openMore = (x: number, y: number): void => {
@@ -231,7 +242,7 @@ export function ArtistView({ artistId }: { artistId: string }) {
   };
 
   return (
-    <div className="page-tint -mt-5">
+    <div className="page-tint -mt-5" style={pageColors(pagePalette)}>
       {/* Hero — full-bleed photo, scrim dissolving into the page, name and
           stat chips over the lower edge, exactly the mobile artist header. */}
       <div className="relative -mx-10 overflow-hidden">
@@ -254,7 +265,9 @@ export function ArtistView({ artistId }: { artistId: string }) {
         </div>
 
         <div className="relative flex flex-col items-center text-center px-8 pt-[300px] pb-2">
-          <h1 className="font-display text-[40px] leading-[1.05] font-extrabold tracking-[-0.03em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)] break-words max-w-3xl line-clamp-2">
+          <h1
+            className={`font-display ${["text-[40px]", "text-[32px]", "text-[26px]"][titleStep(artist.name)]} leading-[1.1] font-extrabold tracking-[-0.03em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)] break-words max-w-3xl`}
+          >
             {artist.name}
           </h1>
 
@@ -290,7 +303,7 @@ export function ArtistView({ artistId }: { artistId: string }) {
               <Shuffle className="w-[18px] h-[18px]" />
             </button>
             <button
-              onClick={() => top.length && playQueue(top, 0)}
+              onClick={() => top.length && playQueue(top, 0, artistId)}
               disabled={!top.length}
               className="inline-flex items-center gap-2 h-11 px-6 rounded-full bg-black/45 border border-white/10 text-[14.5px] font-semibold text-white backdrop-blur-sm hover:bg-black/60 transition-all active:scale-[0.98] disabled:opacity-40"
             >
@@ -318,7 +331,7 @@ export function ArtistView({ artistId }: { artistId: string }) {
             <div>
               {top.map((song, i) => (
                 <div key={`${song.id}-${i}`}>
-                  <SongRow song={song} songs={top} index={i} />
+                  <SongRow song={song} songs={top} index={i} from={artistId} />
                   {i < top.length - 1 && <div className="h-px bg-ink-hi/[0.05] ml-[80px] mr-3" />}
                 </div>
               ))}

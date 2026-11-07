@@ -1,7 +1,7 @@
 /** Transient UI state: navigation, panels, toasts, context menu, dialogs. */
 import type { LucideIcon } from "lucide-react";
 import { create } from "zustand";
-import type { SearchFilter } from "../types";
+import type { SearchFilter, Track } from "../types";
 
 export type ViewName =
   | "home"
@@ -10,13 +10,22 @@ export type ViewName =
   | "library"
   | "playlists"
   | "playlist"
+  /** a folder of the listener's playlists (param: its id) */
+  | "folder"
   | "ytplaylist"
   | "album"
   | "artist"
   | "downloads"
   | "local"
   | "replay"
-  | "settings";
+  | "podcast"
+  | "podcasts"
+  | "mood"
+  | "settings"
+  /** a playlist being imported (lib/importSongs) */
+  | "import"
+  /** the connected Spotify account's playlists; with a param, one of them (its id, or "liked") */
+  | "spotify";
 
 export interface View {
   name: ViewName;
@@ -33,16 +42,33 @@ export interface NavEntry {
   scroll: number;
 }
 
+/** What a menu acts on (a song, a playlist, an album, an artist): drawn at its top, lit by its cover. */
+export interface MenuSubject {
+  title: string;
+  subtitle?: string;
+  thumb?: string | null;
+  /** an artist: a round picture */
+  round?: boolean;
+}
+
 export interface MenuItem {
   label?: string;
+  /** a second line under the label; the row then shows its icon in a tile (the Create menu) */
+  note?: string;
   icon?: LucideIcon;
   /** extra classes for the icon (e.g. fill-accent for a filled pin) */
   iconClassName?: string;
   danger?: boolean;
   disabled?: boolean;
+  /** one of a set of choices: true on the chosen one (a check at the right), false on the rest */
+  checked?: boolean;
+  /** `checked` is this row's own on/off, not one choice among the set (a checkbox: several can be on) */
+  toggle?: boolean;
   separatorBefore?: boolean;
   /** section label — rendered as a non-interactive caption */
   header?: boolean;
+  /** what the menu acts on: drawn as the menu's header, above everything else, wherever it sits */
+  subject?: MenuSubject;
   /** nested menu — opens on hover/click, one at a time */
   children?: MenuItem[];
   action?: () => void;
@@ -56,6 +82,8 @@ export interface ContextMenuState {
   above?: boolean;
   /** treat x as the RIGHT edge — the menu right-aligns to it (settings selects) */
   alignRight?: boolean;
+  /** who opened it, so a button can show itself pressed while its menu is up */
+  owner?: string;
 }
 
 export interface Toast {
@@ -77,6 +105,10 @@ export interface DialogRequest {
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
+  /** only tells the user something: one button, no Cancel */
+  notice?: boolean;
+  /** a multi-line text field (Enter adds a line, Ctrl/Cmd+Enter confirms) */
+  multiline?: boolean;
   onConfirm: (value: string) => void;
 }
 
@@ -89,8 +121,8 @@ export interface UIState {
   pendingScroll: number | null;
   searchQuery: string;
   searchFilter: SearchFilter;
-  /** Right panel mode: song details (default) or the Queue sheet. */
-  rightPanel: "details" | "queue";
+  /** Right panel mode: song details (default), the Queue sheet, or Rooms. */
+  rightPanel: "details" | "queue" | "room";
   /** Synced lyrics rendered in the centre pane over the current view. */
   lyricsCenter: boolean;
   nowPlayingOpen: boolean;
@@ -101,6 +133,8 @@ export interface UIState {
   toasts: Toast[];
   contextMenu: ContextMenuState | null;
   dialog: DialogRequest | null;
+  /** songs waiting for the "Add to playlists" picker */
+  playlistPicker: Track[] | null;
   /** Artwork URL the pointer is hovering — drives the middle panel's wash.
       null = at rest, the wash wears the playing track's colour. */
   tintThumb: string | null;
@@ -112,11 +146,21 @@ export interface UIState {
   viewReloadNonce: number;
 
   navigate(view: View): void;
+  /** Swap the current view in place, with no history step: a Settings category. Back still leaves
+      Settings in one step, and the entry keeps the category for when you come back to it. */
+  replaceView(view: View): void;
+  /** Show Settings, on `section` when given (a Settings category id). Already open: bring it into
+      view (a lyrics overlay may be covering it) without stacking a second Settings entry. */
+  openSettings(section?: string): void;
+  /** The profile button: open Settings, or close it when it's what you're looking at (back to
+      where you were; home when there's nowhere to go back to). */
+  toggleSettings(): void;
   goBack(): void;
   goForward(): void;
   setSearchQuery(q: string): void;
   setSearchFilter(f: SearchFilter): void;
   toggleQueue(): void;
+  toggleRoom(): void;
   toggleLyrics(): void;
   toggleNowPlaying(): void;
   setOsFullscreen(fs: boolean): void;
@@ -124,10 +168,12 @@ export interface UIState {
   toast(message: string, kind?: Toast["kind"], duration?: number): void;
   dismissToast(id: number): void;
   setTintThumb(url: string | null): void;
-  openContextMenu(x: number, y: number, items: MenuItem[], options?: { above?: boolean; alignRight?: boolean }): void;
+  openContextMenu(x: number, y: number, items: MenuItem[], options?: { above?: boolean; alignRight?: boolean; owner?: string }): void;
   closeContextMenu(): void;
   openDialog(req: DialogRequest): void;
   closeDialog(): void;
+  openPlaylistPicker(tracks: Track[]): void;
+  closePlaylistPicker(): void;
   bumpHomeReload(): void;
   bumpViewReload(): void;
   clearPendingScroll(): void;
@@ -135,19 +181,26 @@ export interface UIState {
 
 let toastSeq = 1;
 
+/** Leaving a card waits this long before the wash goes back to the playing track: crossing the gap to
+ *  the next card goes straight to its colour, without a flash of the playing track's in between. */
+const TINT_LET_GO_MS = 160;
+let tintLetGo: ReturnType<typeof setTimeout> | undefined;
+
 /**
  * Spread onto any card or row that represents playable art (song, album,
- * artist, playlist): while the pointer is over it, the middle panel's wash
- * borrows that artwork's colour (see TintWash in App.tsx). Leaving the card
- * hands the wash back to the playing track.
+ * artist, playlist): while the pointer is over it, the middle panel's glow
+ * shows that artwork (see components/CoverGlow). Leaving the card hands the
+ * glow back to the playing track.
  */
 export function tintHoverHandlers(thumb: string | null | undefined) {
   return {
     onMouseEnter: (): void => {
+      clearTimeout(tintLetGo);
       useUI.getState().setTintThumb(thumb ?? null);
     },
     onMouseLeave: (): void => {
-      useUI.getState().setTintThumb(null);
+      clearTimeout(tintLetGo);
+      tintLetGo = setTimeout(() => useUI.getState().setTintThumb(null), TINT_LET_GO_MS);
     },
   };
 }
@@ -174,13 +227,14 @@ export const useUI = create<UIState>((set, get) => ({
   pendingScroll: null,
   searchQuery: "",
   searchFilter: "all",
-  rightPanel: "details" as "details" | "queue",
+  rightPanel: "details" as "details" | "queue" | "room",
   lyricsCenter: false,
   nowPlayingOpen: false,
   osFullscreen: false,
   toasts: [],
   contextMenu: null,
   dialog: null,
+  playlistPicker: null,
   tintThumb: null,
   homeReloadNonce: 0,
   viewReloadNonce: 0,
@@ -202,7 +256,34 @@ export const useUI = create<UIState>((set, get) => ({
       navFuture: [],
       lyricsCenter: false,
       tintThumb: null,
+      // A new page opens at its top; only back/forward return to a left scroll.
+      pendingScroll: 0,
     });
+  },
+
+  replaceView(view) {
+    if (sameView(get().view, view)) return;
+    set({ view, pendingScroll: 0, lyricsCenter: false, tintThumb: null });
+  },
+
+  openSettings(section) {
+    const { view } = get();
+    if (view.name !== "settings") {
+      get().navigate(section ? { name: "settings", param: section } : { name: "settings" });
+      return;
+    }
+    set({ lyricsCenter: false });
+    if (section) get().replaceView({ name: "settings", param: section });
+  },
+
+  toggleSettings() {
+    const { view, lyricsCenter, navPast } = get();
+    if (view.name !== "settings" || lyricsCenter) {
+      get().openSettings();
+      return;
+    }
+    if (navPast.length) get().goBack();
+    else get().navigate({ name: "home" });
   },
 
   goBack() {
@@ -247,6 +328,10 @@ export const useUI = create<UIState>((set, get) => ({
     set({ rightPanel: get().rightPanel === "queue" ? "details" : "queue" });
   },
 
+  toggleRoom() {
+    set({ rightPanel: get().rightPanel === "room" ? "details" : "room" });
+  },
+
   toggleLyrics() {
     set({ lyricsCenter: !get().lyricsCenter });
   },
@@ -280,7 +365,7 @@ export const useUI = create<UIState>((set, get) => ({
   },
 
   openContextMenu(x, y, items, options) {
-    set({ contextMenu: { x, y, items, above: options?.above, alignRight: options?.alignRight } });
+    set({ contextMenu: { x, y, items, above: options?.above, alignRight: options?.alignRight, owner: options?.owner } });
   },
 
   closeContextMenu() {
@@ -291,6 +376,12 @@ export const useUI = create<UIState>((set, get) => ({
     set({ dialog: req });
   },
 
+  openPlaylistPicker(tracks) {
+    set({ playlistPicker: tracks });
+  },
+  closePlaylistPicker() {
+    set({ playlistPicker: null });
+  },
   closeDialog() {
     set({ dialog: null });
   },

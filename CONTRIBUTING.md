@@ -7,7 +7,7 @@ Thanks for helping improve ByTune! This document covers what you need to get a d
 Prerequisites:
 
 - **Windows 10/11** to run and package the Windows edition (NSIS installer)
-- **macOS 11+** to run and package the macOS edition — `.dmg` artifacts can only be produced on macOS, and the Xcode Command Line Tools are needed for native build steps (`xcode-select --install`)
+- **macOS 13+** to run and package the macOS edition — `.dmg` artifacts can only be produced on macOS, and the Xcode Command Line Tools are needed for native build steps (`xcode-select --install`)
 - **Node.js** — an up-to-date LTS version
 - **Git**
 
@@ -36,13 +36,23 @@ Before opening a pull request, please make sure `npm run typecheck` and `npm tes
 
 The Windows and macOS editions share one codebase: platform-specific behavior lives behind `process.platform` guards in `electron/main.ts`, `electron/mac-menu.ts`, `src/lib/platform.ts` and `src/lib/menuCommands.ts` — keep it that way, and check that changes work on both platforms (or are explicitly guarded).
 
+## Releasing
+
+The installed app checks GitHub's latest release for a newer version (`electron/updater.ts`). Windows installs it in the app; a Mac sends people to bytune.space, because macOS only installs updates to apps signed with an Apple Developer ID.
+
+1. Set `version` in `package.json`. The app, its About page and the update check all read it from there.
+2. `npm run dist:win` writes three files to `release/`: `ByTune-Setup.exe`, `latest.yml` and `ByTune-Setup.exe.blockmap`.
+3. Create the GitHub release with the tag `v<version>` and upload all three. Without `latest.yml`, Windows users are still told about the update, but have to download it themselves.
+4. Pushing the tag starts the macOS workflow, which attaches the Mac ZIPs and DMGs to that release.
+5. Bump the Mac download links in the website's `src/lib/site.ts`. They include the version number.
+
 ## Reporting bugs
 
 Open a [GitHub issue](https://github.com/rishiteja21/ByTune/issues) and include:
 
 - What you did and what happened
 - The ByTune version (Settings → About, or the release tag)
-- Your OS and version (Windows 10/11, or macOS 11+ on Apple Silicon/Intel)
+- Your OS and version (Windows 10/11, or macOS 13+ on Apple Silicon/Intel)
 
 Playback issues are often upstream changes on YouTube's side — mention whether playback fails for everything or just some tracks.
 

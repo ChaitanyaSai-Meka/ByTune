@@ -7,14 +7,17 @@
  */
 import { useEffect, useState } from "react";
 import { Disc3, ListPlus, MoreHorizontal, Play, Shuffle, User } from "lucide-react";
-import { Artwork, ErrorState, ExplicitBadge, HeroSkeleton, ListSkeleton } from "../components/primitives";
+import { Artwork, EqBars, ErrorState, ExplicitBadge, HeroSkeleton, ListSkeleton } from "../components/primitives";
 import { trackMenuItems } from "../lib/trackActions";
+import { downloadAll } from "../lib/downloads";
+import { copyLink, youtubeAlbumLink } from "../lib/playlistShare";
 import { useDrag } from "../lib/dnd";
-import { fmtTime } from "../lib/format";
-import { useArtworkPalette } from "../lib/palette";
+import { fmtTime, PAGE_TITLE_SIZE, shortTitle, titleSource, titleStep } from "../lib/format";
+import { FitText } from "../components/FitText";
+import { pageColors, useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
 import { queueAlbum } from "../lib/album";
-import { usePlayer } from "../stores/player";
+import { usePlayer, useTrackPlayback } from "../stores/player";
 import { useUI } from "../stores/ui";
 import type { Album, Track } from "../types";
 
@@ -35,7 +38,7 @@ export function AlbumView({ albumId }: { albumId: string }) {
   // The whole page wears the artwork's colour: page-tint paints the host with
   // the per-page ArtworkPalette CSS variables, then the hero gradients read
   // from the same wash + accent.
-  useArtworkPalette(data?.album.thumb ?? null);
+  const pagePalette = useArtworkPalette(data?.album.thumb ?? null);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,7 +100,7 @@ export function AlbumView({ albumId }: { albumId: string }) {
   };
 
   return (
-    <div className="page-tint -mt-5">
+    <div className="page-tint -mt-5" style={pageColors(pagePalette)}>
       {/* Hero — the cover full-bleed, credit + metadata over its lower edge. */}
       <div className="relative -mx-10 overflow-hidden">
         <div className="absolute inset-0">
@@ -121,9 +124,15 @@ export function AlbumView({ albumId }: { albumId: string }) {
         </div>
 
         <div className="relative flex flex-col items-center text-center px-8 pt-[240px] pb-2">
-          <h1 className="font-display text-[34px] leading-[1.35] font-extrabold tracking-[-0.03em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)] break-words max-w-3xl line-clamp-2">
-            {album.title}
+          <h1
+            className={`font-display ${PAGE_TITLE_SIZE[titleStep(shortTitle(album.title))]} leading-[1.2] font-extrabold tracking-[-0.03em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)] break-words max-w-3xl`}
+            title={shortTitle(album.title) !== album.title ? album.title : undefined}
+          >
+            {shortTitle(album.title)}
           </h1>
+          {titleSource(album.title) && (
+            <div className="text-[13px] text-white/60 mt-1 drop-shadow-[0_1px_6px_rgba(0,0,0,0.5)]">From {titleSource(album.title)}</div>
+          )}
           {album.artistId ? (
             <button
               onClick={() => navigate({ name: "artist", param: album.artistId! })}
@@ -173,6 +182,12 @@ export function AlbumView({ albumId }: { albumId: string }) {
                     disabled: !tracks.length,
                     action: () => void queueAlbum(albumId, false),
                   },
+                  {
+                    label: "Download all",
+                    disabled: !tracks.length,
+                    action: () => downloadAll(tracks, `"${album.title}"`),
+                  },
+                  { label: "Copy link", action: () => copyLink(youtubeAlbumLink(albumId)) },
                 ])
               }
               title="More options"
@@ -239,6 +254,7 @@ function AlbumTrackRow({ song, index, tracks }: { song: Track; index: number; tr
   const openContextMenu = useUI((s) => s.openContextMenu);
   const currentId = usePlayer((s) => s.queue[s.index]?.id ?? null);
   const drag = useDrag({ track: song });
+  const state = useTrackPlayback(song.id);
   const openMenu = (x: number, y: number): void => {
     openContextMenu(x, y, trackMenuItems(song));
   };
@@ -250,14 +266,14 @@ function AlbumTrackRow({ song, index, tracks }: { song: Track; index: number; tr
         e.preventDefault();
         openMenu(e.clientX, e.clientY);
       }}
-      className={`group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
+      className={`fit-host group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
         currentId === song.id ? "bg-ink-hi/[0.14]" : "hover:bg-ink-hi/[0.05]"
       } ${drag.dragging ? "opacity-40" : ""}`}
     >
       {/* An album's numbers are the sleeve's own — numbered rows, like mobile. */}
       <div className="w-7 shrink-0 grid place-items-center text-[13px] text-ink-faint tabular-nums">
         {currentId === song.id ? (
-          <span className="text-accent">▸</span>
+          state === "playing" ? <EqBars /> : <span className="text-accent">▸</span>
         ) : (
           <>
             <span className="group-hover:hidden">{index + 1}</span>
@@ -278,9 +294,9 @@ function AlbumTrackRow({ song, index, tracks }: { song: Track; index: number; tr
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 text-[16px] font-semibold tracking-[-0.2px] text-ink-hi">
           {song.explicit && <ExplicitBadge />}
-          <span className="truncate">{song.title}</span>
+          <FitText text={shortTitle(song.title)} full={song.title} />
         </div>
-        <div className="text-[14px] truncate text-ink-dim mt-0.5">{song.artist}</div>
+        <FitText text={song.artist} className="text-[14px] text-ink-dim mt-0.5" />
       </div>
       <div className="shrink-0 text-[13px] text-ink-faint tabular-nums">
         {song.duration > 0 ? fmtTime(song.duration) : ""}

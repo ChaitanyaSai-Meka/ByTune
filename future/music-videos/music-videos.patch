@@ -1,0 +1,755 @@
+diff --git a/electron/audio-format.ts b/electron/audio-format.ts
+index d66ee65..d9592a9 100644
+--- a/electron/audio-format.ts
++++ b/electron/audio-format.ts
+@@ -140,3 +140,49 @@ export function streamTtlMs(url: string, now: number): number {
+   if (!expire) return 10 * 60_000;
+   return Math.min(6 * 3_600_000, Math.max(0, expire * 1000 - now - 5 * 60_000));
+ }
++
++export interface PickedVideo {
++  url: string;
++  mime: string;
++  itag?: number;
++  clen?: number;
++  height?: number;
++}
++
++/**
++ * The picture of a music video, for Now Playing: a video-only rendition whose
++ * short side is at most `maxShortSide`, VP9 over H.264 over AV1, 30 fps or
++ * less preferred. A catalogue song's "video" is its cover as a near-still
++ * picture, so it returns null and the cover stays: measured per pixel, those
++ * stills run 0.2–0.4 bits per second and real videos 1.2 and up.
++ */
++export async function pickVideo(
++  info: any,
++  yt: any,
++  maxShortSide = 720,
++  pin?: { itag?: number; clen?: number }
++): Promise<PickedVideo | null> {
++  const codecRank = (f: any): number => {
++    const m = String(f?.mime_type ?? "");
++    return /vp0?9/.test(m) ? 3 : m.includes("avc1") ? 2 : m.includes("av01") ? 1 : 0;
++  };
++  const shortSide = (f: any): number => Math.min(Number(f?.width) || 0, Number(f?.height) || 0);
++  const candidates: any[] = (info?.streaming_data?.adaptive_formats ?? []).filter(
++    (f: any) => f?.has_video && !f?.has_audio && !f?.is_type_otf && codecRank(f) > 0 && shortSide(f) > 0 && shortSide(f) <= maxShortSide
++  );
++  if (!candidates.length) return null;
++  const fast = (f: any): number => (Number(f.fps) > 30 ? 1 : 0);
++  candidates.sort((a, b) => shortSide(b) - shortSide(a) || fast(a) - fast(b) || codecRank(b) - codecRank(a));
++  const pinned = pin?.itag
++    ? candidates.find(
++        (f) => f.itag === pin.itag && (pin.clen == null || f.content_length == null || Number(f.content_length) === pin.clen)
++      )
++    : undefined;
++  const pick = pinned ?? candidates[0];
++  const pixels = (Number(pick.width) || 0) * (Number(pick.height) || 0);
++  if (!pinned && (!pixels || Number(pick.average_bitrate ?? pick.bitrate ?? 0) / pixels < 0.6)) return null;
++  const url = await formatUrl(pick, yt);
++  if (!url) return null;
++  const num = (v: unknown): number | undefined => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : undefined);
++  return { url, mime: String(pick.mime_type ?? "video/mp4"), itag: num(pick.itag), clen: num(pick.content_length), height: num(pick.height) };
++}
+diff --git a/electron/backup-transfer.ts b/electron/backup-transfer.ts
+index 6d50da1..f55b0fe 100644
+--- a/electron/backup-transfer.ts
++++ b/electron/backup-transfer.ts
+@@ -32,6 +32,7 @@ export const SETTINGS_KEYS = new Set([
+   "fullBleedArtwork",
+   "legacyMeshGradient",
+   "animatedCanvas",
++  "showVideos",
+   "syncedLyrics",
+   "blurUnfocusedLyrics",
+   "romanizeLyrics",
+diff --git a/electron/main.ts b/electron/main.ts
+index 80cd764..080e121 100644
+--- a/electron/main.ts
++++ b/electron/main.ts
+@@ -384,6 +384,14 @@ function registerIpc(): void {
+     const next = typeof token === "string" && token.length > 0 && token.length <= 4096 ? token : undefined;
+     return music.getRadio(videoId, next);
+   });
++  ipc.handle("music:videoVersion", (_e, song: unknown) => {
++    // A YouTube song's music video, for Now Playing's switch.
++    const t = (song ?? {}) as Record<string, unknown>;
++    if (typeof t.id !== "string" || !/^[A-Za-z0-9_-]{11}$/.test(t.id)) return null;
++    if (typeof t.title !== "string" || typeof t.artist !== "string" || t.title.length > 300 || t.artist.length > 300) return null;
++    const duration = typeof t.duration === "number" && Number.isFinite(t.duration) ? t.duration : 0;
++    return music.musicVideoFor({ id: t.id, title: t.title, artist: t.artist, duration, thumb: "" });
++  });
+   ipc.handle("music:charts", () => music.getCharts());
+   ipc.handle("music:moods", () => music.getMoods());
+   ipc.handle("market:current", () => music.currentMarket());
+diff --git a/electron/music-service.ts b/electron/music-service.ts
+index d580130..3b0f640 100644
+--- a/electron/music-service.ts
++++ b/electron/music-service.ts
+@@ -15,12 +15,12 @@ import { Innertube } from "youtubei.js";
+ import { app } from "electron";
+ import * as path from "path";
+ import { localTrackById } from "./local-library";
+-import { pickAudio, streamTtlMs } from "./audio-format";
++import { pickAudio, pickVideo, streamTtlMs, type PickedVideo } from "./audio-format";
+ import { embeddedLrc, fetchLyrics } from "./lyrics";
+ import { largestThumbUrl, upgradeThumb } from "./artwork";
+ import { getPoToken, invalidatePoToken } from "./po-token";
+ import { resolveMarket, type ResolvedMarket } from "./market";
+-import { SEARCH_FILTER_PARAMS, callBrowse, callBrowseContinuation, callSearch, callSearchContinuation, parseArtistPage, parseChartsShelves, pageCredit, parseMoods, parsePodcastEpisodes, parsePodcastPage, parsePlaylistContinuation, parsePlaylistShelf, parseQueueCredits, parseRadioPage, parseRemotePlaylistPage, parseReleasePage, parseSearchPage } from "./ytm";
++import { SEARCH_FILTER_PARAMS, callBrowse, callBrowseContinuation, callSearch, callSearchContinuation, parseArtistPage, parseChartsShelves, pageCredit, parseMoods, parsePodcastEpisodes, parsePodcastPage, parsePlaylistContinuation, parsePlaylistShelf, parseQueueCredits, parseRadioPage, parseRemotePlaylistPage, parseReleasePage, parseSearchPage, pickMusicVideo } from "./ytm";
+ import type { Credits, ParsedSong } from "./ytm";
+ import type { MoodEntry } from "./moods";
+ import type {
+@@ -790,6 +790,19 @@ async function resolveQueueCredits(
+     return undefined;
+   }
+ }
++const videoVersions = new Map<string, Track | null>();
++
++/** A catalogue song's music video, found by search (pickMusicVideo); cached per song. */
++export async function musicVideoFor(song: Track): Promise<Track | null> {
++  const known = videoVersions.get(song.id);
++  if (known !== undefined) return known;
++  const firstArtist = song.artist.split(/,|&/)[0].trim();
++  const page = await searchPage(`${firstArtist} ${song.title}`, "videos");
++  const found = pickMusicVideo(song, page.rows);
++  videoVersions.set(song.id, found);
++  evictOldest(videoVersions, 500);
++  return found;
++}
+ 
+ /**
+  * One page of YouTube Music's radio for a song — the endless AutoPlay source.
+@@ -1134,6 +1147,8 @@ export interface ResolvedStream {
+   /** the picked file (see PickedAudio) */
+   itag?: number;
+   clen?: number;
++  /** a music video's picture (null for songs, whose video is a still of the cover) */
++  video?: PickedVideo | null;
+ }
+ 
+ /**
+@@ -1184,7 +1199,7 @@ export function resolveStream(
+             (f: any) => f?.has_audio && !f?.has_video
+           );
+           console.log(
+-            `[bytune] stream ${client}: playability=${String((info as any)?.playability_status?.status ?? "?")} audio=${audioOnly.length} plainUrl=${audioOnly.filter((f: any) => typeof f.url === "string").length} sig=${audioOnly.filter((f: any) => typeof f.signature_cipher === "string" || typeof f.cipher === "string").length} hls=${sd?.hls_manifest_url ? "y" : "n"}`
++            `[bytune] stream ${client}: playability=${String((info as any)?.playability_status?.status ?? "?")} audio=${audioOnly.length} plainUrl=${audioOnly.filter((f: any) => typeof f.url === "string").length} sig=${audioOnly.filter((f: any) => typeof f.signature_cipher === "string" || typeof f.cipher === "string").length} hls=${sd?.hls_manifest_url ? "y" : "n"} video=${(sd?.adaptive_formats ?? []).filter((f: any) => f?.has_video && !f?.has_audio).length} plainVideo=${(sd?.adaptive_formats ?? []).filter((f: any) => f?.has_video && !f?.has_audio && typeof f.url === "string").length}`
+           );
+           const picked = await pickAudio(info, yt, maxKbps, mp4Only, pin);
+           if (!picked) throw new Error(`no audio format for client ${client}`);
+@@ -1199,6 +1214,8 @@ export function resolveStream(
+             lufs: picked.lufs,
+             itag: picked.itag,
+             clen: picked.clen,
++            // Same answer, same expiry, same pinning as the audio: no extra request.
++            video: mp4Only ? null : await pickVideo(info, yt, 720, pin?.video ?? undefined),
+           };
+           const ts = Date.now();
+           resolveCache.set(key, { value, ts, expiresAt: ts + streamTtlMs(value.url, ts) });
+diff --git a/electron/preload.ts b/electron/preload.ts
+index 0248188..a51ac4d 100644
+--- a/electron/preload.ts
++++ b/electron/preload.ts
+@@ -39,6 +39,8 @@ const api = {
+   getPlaylistPage: (id: string) => ipcRenderer.invoke("music:playlistPage", id),
+   getHome: () => ipcRenderer.invoke("music:home"),
+   getRadio: (id: string, token?: string): Promise<RadioPage> => ipcRenderer.invoke("music:radio", id, token),
++  /** A song's music video (or null), for Now Playing's switch. */
++  videoVersion: (song: Track): Promise<Track | null> => ipcRenderer.invoke("music:videoVersion", song),
+ /** YTM Charts for the device market (regional popularity — cold-start feed). */
+   getCharts: () => ipcRenderer.invoke("music:charts"),
+   /** Per-market moods & genres from the provider's Explore page. */
+diff --git a/electron/stream-proxy.ts b/electron/stream-proxy.ts
+index d05a3c9..962a993 100644
+--- a/electron/stream-proxy.ts
++++ b/electron/stream-proxy.ts
+@@ -196,6 +196,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
+       serveLocalFile(localId, range, res, req);
+       return;
+     }
++    const wantVideo = url.searchParams.get("v") === "1"; // a music video's picture (Now Playing)
+     const kbpsRaw = Number(url.searchParams.get("kbps") ?? 0);
+     const maxKbps = Number.isFinite(kbpsRaw) && kbpsRaw > 0 ? Math.floor(kbpsRaw) : undefined;
+ 
+@@ -221,15 +222,27 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
+     }
+ 
+     let stream = await resolveStream(trackId as string, false, maxKbps);
++    let target = wantVideo ? stream.video : stream;
++    if (!target) {
++      res.writeHead(404, { "Access-Control-Allow-Origin": "*" });
++      res.end();
++      return;
++    }
+     let ctl = new AbortController();
+-    let upstream = await fetchUpstream(stream.url, range, ctl);
++    let upstream = await fetchUpstream(target.url, range, ctl);
+ 
+     // Self-heal: a URL that just went bad gets one more resolution.
+     if (upstream.status === 403 && trackId) {
+       console.warn(`[bytune] proxy upstream 403 for ${trackId}, re-resolving`);
+       stream = await resolveStream(trackId, true, maxKbps);
++      target = wantVideo ? stream.video : stream;
++      if (!target) {
++        res.writeHead(404, { "Access-Control-Allow-Origin": "*" });
++        res.end();
++        return;
++      }
+       ctl = new AbortController();
+-      upstream = await fetchUpstream(stream.url, range, ctl);
++      upstream = await fetchUpstream(target.url, range, ctl);
+     }
+ 
+     if (!upstream.ok || !upstream.body) {
+@@ -243,7 +256,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
+     // its byte offsets mean nothing in another file. Refusing makes the deck
+     // error, and the player reloads at its position on a fresh URL. (A later
+     // bytes=0- request on the old URL is served and re-recorded.)
+-    const identity = `${stream.itag ?? "?"}:${stream.clen ?? "?"}`;
++    const identity = `${target.itag ?? "?"}:${target.clen ?? "?"}`;
+     const key = req.url ?? "";
+     const before = served.get(key);
+     if (range && !/^bytes=0-/.test(range) && before && before !== identity) {
+diff --git a/electron/ytm.ts b/electron/ytm.ts
+index ce0d49a..c52d518 100644
+--- a/electron/ytm.ts
++++ b/electron/ytm.ts
+@@ -27,6 +27,7 @@ import type {
+   Track,
+ } from "../src/types";
+ import { bestThumbUrl } from "./artwork";
++import { artistKey, normalizeTitle } from "../src/lib/radio-filter";
+ 
+ /* eslint-disable @typescript-eslint/no-explicit-any */
+ 
+@@ -1143,3 +1144,29 @@ export function browseToAlbum(item: BrowseItem): Album {
+ export function browseToArtist(item: BrowseItem): Artist {
+   return { id: item.browseId, name: item.title, thumb: item.thumb, subtitle: item.subtitle };
+ }
++
++/* ---------------- a song's music video ---------------- */
++
++/**
++ * The official music video for a catalogue song, out of Videos search rows:
++ * the same title once "(Official Video)" and "ft." credits are gone (or
++ * "Artist - Title"), the same first artist, and a plausible length — videos
++ * often run longer, with an intro or a skit. YouTube Music links the two
++ * versions only for signed-in listeners, which ByTune never is.
++ */
++export function pickMusicVideo(song: Track, rows: SearchRow[]): Track | null {
++  const name = normalizeTitle(song.title);
++  const who = artistKey(song.artist);
++  if (!name || !who) return null;
++  for (const row of rows.slice(0, 6)) {
++    if (row.kind === "browse") continue;
++    const v = row.song;
++    if (v.id === song.id) continue;
++    const title = normalizeTitle(v.title);
++    if (title !== name && title !== `${who} ${name}`) continue;
++    if (artistKey(v.artist) !== who && !normalizeTitle(v.artist).includes(who)) continue;
++    if (song.duration > 0 && v.duration > 0 && (v.duration < song.duration - 10 || v.duration > song.duration + 240)) continue;
++    return v;
++  }
++  return null;
++}
+diff --git a/package.json b/package.json
+index 88d9a3b..168dd99 100644
+--- a/package.json
++++ b/package.json
+@@ -13,7 +13,7 @@
+     "build:electron": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --external:electron --external:jsdom --external:undici --outdir=dist-electron && esbuild electron/po-page.ts --bundle --format=iife --outfile=dist-electron/po-page.js && node -e \"require('fs').copyFileSync('electron/po.html','dist-electron/po.html')\" && node -e \"require('fs').cpSync('electron/assets','dist-electron/assets',{recursive:true})\" && node scripts/build-media-helper.mjs",
+     "icons:thumbar": "node scripts/gen-thumbar-icons.mjs",
+     "typecheck": "tsc --noEmit",
+-    "test": "esbuild src/lib/account-validators.ts --bundle --format=esm --outfile=.test-build/account-validators.mjs && esbuild src/lib/config.ts --bundle --format=esm --outfile=.test-build/config.mjs && esbuild electron/sync-merge.ts --bundle --format=esm --outfile=.test-build/sync-merge.mjs && esbuild electron/audio-format.ts --bundle --format=esm --outfile=.test-build/audio-format.mjs && esbuild electron/backup-transfer.ts --bundle --format=esm --outfile=.test-build/backup-transfer.mjs && esbuild electron/market.ts --bundle --format=esm --outfile=.test-build/market.mjs && esbuild electron/ytm.ts --bundle --format=esm --outfile=.test-build/ytm.mjs && esbuild electron/local-paths.ts --bundle --format=esm --outfile=.test-build/local-paths.mjs && esbuild src/lib/deletion-sync.ts --bundle --format=esm --outfile=.test-build/deletion-sync.mjs && esbuild src/lib/download-reconcile.ts --bundle --format=esm --outfile=.test-build/download-reconcile.mjs && esbuild electron/mac-menu.ts --bundle --format=esm --outfile=.test-build/mac-menu.mjs && esbuild src/lib/media-key-tap.ts --bundle --format=esm --outfile=.test-build/media-key-tap.mjs && esbuild src/lib/audio-output.ts --bundle --format=esm --outfile=.test-build/audio-output.mjs && esbuild src/lib/radio-filter.ts --bundle --format=esm --outfile=.test-build/radio-filter.mjs && esbuild src/lib/lyricsLines.ts --bundle --format=esm --outfile=.test-build/lyrics-lines.mjs && esbuild src/lib/replayFormat.ts --bundle --format=esm --outfile=.test-build/replay-format.mjs && esbuild src/lib/playlistShare.ts --bundle --format=esm --outfile=.test-build/playlist-share.mjs && esbuild src/lib/format.ts --bundle --format=esm --outfile=.test-build/format.mjs && esbuild src/lib/romanize.ts --bundle --format=esm --outfile=.test-build/romanize.mjs && esbuild src/lib/analysis.ts --bundle --format=esm --outfile=.test-build/analysis.mjs && esbuild electron/lyrics.ts --bundle --format=esm --platform=node --external:jsdom --outfile=.test-build/lyrics.mjs && node --test tests/*.test.mjs",
++    "test": "esbuild src/lib/account-validators.ts --bundle --format=esm --outfile=.test-build/account-validators.mjs && esbuild src/lib/config.ts --bundle --format=esm --outfile=.test-build/config.mjs && esbuild electron/sync-merge.ts --bundle --format=esm --outfile=.test-build/sync-merge.mjs && esbuild electron/audio-format.ts --bundle --format=esm --outfile=.test-build/audio-format.mjs && esbuild electron/backup-transfer.ts --bundle --format=esm --outfile=.test-build/backup-transfer.mjs && esbuild electron/market.ts --bundle --format=esm --outfile=.test-build/market.mjs && esbuild electron/ytm.ts --bundle --format=esm --outfile=.test-build/ytm.mjs && esbuild electron/local-paths.ts --bundle --format=esm --outfile=.test-build/local-paths.mjs && esbuild src/lib/deletion-sync.ts --bundle --format=esm --outfile=.test-build/deletion-sync.mjs && esbuild src/lib/download-reconcile.ts --bundle --format=esm --outfile=.test-build/download-reconcile.mjs && esbuild electron/mac-menu.ts --bundle --format=esm --outfile=.test-build/mac-menu.mjs && esbuild src/lib/media-key-tap.ts --bundle --format=esm --outfile=.test-build/media-key-tap.mjs && esbuild src/lib/audio-output.ts --bundle --format=esm --outfile=.test-build/audio-output.mjs && esbuild src/lib/radio-filter.ts --bundle --format=esm --outfile=.test-build/radio-filter.mjs && esbuild src/lib/lyricsLines.ts --bundle --format=esm --outfile=.test-build/lyrics-lines.mjs && esbuild src/lib/replayFormat.ts --bundle --format=esm --outfile=.test-build/replay-format.mjs && esbuild src/lib/playlistShare.ts --bundle --format=esm --outfile=.test-build/playlist-share.mjs && esbuild src/lib/format.ts --bundle --format=esm --outfile=.test-build/format.mjs && esbuild src/lib/romanize.ts --bundle --format=esm --outfile=.test-build/romanize.mjs && esbuild src/lib/analysis.ts --bundle --format=esm --outfile=.test-build/analysis.mjs && esbuild src/lib/videoSync.ts --bundle --format=esm --outfile=.test-build/videoSync.mjs && esbuild electron/lyrics.ts --bundle --format=esm --platform=node --external:jsdom --outfile=.test-build/lyrics.mjs && node --test tests/*.test.mjs",
+     "build": "npm run typecheck && npm run build:electron && vite build",
+     "start": "electron .",
+     "smoke": "node scripts/smoke.mjs",
+diff --git a/src/components/NowPlaying.tsx b/src/components/NowPlaying.tsx
+index dc30f1b..4719366 100644
+--- a/src/components/NowPlaying.tsx
++++ b/src/components/NowPlaying.tsx
+@@ -22,7 +22,7 @@
+  * motion) is untouched.
+  */
+ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+-import { ChevronDown, Heart, Music2 } from "lucide-react";
++import { ChevronDown, Film, Heart, Music2 } from "lucide-react";
+ import { PlayerBar } from "./PlayerBar";
+ import { QueuePanel } from "./RightRail";
+ import { LyricsView } from "./SyncedLyrics";
+@@ -37,7 +37,9 @@ import { useDrag } from "../lib/dnd";
+ import { useCanvas } from "../lib/canvas";
+ import { requestLyricsAlignment, useLyricsOffset } from "../lib/lyricsOffset";
+ import { LyricsTiming } from "./LyricsTiming";
+-import type { LyricsResult } from "../types";
++import { followStep } from "../lib/videoSync";
++import { getPlaybackPosition } from "../lib/audio";
++import type { LyricsResult, Track } from "../types";
+ 
+ /* ================================================================ backdrop */
+ 
+@@ -132,6 +134,74 @@ function FsBackdrop({
+ 
+ const VIZ_BARS = 32;
+ 
++/** Music videos switched to from Now Playing: video id → the song it stands in for (this session). */
++const swappedFrom = new Map<string, Track>();
++
++/**
++ * A music video's picture over the cover: muted, following the audio deck's
++ * clock (lib/videoSync). The resolver only offers one for music videos — a
++ * song's own "video" is a still of its cover — so a 404 or any error leaves
++ * the cover in place.
++ */
++function FsVideo({ track, onShown }: { track: Track; onShown: (shown: boolean) => void }) {
++  const ref = useRef<HTMLVideoElement | null>(null);
++  const [src, setSrc] = useState<string | null>(null);
++  const quality = useSettings((s) => s.streamingQuality);
++  useEffect(() => {
++    let alive = true;
++    void window.bytune
++      ?.getStreamUrl(track.id, false, quality)
++      .then((url) => {
++        if (alive && url) setSrc(`${url}&v=1`);
++      })
++      .catch(() => undefined);
++    return () => {
++      alive = false;
++    };
++  }, [track.id, quality]);
++  useEffect(() => {
++    const v = ref.current;
++    if (!v || !src) return;
++    const id = window.setInterval(() => {
++      // Chromium pauses hidden video-only players; nothing to follow until it can play.
++      if (document.hidden || v.readyState < 2) return;
++      const p = usePlayer.getState();
++      const step = followStep(v, {
++        time: getPlaybackPosition(),
++        rate: useSettings.getState().playbackSpeed,
++        playing: p.playing,
++        buffering: p.buffering,
++      });
++      if (step.seekTo !== undefined) v.currentTime = step.seekTo;
++      if (Math.abs(v.playbackRate - step.rate) > 0.001) v.playbackRate = step.rate;
++      if (step.play && v.paused) void v.play().catch(() => undefined);
++      else if (!step.play && !v.paused) v.pause();
++    }, 250);
++    return () => {
++      window.clearInterval(id);
++      // Closing Now Playing, or the next song, stops the download.
++      v.removeAttribute("src");
++      v.load();
++    };
++  }, [src]);
++  if (!src) return null;
++  return (
++    <video
++      ref={ref}
++      src={src}
++      muted
++      playsInline
++      preload="auto"
++      onLoadedData={() => onShown(true)}
++      onError={() => {
++        onShown(false);
++        setSrc(null);
++      }}
++      className="absolute inset-0 w-full h-full object-contain bg-black"
++    />
++  );
++}
++
+ /**
+  * Ambient decoration, not an instrument: a thin symmetric waveform whose bars
+  * dance on staggered CSS loops while audio plays and settle smoothly to rest
+@@ -273,6 +343,40 @@ export function NowPlaying() {
+   // What the screen shows: switches to the incoming song half way through a
+   // blend. Lyrics stay on `track`, whose clock they follow.
+   const shown = usePlayer(shownTrack);
++  // Music videos: never for local files or at Low quality, and not mid-blend
++  // (the picture follows the playing song's clock, the screen the crossover).
++  const showVideos = useSettings((s) => s.showVideos);
++  const lowQuality = useSettings((s) => s.streamingQuality === "low");
++  const [videoState, setVideoState] = useState<"loading" | "shown" | "none">("loading");
++  useEffect(() => setVideoState("loading"), [track?.id]);
++  const videoOn = showVideos && !lowQuality && !!track && !track.localPath && !track.id.startsWith("local:") && shown?.id === track.id;
++  const videoVisible = videoOn && videoState === "shown";
++  // A song shows no picture (its own is a still of the cover): offer its music
++  // video, found by search; after switching, offer the song back.
++  const songBack = track ? swappedFrom.get(track.id) ?? null : null;
++  const [videoVersion, setVideoVersion] = useState<Track | null>(null);
++  useEffect(() => {
++    setVideoVersion(null);
++    if (!videoOn || !track || songBack || videoState !== "none") return;
++    let alive = true;
++    void window.bytune
++      ?.videoVersion(track)
++      .then((v) => {
++        if (alive) setVideoVersion(v);
++      })
++      .catch(() => undefined);
++    return () => {
++      alive = false;
++    };
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [videoOn, track?.id, videoState, songBack]);
++  const switchVersion = (): void => {
++    if (songBack) usePlayer.getState().swapCurrent(songBack);
++    else if (videoVersion && track) {
++      swappedFrom.set(videoVersion.id, track);
++      usePlayer.getState().swapCurrent(videoVersion);
++    }
++  };
+   const playing = usePlayer((s) => s.playing);
+ 
+   const liked = useLibrary((s) => (shown ? s.liked.some((t) => t.id === shown.id) : false));
+@@ -448,16 +552,16 @@ export function NowPlaying() {
+                     animation above and the pulse below never fight over the
+                     same transform. Pausing removes the pulse and the wrapper's
+                     transition settles the scale back instead of snapping. */}
+-                <div className={`fs-art-wrap ${playing ? "fs-art-breathe" : ""}`}>
++                <div className={`fs-art-wrap ${playing && !videoVisible ? "fs-art-breathe" : ""}`}>
+                   <div
+                     ref={artRef}
+                     {...heroDrag.props}
+-                    className={`relative rounded-[20px] overflow-hidden shadow-art art-hairline aspect-square w-[min(38vh,32vw,480px)] grid place-items-center bg-white/[0.04] ${
+-                      heroDrag.dragging ? "opacity-60" : ""
+-                    }`}
++                    className={`relative rounded-[20px] overflow-hidden shadow-art art-hairline ${
++                      videoVisible ? "aspect-video w-[min(64vh,40vw,640px)]" : "aspect-square w-[min(38vh,32vw,480px)]"
++                    } grid place-items-center bg-white/[0.04] ${heroDrag.dragging ? "opacity-60" : ""}`}
+                     title="Drag to a playlist to add this song"
+                   >
+-                    {canvasUrl && animatedCanvas ? (
++                    {canvasUrl && animatedCanvas && !videoVisible ? (
+                       <>
+                         {/* Still art underneath: if the video stalls, the cover stands. */}
+                         <img src={upgradeArtwork(shown.thumb, 1200)} alt="" className="absolute inset-0 w-full h-full object-cover" />
+@@ -482,6 +586,9 @@ export function NowPlaying() {
+                     ) : (
+                       <Music2 className="w-16 h-16 text-white/35" />
+                     )}
++                    {videoOn && (
++                      <FsVideo key={track.id} track={track} onShown={(ok) => setVideoState(ok ? "shown" : "none")} />
++                    )}
+                   </div>
+                 </div>
+               </div>
+@@ -501,15 +608,27 @@ export function NowPlaying() {
+                 <div className="text-[14px] xl:text-[15px] text-white/55 mt-1.5 truncate max-w-full">
+                   {shown.artist}
+                 </div>
+-                <button
+-                  onClick={() => toggleLike(shown)}
+-                  title={liked ? "Remove from Liked Songs" : "Add to Liked Songs"}
+-                  aria-pressed={liked}
+-                  className="mt-4 inline-flex items-center gap-2 h-8 px-4 rounded-full bg-white/[0.06] hover:bg-white/[0.11] text-white/60 hover:text-white text-[12.5px] font-semibold transition-all active:scale-95"
+-                >
+-                  <Heart className={`w-3.5 h-3.5 shrink-0 ${liked ? "fill-current" : ""}`} />
+-                  {liked ? "In Your Library" : "Add to Library"}
+-                </button>
++                <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
++                  <button
++                    onClick={() => toggleLike(shown)}
++                    title={liked ? "Remove from Liked Songs" : "Add to Liked Songs"}
++                    aria-pressed={liked}
++                    className="inline-flex items-center gap-2 h-8 px-4 rounded-full bg-white/[0.06] hover:bg-white/[0.11] text-white/60 hover:text-white text-[12.5px] font-semibold transition-all active:scale-95"
++                  >
++                    <Heart className={`w-3.5 h-3.5 shrink-0 ${liked ? "fill-current" : ""}`} />
++                    {liked ? "In Your Library" : "Add to Library"}
++                  </button>
++                  {videoOn && (songBack || videoVersion) && (
++                    <button
++                      onClick={switchVersion}
++                      title={songBack ? `Play "${songBack.title}" again` : `Play "${videoVersion?.title}" from here`}
++                      className="inline-flex items-center gap-2 h-8 px-4 rounded-full bg-white/[0.06] hover:bg-white/[0.11] text-white/60 hover:text-white text-[12.5px] font-semibold transition-all active:scale-95"
++                    >
++                      {songBack ? <Music2 className="w-3.5 h-3.5 shrink-0" /> : <Film className="w-3.5 h-3.5 shrink-0" />}
++                      {songBack ? "Back to the song" : "Watch the music video"}
++                    </button>
++                  )}
++                </div>
+               </div>
+ 
+               {/* Full-width row so the visualizer's percentage width resolves
+diff --git a/src/lib/videoSync.ts b/src/lib/videoSync.ts
+new file mode 100644
+index 0000000..258f3b6
+--- /dev/null
++++ b/src/lib/videoSync.ts
+@@ -0,0 +1,19 @@
++/**
++ * Keeps a muted music video in step with the audio, the master clock: the
++ * picture follows and never holds the sound back. Called a few times a
++ * second; says what to do with the video element.
++ */
++export function followStep(
++  video: { currentTime: number; paused: boolean },
++  audio: { time: number; rate: number; playing: boolean; buffering: boolean }
++): { seekTo?: number; rate: number; play: boolean } {
++  const drift = video.currentTime - audio.time; // > 0: the picture is ahead
++  if (!audio.playing || audio.buffering) {
++    return { play: false, rate: audio.rate, ...(Math.abs(drift) > 0.25 ? { seekTo: audio.time } : {}) };
++  }
++  // Far off: jump, a little ahead, since decoding from a keyframe takes a moment.
++  if (Math.abs(drift) > 0.8) return { play: true, rate: audio.rate, seekTo: audio.time + 0.2 };
++  // Close: ease back with a rate change of at most ±5%, which nobody sees.
++  if (Math.abs(drift) > 0.04) return { play: true, rate: audio.rate * (1 - Math.max(-0.5, Math.min(0.5, drift)) * 0.1) };
++  return { play: true, rate: audio.rate };
++}
+diff --git a/src/stores/player.ts b/src/stores/player.ts
+index baf717e..7c25404 100644
+--- a/src/stores/player.ts
++++ b/src/stores/player.ts
+@@ -204,6 +204,8 @@ interface PlayerState {
+   playTrack(track: Track): void;
+   /** Play an entry already in the queue without rebuilding it. */
+   jumpTo(i: number): void;
++  /** Play another version of the current song in its place (its music video, or back), from the same moment. */
++  swapCurrent(track: Track): void;
+   /** Returns how many songs were added (0 when they were all already waiting). */
+   addToQueue(tracks: Track | Track[], playNext?: boolean): number;
+   /**
+@@ -324,6 +326,16 @@ export const usePlayer = create<PlayerState>()(
+         set({ index: i, playing: true, position: 0, error: null, awaitingAutoplay: false });
+       },
+ 
++      swapCurrent(track) {
++        const s = get();
++        if (!s.queue[s.index] || s.queue[s.index].id === track.id) return;
++        const queue = [...s.queue];
++        queue[s.index] = track;
++        // The engine reloads the new id and resumes at `position`.
++        const keep = !track.duration || s.position < track.duration - 1;
++        set({ queue, position: keep ? s.position : 0, error: null });
++      },
++
+       addToQueue(tracks, playNext = false) {
+         const seenIn = new Set<string>();
+         const list = (Array.isArray(tracks) ? tracks : [tracks]).filter((t) => !seenIn.has(t.id) && seenIn.add(t.id));
+diff --git a/src/stores/settings.ts b/src/stores/settings.ts
+index 24e0477..bb9d0f7 100644
+--- a/src/stores/settings.ts
++++ b/src/stores/settings.ts
+@@ -69,6 +69,8 @@ interface SettingsState {
+   fullBleedArtwork: boolean;
+   legacyMeshGradient: boolean;
+   animatedCanvas: boolean;
++  /** show a music video's picture in Now Playing (opt-in: up to 720p, uses more data) */
++  showVideos: boolean;
+   syncedLyrics: boolean;
+   blurUnfocusedLyrics: boolean;
+   /** show a Latin-letters reading under lyrics in other scripts */
+@@ -108,6 +110,7 @@ interface SettingsState {
+   setFullBleedArtwork(v: boolean): void;
+   setLegacyMeshGradient(v: boolean): void;
+   setAnimatedCanvas(v: boolean): void;
++  setShowVideos(v: boolean): void;
+   setSyncedLyrics(v: boolean): void;
+   setBlurUnfocusedLyrics(v: boolean): void;
+   setRomanizeLyrics(v: boolean): void;
+@@ -146,6 +149,7 @@ export const useSettings = create<SettingsState>()(
+       fullBleedArtwork: false,
+       legacyMeshGradient: false,
+       animatedCanvas: false,
++      showVideos: false,
+       syncedLyrics: true,
+       blurUnfocusedLyrics: true,
+       romanizeLyrics: false,
+@@ -186,6 +190,7 @@ export const useSettings = create<SettingsState>()(
+       setFullBleedArtwork: (fullBleedArtwork) => set({ fullBleedArtwork }),
+       setLegacyMeshGradient: (legacyMeshGradient) => set({ legacyMeshGradient }),
+       setAnimatedCanvas: (animatedCanvas) => set({ animatedCanvas }),
++      setShowVideos: (showVideos) => set({ showVideos }),
+       setSyncedLyrics: (syncedLyrics) => set({ syncedLyrics }),
+       setBlurUnfocusedLyrics: (blurUnfocusedLyrics) => set({ blurUnfocusedLyrics }),
+       setRomanizeLyrics: (romanizeLyrics) => set({ romanizeLyrics }),
+diff --git a/src/views/SettingsView.tsx b/src/views/SettingsView.tsx
+index 25aa5a8..8617781 100644
+--- a/src/views/SettingsView.tsx
++++ b/src/views/SettingsView.tsx
+@@ -24,6 +24,7 @@ import {
+   ListMusic,
+   Maximize2,
+   Music4,
++  Film,
+   RefreshCw,
+   SlidersHorizontal,
+   SlidersVertical,
+@@ -991,6 +992,30 @@ export function SettingsView() {
+           onClick={() => s.setAnimatedCanvas(!s.animatedCanvas)}
+         />
+         <Divider />
++        <SettingsRow
++          icon={Film}
++          title="Music videos"
++          subtitle="Show the video in Now Playing when a music video is playing · up to 720p, uses more data"
++          trailing={<Switch checked={s.showVideos} onChange={s.setShowVideos} />}
++          onClick={() => s.setShowVideos(!s.showVideos)}
++        />
++        {/* A row for the Settings search too, so "quality" or "video" finds it. */}
++        {s.showVideos && (s.streamingQuality === "low" || s.streamingQuality === "medium") && (
++          <div data-setting-row className={`flex items-center gap-3 pb-3 -mt-1 ${ROW_INSET}`}>
++            <p className="flex-1 min-w-0 pl-9 text-[12.5px] leading-snug text-ink-hi/80">
++              {s.streamingQuality === "low"
++                ? "Videos don't play at Low streaming quality. Set it to High to see them."
++                : "Music videos sound best with Streaming quality on High."}
++            </p>
++            <button
++              onClick={() => s.setStreamingQuality("high")}
++              className="shrink-0 h-8 px-3.5 rounded-full bg-ink-hi/[0.08] hover:bg-ink-hi/[0.14] text-[12.5px] font-semibold text-ink-hi transition-colors"
++            >
++              Set to High
++            </button>
++          </div>
++        )}
++        <Divider />
+         <SettingsRow
+           icon={ListMusic}
+           title="Synced lyrics"
+diff --git a/tests/format-pick.test.mjs b/tests/format-pick.test.mjs
+index 90faad8..d3c10ed 100644
+--- a/tests/format-pick.test.mjs
++++ b/tests/format-pick.test.mjs
+@@ -1,6 +1,6 @@
+ import { test } from "node:test";
+ import assert from "node:assert/strict";
+-import { pickAudio, formatLufs, streamTtlMs } from "../.test-build/audio-format.mjs";
++import { pickAudio, pickVideo, formatLufs, streamTtlMs } from "../.test-build/audio-format.mjs";
+ 
+ /* Format fixtures mirror the live youtubei.js v18 responses captured by
+  * .lufs-probe.cjs for "Shape of You" (VISIONOS client): every format carries
+@@ -159,3 +159,46 @@ test("a stream URL is reused until a little before its own expiry", () => {
+   assert.equal(streamTtlMs(`https://x/videoplayback?expire=${at(30 * 3600)}`, now), 6 * 3600_000, "capped at 6 h");
+   assert.equal(streamTtlMs("https://pipedproxy.example/audio.m4a", now), 10 * 60_000, "no expiry: 10 minutes");
+ });
++
++const vid = (itag, mime, width, height, bitrate, extra = {}) => ({
++  itag, mime_type: mime, width, height, bitrate, has_video: true, has_audio: false, url: `https://example/v${itag}`, ...extra,
++});
++
++test("a music video's picture: up to 720p, VP9 first, 30 fps first; a song's still picture gives none", async () => {
++  const musicVideo = {
++    streaming_data: {
++      adaptive_formats: [
++        vid(137, 'video/mp4; codecs="avc1.640028"', 1920, 1080, 3311000),
++        vid(136, 'video/mp4; codecs="avc1.4d401f"', 1280, 720, 1192000),
++        vid(247, 'video/webm; codecs="vp9"', 1280, 720, 1455000),
++        vid(302, 'video/webm; codecs="vp9"', 1280, 720, 2600000, { fps: 60 }),
++        vid(244, 'video/webm; codecs="vp9"', 854, 480, 834000),
++      ],
++    },
++  };
++  const picked = await pickVideo(musicVideo, {}, 720);
++  assert.equal(picked.itag, 247, "720p VP9 at 30 fps");
++  assert.equal(picked.height, 720);
++  const albumSong = {
++    streaming_data: {
++      adaptive_formats: [
++        vid(136, 'video/mp4; codecs="avc1.4d401f"', 1280, 720, 37000),
++        vid(247, 'video/webm; codecs="vp9"', 1280, 720, 81000),
++        vid(398, 'video/mp4; codecs="av01.0.05M.08"', 1280, 720, 102000),
++      ],
++    },
++  };
++  assert.equal(await pickVideo(albumSong, {}, 720), null, "the cover as a still picture: keep the cover");
++  // What the app's main client reports for an album song: a 158 kbps "video" is still a still.
++  const busyStill = {
++    streaming_data: {
++      adaptive_formats: [
++        vid(247, 'video/webm; codecs="vp9"', 1280, 720, 228301, { average_bitrate: 158354 }),
++        vid(398, 'video/mp4; codecs="av01.0.05M.08"', 1280, 720, 284147, { average_bitrate: 195728 }),
++      ],
++    },
++  };
++  assert.equal(await pickVideo(busyStill, {}, 720), null, "judged per pixel, not by a fixed bitrate");
++  const pinned = await pickVideo(musicVideo, {}, 720, { itag: 136 });
++  assert.equal(pinned.itag, 136, "the file the player opened wins");
++});
+diff --git a/tests/playback-reliability.test.mjs b/tests/playback-reliability.test.mjs
+index 83a9aa1..20ed6ed 100644
+--- a/tests/playback-reliability.test.mjs
++++ b/tests/playback-reliability.test.mjs
+@@ -202,3 +202,23 @@ test("removing the song playing starts the next one from the top", async () => {
+     h.restore();
+   }
+ });
++
++test("switching to another version of the song plays it in place, from the same moment", async () => {
++  const h = await boot({ fadeSeconds: 0 });
++  try {
++    h.setDuration("song", 229);
++    h.setDuration("video", 282);
++    await play(h, [track("song", 229), track("next", 200)]);
++    await h.advance(30_000);
++    h.engine.usePlayer.getState().swapCurrent(track("video", 282));
++    await settle(h);
++    const s = h.engine.usePlayer.getState();
++    assert.deepEqual(s.queue.map((t) => t.id), ["video", "next"], "the video takes the song's place");
++    assert.equal(s.index, 0);
++    const deck = live(h, "video");
++    assert.ok(deck && deck.currentTime >= 29, `resumed at ${deck?.currentTime?.toFixed(1)}s`);
++  } finally {
++    await settle(h);
++    h.restore();
++  }
++});
+diff --git a/tests/radio.test.mjs b/tests/radio.test.mjs
+index e2f2564..9211e2c 100644
+--- a/tests/radio.test.mjs
++++ b/tests/radio.test.mjs
+@@ -1,7 +1,7 @@
+ import test from "node:test";
+ import assert from "node:assert/strict";
+ import fs from "node:fs";
+-import { parseRadioPage, parseResponsiveListItem } from "../.test-build/ytm.mjs";
++import { parseRadioPage, parseResponsiveListItem, pickMusicVideo } from "../.test-build/ytm.mjs";
+ 
+ // Captured 2026-11-01 from YouTube Music (`next` on RDAMVM<id>, seed "Cool for
+ // the Summer" by Demi Lovato), trimmed to the queue panel.
+@@ -140,3 +140,15 @@ test("search rows: hour-long lengths parse, and artist/album links come from the
+   assert.equal(row.albumId, "MPREbbb");
+   assert.equal(row.album, "Album X");
+ });
++
++test("a song's music video: same title and first artist, a plausible length; covers and remixes don't count", () => {
++  const song = { id: "FXovf5dsRTw", title: "Despacito", artist: "Luis Fonsi & Daddy Yankee", duration: 229, thumb: "" };
++  const row = (id, title, artist, duration) => ({ kind: "track", song: { id, title, artist, duration, thumb: "" } });
++  const official = row("kJQP7kiw5Fk", "Despacito ft. Daddy Yankee", "Luis Fonsi & Daddy Yankee", 282);
++  assert.equal(pickMusicVideo(song, [official])?.id, "kJQP7kiw5Fk");
++  assert.equal(pickMusicVideo(song, [row("aaaaaaaaaaa", "Luis Fonsi - Despacito (Official Video)", "Luis Fonsi", 282)])?.id, "aaaaaaaaaaa", "Artist - Title");
++  assert.equal(pickMusicVideo(song, [row("bbbbbbbbbbb", "Despacito (Remix)", "Luis Fonsi", 230), official])?.id, "kJQP7kiw5Fk", "a remix isn't the song");
++  assert.equal(pickMusicVideo(song, [row("ccccccccccc", "Despacito", "Some Cover Band", 229)]), null, "another artist's cover");
++  assert.equal(pickMusicVideo(song, [row("ddddddddddd", "Despacito", "Luis Fonsi", 1200)]), null, "a 20-minute loop isn't the video");
++  assert.equal(pickMusicVideo(song, [{ kind: "browse", item: { browseId: "x", title: "Despacito", subtitle: "", thumb: "" } }]), null);
++});
+diff --git a/tests/video-sync.test.mjs b/tests/video-sync.test.mjs
+new file mode 100644
+index 0000000..ae2b817
+--- /dev/null
++++ b/tests/video-sync.test.mjs
+@@ -0,0 +1,19 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { followStep } from "../.test-build/videoSync.mjs";
++
++const audio = (time, extra = {}) => ({ time, rate: 1, playing: true, buffering: false, ...extra });
++
++test("the picture follows the sound: paused or buffering audio pauses it, and it re-aligns when off", () => {
++  assert.deepEqual(followStep({ currentTime: 10, paused: false }, audio(10, { playing: false })), { play: false, rate: 1 });
++  assert.deepEqual(followStep({ currentTime: 12, paused: false }, audio(10, { buffering: true })), { play: false, rate: 1, seekTo: 10 });
++});
++
++test("far off it jumps a little ahead; close it eases back by at most 5%; in step it matches the speed", () => {
++  assert.deepEqual(followStep({ currentTime: 5, paused: false }, audio(10)), { play: true, rate: 1, seekTo: 10.2 });
++  const ahead = followStep({ currentTime: 10.3, paused: false }, audio(10));
++  assert.ok(ahead.rate < 1 && ahead.rate >= 0.95, "ahead: slows down");
++  const behind = followStep({ currentTime: 9.4, paused: false }, audio(10));
++  assert.ok(behind.rate > 1 && behind.rate <= 1.05, "behind: speeds up, capped");
++  assert.deepEqual(followStep({ currentTime: 10.01, paused: false }, audio(10, { rate: 1.5 })), { play: true, rate: 1.5 });
++});

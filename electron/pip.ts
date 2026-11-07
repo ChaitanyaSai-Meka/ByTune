@@ -96,6 +96,7 @@ let pipWindow: BrowserWindow | null = null;
 let lastRect: PipRect | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let getMainWindow: () => BrowserWindow | null = () => null;
+let showMainWindow: () => void = () => undefined;
 
 /** native cursor watch */
 let cursorWatch: ReturnType<typeof setInterval> | null = null;
@@ -125,9 +126,13 @@ function startCursorWatch(): void {
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
-/** Called from main.ts so this module can reach the main window without a circular import. */
-export function bindMainWindowGetter(get: () => BrowserWindow | null): void {
+/**
+ * Called from main.ts so this module can reach the main window without a
+ * circular import, and bring it back the one way main.ts does (from the tray too).
+ */
+export function bindMainWindowGetter(get: () => BrowserWindow | null, show: () => void): void {
   getMainWindow = get;
+  showMainWindow = show;
 }
 
 function notifyMain(channel: string, payload?: unknown): void {
@@ -161,9 +166,10 @@ function visibleRect(r: PipRect): PipRect {
     return r.x + r.w > a.x + minReach && r.x < a.x + a.width - minReach && r.y + r.h > a.y + minReach && r.y < a.y + a.height - minReach;
   });
   if (!reachable) return defaultRect();
-  // Final safety net: keep the box inside the primary work area (never under
-  // the taskbar, never off-screen).
-  const wa = screen.getPrimaryDisplay().workArea;
+  // Final safety net: keep the box inside the work area of the display it is
+  // on (never under the taskbar, never off-screen) — a second monitor's spot
+  // must not be dragged back onto the primary one.
+  const wa = screen.getDisplayMatching({ x: r.x, y: r.y, width: r.w, height: r.h }).workArea;
   return {
     w: r.w,
     h: r.h,
@@ -221,6 +227,12 @@ export function savePipRect(): void {
 
 export function isPipOpen(): boolean {
   return !!pipWindow && !pipWindow.isDestroyed();
+}
+
+/** Open and on screen. A minimized miniplayer reads as closed to the main
+ *  window: its button offers to bring it back, and no snapshots are pushed. */
+function isPipShown(): boolean {
+  return isPipOpen() && !pipWindow?.isMinimized();
 }
 
 export function openPip(): void {
@@ -288,6 +300,11 @@ export function openPip(): void {
   pipWindow.on("moved", scheduleRectSave);
   pipWindow.on("resized", scheduleRectSave);
   pipWindow.on("close", savePipRect);
+  // The page's own <title> ("ByTune") would rename this window, leaving two
+  // "ByTune" entries in the taskbar and Alt-Tab.
+  pipWindow.on("page-title-updated", (event) => event.preventDefault());
+  pipWindow.on("minimize", () => notifyMain("pip:open-changed", false));
+  pipWindow.on("restore", () => notifyMain("pip:open-changed", true));
   // Same webContents-focus rule as the main window: when the PiP window
   // becomes active its page must hold keyboard focus right away, so Space
   // toggles playback without a click first.
@@ -317,9 +334,10 @@ export function closePip(): void {
 }
 
 export function togglePip(): boolean {
-  if (isPipOpen()) closePip();
+  // A minimized miniplayer comes back (openPip restores it) rather than closing.
+  if (isPipShown()) closePip();
   else openPip();
-  return isPipOpen();
+  return isPipShown();
 }
 
 export function registerPipIpc(): void {
@@ -328,7 +346,7 @@ export function registerPipIpc(): void {
   const fromPip = (event: SenderEvent): boolean => isTrustedSender(event, pipWindow, true);
   const fromEither = (event: SenderEvent): boolean => fromPip(event) || isTrustedSender(event, getMainWindow());
   ipcMain.handle("pip:toggle", (event) => { if (fromEither(event)) return togglePip(); });
-  ipcMain.handle("pip:isOpen", (event) => (fromEither(event) ? isPipOpen() : false));
+  ipcMain.handle("pip:isOpen", (event) => (fromEither(event) ? isPipShown() : false));
   ipcMain.on("pip:close", (event) => { if (fromPip(event)) closePip(); });
   // Real native minimize — the window stays alive (playback continues) and
   // is restorable from the Windows taskbar.
@@ -337,12 +355,7 @@ export function registerPipIpc(): void {
     if (pipWindow && !pipWindow.isDestroyed()) pipWindow.minimize();
   });
   ipcMain.on("pip:show-main", (event) => {
-    if (!fromPip(event)) return;
-    const win = getMainWindow();
-    if (!win || win.isDestroyed()) return;
-    if (win.isMinimized()) win.restore();
-    win.show();
-    win.focus();
+    if (fromPip(event)) showMainWindow();
   });
   // Playback snapshots flow main window → PiP.
   ipcMain.on("pip:state", (event, snapshot: unknown) => {

@@ -14,7 +14,7 @@
  */
 
 import { readDeletionSync, joinDeletionSync, compactDeletionSync, mergeDeletionRecords,
-  membershipSurvives, searchKey } from "../src/lib/deletion-sync";
+  membershipSurvives, searchKey, deletionKey } from "../src/lib/deletion-sync";
 
 type Envelope = { state?: Record<string, unknown>; version?: number } | null | unknown;
 
@@ -72,21 +72,25 @@ export function mergeLibrary(
       // A deleted/rejected parent cannot supply old children on recreation.
       const tracks = (items: any[], meta: typeof am) => membershipSurvives(meta, joined, "playlists", p.id)
         ? items.filter((item) => trackId(item) === p.id).flatMap((item) => Array.isArray(item.tracks) ? item.tracks : []) : [];
-      const next = { ...p, tracks: mergeDeletionRecords(tracks(localPlaylists, am), tracks(remotePlaylists, bm),
-        am, bm, joined, "tracks", trackId, p.id) };
+      const survivors = mergeDeletionRecords(tracks(localPlaylists, am), tracks(remotePlaylists, bm),
+        am, bm, joined, "tracks", trackId, p.id);
+      const side = (items: any[]) => items.find((item) => trackId(item) === p.id);
+      const [lp, rp] = [side(localPlaylists), side(remotePlaylists)];
+      const next = { ...p, tracks: inPlaylistOrder(survivors, am, bm, p.id, lp, rp) };
+      const orderedAt = Math.max(Number(lp?.orderedAt) || 0, Number(rp?.orderedAt) || 0);
+      if (orderedAt) next.orderedAt = orderedAt;
+      else delete next.orderedAt;
       // Deleted folders unfile, never delete their playlists.
       if (next.folderId && !folders.some((f) => f.id === next.folderId)) delete next.folderId;
       return next;
     });
 
-  // Shortcut flags retain the existing local-preference policy.
-  const pinnedSingles = {
-    liked: true,
-    downloads: true,
-    local: true,
-    ...((remote.pinnedSingles as object) ?? {}),
-    ...((local.pinnedSingles as object) ?? {}),
-  };
+  // Shortcut pins: this device's choice wins, except a set saved before the current defaults (no
+  // v2, "pinned" for every row) loses to a v2 set from the cloud. Missing keys read as the defaults
+  // (isPinned in src/stores/library.ts).
+  const localPins = (local.pinnedSingles ?? {}) as Record<string, unknown>;
+  const remotePins = (remote.pinnedSingles ?? {}) as Record<string, unknown>;
+  const pinnedSingles = remotePins.v2 && !localPins.v2 ? { ...localPins, ...remotePins } : { ...remotePins, ...localPins };
 
   const state = {
     ...remote, ...local, liked, history, playlists, folders, followedArtists, pinnedSingles,
@@ -94,6 +98,40 @@ export function mergeLibrary(
     downloads: localDevice.downloads ?? local.downloads ?? {},
   };
   return envelope({ ...state, deletionSync: compactDeletionSync(joined, state) }, mergedVersion(localPayload, remotePayload, 1));
+}
+
+/**
+ * A merged playlist's song order. When either side has put the songs in its
+ * own order (orderedAt), the newer order wins and songs it doesn't know yet
+ * follow in the order they were added. Otherwise playlists play in the order
+ * songs were added (oldest first) — sorting newest first reversed every
+ * playlist on a two-sided merge. A pure, symmetric function of both sides, so
+ * every device converges on the same order and re-merging changes nothing.
+ * Songs without stamps (older data) tie at 0 and fall back to id order.
+ */
+function inPlaylistOrder(
+  survivors: any[],
+  am: ReturnType<typeof readDeletionSync>,
+  bm: ReturnType<typeof readDeletionSync>,
+  playlistId: string,
+  local?: any,
+  remote?: any
+): any[] {
+  const addedAt = (id: string): number =>
+    Math.max(am.adds[deletionKey("tracks", id, playlistId)] ?? 0, bm.adds[deletionKey("tracks", id, playlistId)] ?? 0);
+  const byAdded = (x: any, y: any): number =>
+    addedAt(trackId(x)) - addedAt(trackId(y)) || (trackId(x) < trackId(y) ? -1 : trackId(x) > trackId(y) ? 1 : 0);
+  const order = (p: any): string[] => (Array.isArray(p?.tracks) ? p.tracks.map(trackId) : []);
+  const [la, ra] = [Number(local?.orderedAt) || 0, Number(remote?.orderedAt) || 0];
+  if (!la && !ra) return [...survivors].sort(byAdded);
+  // Newer explicit order wins; equal stamps fall back to a fixed tie-break.
+  const lo = order(local).join("\u0000");
+  const ro = order(remote).join("\u0000");
+  const base = la > ra || (la === ra && lo <= ro) ? order(local) : order(remote);
+  const rank = new Map(base.map((id, i) => [id, i]));
+  const known = survivors.filter((t) => rank.has(trackId(t))).sort((x, y) => rank.get(trackId(x))! - rank.get(trackId(y))!);
+  const fresh = survivors.filter((t) => !rank.has(trackId(t))).sort(byAdded);
+  return [...known, ...fresh];
 }
 
 /* ------------------------------------------------------------------ */
@@ -141,7 +179,10 @@ export function mergeRecentSearches(localPayload: Envelope, remotePayload: Envel
 /* ------------------------------------------------------------------ */
 
 /** Fields that describe THIS machine — stripped before upload, never pulled. */
-export const DEVICE_SETTINGS_FIELDS = ["downloadDir", "localMusicFolder"] as const;
+/** Settings that belong to this machine: paths, and the output device id
+ *  (another computer's audio device id means nothing here), and what closing
+ *  this computer's window does. */
+export const DEVICE_SETTINGS_FIELDS = ["downloadDir", "localMusicFolder", "audioSinkId", "lyricsOffset", "closeToTray"] as const;
 
 export function stripDeviceSettings(payload: Envelope): { state: Record<string, unknown>; version: number } {
   const state = stateOf(payload);
@@ -184,15 +225,27 @@ export function mergeListeningHistory(localPayload: Envelope, remotePayload: Env
   const b = toMap(remote.buckets);
 
   const mergeNamed = (x: any, y: any): any => (!x ? y : !y ? x : (y.ms ?? 0) > (x.ms ?? 0) ? y : x);
+  /** Per record (one track, artist or album) — comparing whole maps kept only
+   *  this device's map and dropped the other device's listening. */
+  const mergeRecords = (x: unknown, y: unknown): Record<string, any> => {
+    const xs = x && typeof x === "object" ? (x as Record<string, any>) : {};
+    const ys = y && typeof y === "object" ? (y as Record<string, any>) : {};
+    const out: Record<string, any> = {};
+    for (const key of new Set([...Object.keys(xs), ...Object.keys(ys)])) {
+      if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
+      out[key] = mergeNamed(xs[key], ys[key]);
+    }
+    return out;
+  };
   const buckets: any[] = [];
   for (const [month, lb] of a) {
     const rb = b.get(month);
     if (!rb) { buckets.push(lb); continue; }
     buckets.push({
       month,
-      tracks: mergeNamed(lb.tracks, rb.tracks),
-      artists: mergeNamed(lb.artists, rb.artists),
-      albums: mergeNamed(lb.albums, rb.albums),
+      tracks: mergeRecords(lb.tracks, rb.tracks),
+      artists: mergeRecords(lb.artists, rb.artists),
+      albums: mergeRecords(lb.albums, rb.albums),
       hours: Array.from({ length: 24 }, (_v, i) => Math.max(Number(lb?.hours?.[i]) || 0, Number(rb?.hours?.[i]) || 0)),
       days: (() => {
         const days: Record<string, number> = {};

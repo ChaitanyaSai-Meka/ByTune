@@ -23,6 +23,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as persist from "./persist";
 import { isUnderPath } from "./local-paths";
+import { isKnownAudio, isPlayableAudio, unplayableFormat } from "./audio-types";
 
 export interface LocalTrack {
   /** stable id — hash of the absolute path */
@@ -38,6 +39,10 @@ export interface LocalTrack {
   mtime: number;
   /** localart:// URL for the extracted cover, when one was found */
   art?: string;
+  /** the file's own codec (filled in by a scan; also marks an entry as read with these fields) */
+  codec?: string;
+  /** ReplayGain track gain from the tags, dB */
+  gainDb?: number;
 }
 
 export interface LocalFolderEntry {
@@ -55,6 +60,8 @@ export interface LocalLibrary {
   folders: LocalFolderEntry[];
   scannedAt: number;
   tracks: LocalTrack[];
+  /** files the last scan left out because their format can't play here, per format */
+  unplayable?: { format: string; count: number }[];
 }
 
 export interface AddFoldersResult {
@@ -70,7 +77,6 @@ export interface FolderStatus {
   exists: boolean;
 }
 
-const AUDIO_EXT = new Set([".mp3", ".m4a", ".aac", ".flac", ".wav", ".ogg", ".opus", ".wma", ".aiff", ".alac"]);
 const MIN_DURATION_SEC = 30;
 /** Hard ceiling on stored folder entries — protects against pathological picks. */
 const MAX_FOLDERS = 200;
@@ -190,6 +196,7 @@ export function readLocalLibrary(): LocalLibrary {
       folders: [...byKey.values()],
       scannedAt: typeof raw.scannedAt === "number" ? raw.scannedAt : 0,
       tracks: raw.tracks,
+      ...(Array.isArray(raw.unplayable) ? { unplayable: raw.unplayable } : {}),
     };
   }
   return { folders: [], scannedAt: 0, tracks: [] };
@@ -244,6 +251,7 @@ function saveLocalLibrary(lib: LocalLibrary, generation = libraryGeneration): Pr
  */
 export async function resetLocalLibrary(): Promise<void> {
   libraryGeneration += 1;
+  openedCache = null; // its store goes with the reset's data wipe
   await writeChain;
 }
 
@@ -274,7 +282,7 @@ function containsAudio(dir: string, root: string, depth: number): boolean {
     const abs = path.join(dir, e.name);
     if (e.isDirectory()) {
       if (containsAudio(abs, root, depth + 1)) return true;
-    } else if (e.isFile() && AUDIO_EXT.has(path.extname(e.name).toLowerCase())) {
+    } else if (e.isFile() && isPlayableAudio(e.name)) {
       // An organization convenience only — a folder of recordings/voice
       // notes is not a music collection, so mirror the scan's path filter
       // here and never seed an entry the scan would leave empty.
@@ -465,6 +473,59 @@ function extractArt(
   }
 }
 
+/**
+ * Tag duration in whole seconds. `music-metadata` reports NaN (not
+ * undefined) for files with damaged or absent headers, and `?? 0` does not
+ * catch NaN — a NaN duration serializes to JSON `null`, which made the whole
+ * cloud library row unreadable and broke every sync and restore.
+ */
+const parsedDuration = (value: number | undefined): number =>
+  typeof value === "number" && Number.isFinite(value) ? Math.round(value) : 0;
+
+/**
+ * One file's track record: its tags, cover, format and ReplayGain when they
+ * read, else what its file name says. `stillCurrent` throws when a reset ran
+ * meanwhile, so a late result never extracts a cover.
+ */
+async function readTrackFile(abs: string, stat: fs.Stats, stillCurrent: () => void = () => undefined): Promise<LocalTrack> {
+  const nameParts = titleFromFile(path.basename(abs));
+  const track: LocalTrack = {
+    id: `local:${hashPath(abs)}`,
+    path: abs,
+    title: nameParts.title || path.basename(abs),
+    artist: nameParts.artist ?? "Unknown artist",
+    album: "Unknown album",
+    duration: 0,
+    size: stat.size,
+    mtime: Math.floor(stat.mtimeMs),
+  };
+  try {
+    const { parseFile } = await import("music-metadata");
+    const meta = await parseFile(abs, { duration: true, skipCovers: false });
+    stillCurrent();
+    const c = meta.common;
+    // Tag text is untrusted (crafted ID3 frames can be multi-MB); bound every
+    // string that lands in the persisted store.
+    const bounded = (value: string | undefined): string | undefined =>
+      typeof value === "string" ? value.slice(0, 200) : undefined;
+    return {
+      ...track,
+      title: bounded(c.title?.trim()) || track.title,
+      artist: bounded(c.artist?.trim()) || bounded(c.albumartist?.trim()) || track.artist,
+      album: bounded(c.album?.trim()) || track.album,
+      genre: bounded(c.genre?.[0]),
+      duration: parsedDuration(meta.format.duration),
+      codec: bounded(meta.format.codec)?.toLowerCase(),
+      gainDb: Number.isFinite(c.replaygain_track_gain?.dB) ? c.replaygain_track_gain?.dB : undefined,
+      // Re-parsed (mtime changed) → refresh the extracted cover too.
+      art: extractArt(hashPath(abs), c.picture?.[0], true),
+    };
+  } catch {
+    stillCurrent();
+    return track; // untagged or unreadable — the file name stands
+  }
+}
+
 export async function scanLibrary(
   filterNonMusic: boolean,
   onProgress?: (done: number, total: number) => void
@@ -488,7 +549,7 @@ export async function scanLibrary(
         const abs = path.join(dir, e.name);
         if (e.isDirectory()) {
           walk(abs, depth + 1);
-        } else if (e.isFile() && AUDIO_EXT.has(path.extname(e.name).toLowerCase())) {
+        } else if (e.isFile() && isKnownAudio(e.name)) {
           // One physical file reachable through two imported roots (a parent
           // and its child both added) is indexed once.
           const key = abs.toLowerCase();
@@ -505,20 +566,11 @@ export async function scanLibrary(
     }
   }
 
-  const { parseFile } = await import("music-metadata");
-  checkGeneration(generation);
   const tracks: LocalTrack[] = [];
-
-  /**
-   * Tag duration in whole seconds. `music-metadata` reports NaN (not
-   * undefined) for files with damaged or absent headers, and `?? 0` does not
-   * catch NaN — a NaN duration serializes to JSON `null`, which made the whole
-   * cloud library row unreadable and broke every sync and restore.
-   */
-  const parsedDuration = (value: number | undefined): number =>
-    typeof value === "number" && Number.isFinite(value) ? Math.round(value) : 0;
-
   const prevByPath = new Map(existing.tracks.map((t) => [t.path, t]));
+  // Files whose format can't play here are left out and counted, so Local Music can say why.
+  const unplayable = new Map<string, number>();
+  const leaveOut = (format: string): void => void unplayable.set(format, (unplayable.get(format) ?? 0) + 1);
   let done = 0;
   for (const f of files) {
     checkGeneration(generation);
@@ -531,43 +583,25 @@ export async function scanLibrary(
     } catch {
       continue;
     }
-    // Unchanged since the last scan — carry the previous record forward.
-    if (prev && prev.mtime === Math.floor(stat.mtimeMs)) {
-      tracks.push(prev);
+    // Unchanged since the last scan — carry the previous record forward, unless
+    // it predates the format fields (codec, ReplayGain …): those read once more.
+    if (prev && prev.mtime === Math.floor(stat.mtimeMs) && prev.codec !== undefined) {
+      const format = unplayableFormat(prev.path, prev.codec);
+      if (format) leaveOut(format);
+      else tracks.push(prev);
       continue;
     }
-    const nameParts = titleFromFile(path.basename(f.abs));
-    let track: LocalTrack = {
-      id: `local:${hashPath(f.abs)}`,
-      path: f.abs,
-      title: nameParts.title || path.basename(f.abs),
-      artist: nameParts.artist ?? "Unknown artist",
-      album: "Unknown album",
-      duration: 0,
-      size: stat.size,
-      mtime: Math.floor(stat.mtimeMs),
-    };
-    try {
-      const meta = await parseFile(f.abs, { duration: true, skipCovers: false });
-      checkGeneration(generation);
-      const c = meta.common;
-      // Tag text is untrusted (crafted ID3 frames can be multi-MB); bound every
-      // string that lands in the persisted store.
-      const bounded = (value: string | undefined): string | undefined =>
-        typeof value === "string" ? value.slice(0, 200) : undefined;
-      track = {
-        ...track,
-        title: bounded(c.title?.trim()) || track.title,
-        artist: bounded(c.artist?.trim()) || bounded(c.albumartist?.trim()) || track.artist,
-        album: bounded(c.album?.trim()) || track.album,
-        genre: bounded(c.genre?.[0]),
-        duration: parsedDuration(meta.format.duration),
-        // Re-parsed (mtime changed) → refresh the extracted cover too.
-        art: extractArt(hashPath(f.abs), c.picture?.[0], true),
-      };
-    } catch (err) {
-      checkGeneration(generation);
-      /* untagged or unreadable — filename fallback stands */
+    // WMA and AIFF show by their extension; ALAC needs its tags read (it shares .m4a with AAC).
+    const byExtension = unplayableFormat(f.abs);
+    if (byExtension) {
+      leaveOut(byExtension);
+      continue;
+    }
+    const track = await readTrackFile(f.abs, stat, () => checkGeneration(generation));
+    const byCodec = unplayableFormat(f.abs, track.codec);
+    if (byCodec) {
+      leaveOut(byCodec);
+      continue;
     }
     // Mobile parity: sub-30s clips are ineligible, and a track whose duration
     // couldn't be read at all is excluded rather than guessed about.
@@ -577,7 +611,12 @@ export async function scanLibrary(
   }
 
   checkGeneration(generation);
-  const lib: LocalLibrary = { folders, scannedAt: Date.now(), tracks };
+  const lib: LocalLibrary = {
+    folders,
+    scannedAt: Date.now(),
+    tracks,
+    unplayable: [...unplayable].map(([format, count]) => ({ format, count })),
+  };
   // The scan is long-lived; a rename/add/remove that ran while files were
   // being parsed must survive the scan's save. Serialized with the other
   // mutations, and the folder list is re-read at commit time — the scan
@@ -613,7 +652,69 @@ export function readLocalArtThumb(thumb: string): { data: Buffer; mime: string }
 }
 
 export function localTrackById(id: string): LocalTrack | null {
-  return readLocalLibrary().tracks.find((t) => t.id === id) ?? null;
+  return readLocalLibrary().tracks.find((t) => t.id === id) ?? openedFiles().find((t) => t.id === id) ?? null;
+}
+
+/* ------------------------- files opened with ByTune ------------------------- */
+
+const OPENED_STORE = "opened-files";
+const MAX_OPENED = 200;
+let openedCache: LocalTrack[] | null = null;
+
+/**
+ * Files opened with ByTune (Open with, a double-click, a drop on the window),
+ * newest first. They live apart from the imported folders, so a rescan never
+ * drops them and the scan's 30-second minimum doesn't apply; the list holds
+ * only files the user handed over, which is what makes them playable by id.
+ */
+export function openedFiles(): LocalTrack[] {
+  if (!openedCache) {
+    const raw = persist.readData(OPENED_STORE);
+    openedCache = Array.isArray(raw) ? (raw as LocalTrack[]).filter((t) => typeof t?.id === "string" && typeof t.path === "string") : [];
+  }
+  return openedCache;
+}
+
+async function saveOpened(list: LocalTrack[]): Promise<void> {
+  openedCache = list;
+  await persist.writeData(OPENED_STORE, list);
+}
+
+/** Read these files and add them to the opened list. Folders, other files and what can't play are skipped;
+ *  `unplayable` names the formats of the audio files left out ("WMA", "ALAC"). */
+export async function openFiles(paths: string[]): Promise<{ tracks: LocalTrack[]; unplayable: string[] }> {
+  const tracks: LocalTrack[] = [];
+  const unplayable: string[] = [];
+  for (const p of paths) {
+    const abs = path.resolve(p);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(abs);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile() || !isKnownAudio(abs)) continue;
+    const byExtension = unplayableFormat(abs);
+    if (byExtension) {
+      unplayable.push(byExtension);
+      continue;
+    }
+    const track = await readTrackFile(abs, stat);
+    const byCodec = unplayableFormat(abs, track.codec);
+    if (byCodec) unplayable.push(byCodec);
+    else if (!tracks.some((t) => t.id === track.id)) tracks.push(track);
+  }
+  if (tracks.length) {
+    const ids = new Set(tracks.map((t) => t.id));
+    await saveOpened([...tracks, ...openedFiles().filter((t) => !ids.has(t.id))].slice(0, MAX_OPENED));
+  }
+  return { tracks, unplayable };
+}
+
+/** Take a file off the opened list (the file itself stays where it is). */
+export async function forgetOpenedFile(id: string): Promise<LocalTrack[]> {
+  await saveOpened(openedFiles().filter((t) => t.id !== id));
+  return openedFiles();
 }
 
 export function localStreamPath(id: string): string | null {

@@ -13,27 +13,23 @@
  */
 import { Play } from "lucide-react";
 import { AlbumCard, ArtistCard, HomeShelfView, TrackCard } from "../components/Cards";
-import { EyebrowHeader, MixCard, RadioCard } from "../components/recCards";
+import { Crate } from "../components/Crate";
+import { EyebrowHeader, MixCard, RadioCard, SideCard, TrackColumns, homeTrackMenu } from "../components/recCards";
 import { Artwork, Shelf, ShelfScroller, ShelfSkeleton } from "../components/primitives";
+import { FitText } from "../components/FitText";
+import { shortTitle } from "../lib/format";
 import { useHomeFeed } from "../lib/recs/feed";
 import { useDrag } from "../lib/dnd";
+import { historyMenuItems } from "../lib/trackActions";
 import type { HomeSection } from "../lib/recs/sections";
+import { useHomeEngagement } from "../stores/homeEngagement";
 import { usePlayer } from "../stores/player";
 import { tintHoverHandlers, useUI } from "../stores/ui";
 import type { Track } from "../types";
 
-function greeting(): string {
-  const h = new Date().getHours();
-  if (h < 5) return "Up late?";
-  if (h < 12) return "Good morning";
-  if (h < 17) return "Good afternoon";
-  if (h < 22) return "Good evening";
-  return "Good night";
-}
-
 /** Quick-resume tiles — the compact 2×3 grid straight from history. Hovering
-    a tile borrows its artwork colour for the panel wash (TintWash in App),
-    and every tile is a drag source for the library. */
+    a tile shows its artwork in the panel's glow (components/CoverGlow), and
+    every tile is a drag source for the library. */
 function QuickTile({ track }: { track: Track }) {
   const playQueue = usePlayer((s) => s.playQueue);
   const drag = useDrag({ track });
@@ -49,18 +45,25 @@ function QuickTile({ track }: { track: Track }) {
           open();
         }
       }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        useUI.getState().openContextMenu(e.clientX, e.clientY, historyMenuItems(track));
+      }}
       {...tintHoverHandlers(track.thumb)}
       {...drag.props}
-      className={`group flex items-center gap-3 h-16 pr-3 rounded-lg bg-ink-hi/[0.03] text-left hover:bg-ink-hi/[0.08] transition-all overflow-hidden cursor-pointer select-none ${
+      className={`fit-host group flex items-center gap-3 h-16 pr-3 rounded-lg bg-ink-hi/[0.03] text-left hover:bg-ink-hi/[0.08] transition-all overflow-hidden cursor-pointer select-none ${
         drag.dragging ? "opacity-40" : ""
       }`}
     >
       <Artwork src={track.thumb} className="h-16 w-16 rounded-none shrink-0" iconClassName="w-5 h-5" alt="" />
       <div className="min-w-0 flex-1">
-        <div className="text-[13px] font-medium text-ink truncate group-hover:text-ink-hi transition-colors">
-          {track.title}
-        </div>
-        <div className="text-xs text-ink-faint truncate mt-0.5">{track.artist}</div>
+        <FitText
+          lines={2}
+          text={shortTitle(track.title)}
+          full={track.title}
+          className="text-[13px] font-medium leading-[1.3] text-ink group-hover:text-ink-hi transition-colors"
+        />
+        <FitText text={track.artist} className="text-xs text-ink-faint mt-0.5" />
       </div>
       <span className="w-9 h-9 rounded-full bg-primary text-on-primary grid place-items-center shadow-elev opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
         <Play className="w-4 h-4 fill-current ml-0.5" />
@@ -104,20 +107,28 @@ function SectionView({ section }: { section: HomeSection }) {
   if (section.layout === "yt-shelf" && section.shelf) {
     return <HomeShelfView shelf={section.shelf} />;
   }
+  if (section.layout === "crate" && section.playlists) {
+    return <Crate title={section.title} playlists={section.playlists} className="animate-slide-up" />;
+  }
 
   const body = (() => {
     if (section.layout === "tiles") {
       const tileTracks = section.items.flatMap((it) => (it.style === "track" ? [it.track] : []));
       return (
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-2.5">
-          {tileTracks.map((t) => (
-            <QuickTile key={t.id} track={t} />
-          ))}
+        <div className="tile-host">
+          <div className="tile-grid">
+            {tileTracks.map((t) => (
+              <QuickTile key={t.id} track={t} />
+            ))}
+          </div>
         </div>
       );
     }
     if (section.layout === "moods") {
       return <MoodChips moods={section.moods ?? []} />;
+    }
+    if (section.layout === "list") {
+      return <TrackColumns items={section.items.flatMap((it) => (it.style === "track" ? [it] : []))} />;
     }
     return (
       <ShelfScroller>
@@ -125,13 +136,15 @@ function SectionView({ section }: { section: HomeSection }) {
           const key = `${section.id}-${item.style}-${i}`;
           switch (item.style) {
             case "track":
-              return <TrackCard key={key} track={item.track} />;
+              return <TrackCard key={key} track={item.track} menu={() => homeTrackMenu(item.track)} />;
             case "album":
               return <AlbumCard key={key} album={item.album} />;
             case "artist":
               return <ArtistCard key={key} artist={item.artist} />;
             case "mix":
               return <MixCard key={key} item={item} />;
+            case "side":
+              return <SideCard key={key} item={item} />;
             case "radio":
               return <RadioCard key={key} item={item} />;
             default:
@@ -160,22 +173,26 @@ function SectionView({ section }: { section: HomeSection }) {
 
 export function HomeView() {
   const { sections, profile } = useHomeFeed();
-  // The wash at the top of the pane is global now (TintWash in App.tsx): at
-  // rest it wears the playing track's colour, and hovering any card on any
-  // view borrows that card's artwork colour.
+  // The glow at the top of the pane is global (components/CoverGlow): at rest
+  // it shows the playing track's cover, and hovering any card on any view
+  // shows that card's artwork instead.
 
   return (
     <div className="relative">
+      {/* No greeting: Home opens straight on your music. The heading stays for screen readers. */}
+      <h1 className="sr-only">Home</h1>
       <div className="relative space-y-10">
-        <div className="animate-slide-up pt-2">
-          <h1 className="font-display text-[34px] font-extrabold tracking-[-0.03em] text-ink-hi leading-tight">
-            {greeting()}
-          </h1>
-          <p className="text-[14px] text-ink-dim mt-1">What do you feel like listening to?</p>
-        </div>
 
         {sections.map((section) => (
-          <SectionView key={section.id} section={section} />
+          // A press inside a row counts for its kind: the rows you play from rise on your next visit.
+          <div
+            key={section.id}
+            onClickCapture={(e) => {
+              if ((e.target as HTMLElement).closest("button, [role='button'], a")) useHomeEngagement.getState().tap(section.kind);
+            }}
+          >
+            <SectionView section={section} />
+          </div>
         ))}
 
         {/* Stats still loading on a cold app launch — hold the layout. */}

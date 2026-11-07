@@ -36,6 +36,17 @@ Bundle facts checked on the installed copy: `CFBundleIdentifier com.bytune.music
 - **Not notarized.** Nothing was fabricated; the artifacts work locally because files created
   locally carry no quarantine attribute.
 
+**Update (2026-10-29):** that unsealed state is exactly what users downloading v1.0.0/v1.0.1 hit
+as "ByTune is damaged and can't be opened. You should move it to the Trash." (arm64 binaries
+linker-signed, x64 binaries unsigned, no `_CodeSignature/CodeResources`). The build now ad-hoc
+signs the whole bundle in an `afterPack` hook (`scripts/after-pack.cjs`, hardened runtime off —
+an ad-hoc signature has no Team ID, so library validation would block Electron Framework), and
+the macOS CI job runs `codesign --verify --deep --strict` on every shipped app. Downloaded copies
+then get the ordinary "allow once" Gatekeeper prompt instead of the dead end. The same
+update raised `LSMinimumSystemVersion` from 11.0.0 to 13.0: Electron 44's binaries are built for
+macOS 13+ (`LC_BUILD_VERSION minos 13.0`), so 11.0.0 let macOS 11/12 install an app that could
+never launch; CI now fails a build whose declared minimum is below the binaries' floor.
+
 To produce a signed, notarized release (from DISTRIBUTION.md, unchanged):
 
 ```bash
@@ -69,8 +80,8 @@ Observed: app boots to onboarding/shell; creates `~/Library/Application Support/
 with the expected stores; streams real audio; quits cleanly; player state survives.
 
 ⚠️ On a machine where the DMG arrived via the internet (quarantine attribute present) the
-unsigned build triggers Gatekeeper — right-click → Open (or remove quarantine) is required.
-This disappears once §2 is done.
+un-notarized build triggers Gatekeeper once — macOS 15+: System Settings → Privacy & Security →
+Open Anyway; macOS 13–14: right-click → Open. This disappears once §2 is done.
 
 ## 4. Deep-link registration (verified)
 

@@ -21,6 +21,8 @@
 /** Commands the renderer understands (src/lib/menuCommands.ts mirrors this). */
 export type MenuCommand =
   | "play-pause"
+  /** Not on a menu: main.ts sends it as the window closes to the Windows tray. */
+  | "pause"
   | "next"
   | "previous"
   | "shuffle"
@@ -32,7 +34,14 @@ export type MenuCommand =
   | "now-playing"
   | "miniplayer"
   | "settings"
-  | "focus-search";
+  /** Settings › About, where an update shows (Check for Updates, the update notification). */
+  | "updates"
+  | "focus-search"
+  | "sleep-15"
+  | "sleep-30"
+  | "sleep-60"
+  | "sleep-end"
+  | "sleep-off";
 
 export interface MenuPlaybackState {
   playing: boolean;
@@ -48,6 +57,8 @@ export interface MenuWiring {
   backupImport(): void;
   /** Raise (unhide + focus) the main window. */
   showMainWindow(): void;
+  /** Settings › About in front, and a fresh look for a new version. */
+  checkForUpdates(): void;
 }
 
 export type MenuTemplate = import("electron").MenuItemConstructorOptions[];
@@ -84,6 +95,17 @@ export function buildAppMenu(state: MenuPlaybackState, wiring: MenuWiring, isDev
         click: mode === state.repeat ? undefined : cmd(`repeat-${mode}`),
       })),
     },
+    {
+      label: "Sleep Timer",
+      submenu: [
+        { label: "15 Minutes", click: cmd("sleep-15") },
+        { label: "30 Minutes", click: cmd("sleep-30") },
+        { label: "1 Hour", click: cmd("sleep-60") },
+        { label: "End of This Song", click: cmd("sleep-end") },
+        { type: "separator" },
+        { label: "Turn Off", click: cmd("sleep-off") },
+      ],
+    },
     { type: "separator" },
     { label: "Show Queue", click: cmd("queue") },
     { label: "Show Lyrics", click: cmd("lyrics") },
@@ -95,6 +117,7 @@ export function buildAppMenu(state: MenuPlaybackState, wiring: MenuWiring, isDev
       label: "ByTune",
       submenu: [
         { role: "about", label: "About ByTune" },
+        { label: "Check for Updates", click: (): void => wiring.checkForUpdates() },
         { type: "separator" },
         {
           label: "Settings…",

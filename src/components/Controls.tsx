@@ -31,9 +31,12 @@ export function SeekBar({ large = false, showRemaining = false, thin = false }: 
   // seeking there would make playback jump around under the cursor. The real
   // seek happens once, on release (pointer up / keyboard key up).
   const [dragValue, setDragValue] = useState<number | null>(null);
-  const max = duration > 0 ? duration : 1;
-  const shown = dragValue ?? Math.min(position, max);
-  const pct = Math.min(100, (shown / max) * 100);
+  // A length not known yet (a song restored at launch that hasn't loaded) shows
+  // where it will resume, over an empty bar.
+  const known = duration > 0;
+  const max = known ? duration : 1;
+  const shown = dragValue ?? (known ? Math.min(position, max) : position);
+  const pct = known ? Math.min(100, (shown / max) * 100) : 0;
   const bufPct = Math.min(100, Math.max(buffered * 100, pct));
 
   const commit = () => {
@@ -54,7 +57,7 @@ export function SeekBar({ large = false, showRemaining = false, thin = false }: 
         min={0}
         max={max}
         step={0.5}
-        value={shown}
+        value={known ? shown : 0}
         onChange={(e) => setDragValue(Number(e.target.value))}
         onPointerUp={(e) => {
           commit();

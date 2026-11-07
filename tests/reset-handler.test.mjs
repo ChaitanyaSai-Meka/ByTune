@@ -7,9 +7,11 @@ import vm from "node:vm";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { transform, build } from "esbuild";
+import { srcModule } from "./helpers/src-module.mjs";
 const require = createRequire(import.meta.url);
 
 test("actual main reset IPC clears files and stops the real stats timer", async () => {
+  const { DEVICE_SETTINGS_FIELDS } = await import("../.test-build/sync-merge.mjs");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bytune-reset-handler-"));
   const handlers = new Map();
   const electron = {
@@ -28,14 +30,21 @@ test("actual main reset IPC clears files and stops the real stats timer", async 
       require(name) {
         if (name === "electron") return electron;
         if (name === "../src/lib/config") return { SYNCED_STORES: ["library", "settings", "recent-searches", "listening-signals"] };
+        if (name === "../src/lib/replayFormat") return { creditNames: (line) => [line] };
         if (name === "./persist") return loaded.persist;
         if (name === "./stats") return loaded.stats;
         if (name === "./data-transition") return loaded.transition;
         if (name === "./sync") return { resetSyncState() {}, syncNowExclusive: async () => ({}), noteLocalWrite() {} };
-        if (name === "./supabase") return { readProfile: () => null, signIn: async (id) => ({ mode: "account", userId: id }), signOut: async () => ({ mode: null, userId: null }) };
+        if (name === "./supabase") return { readProfile: () => null, signIn: async (id) => ({ mode: "account", userId: id }), signOut: async () => ({ mode: null, userId: null }), syncDisplayName: async () => false };
         if (name === "./downloads") return { resetDownloads: async () => {}, addDownloadListener() {}, defaultDownloadDir: async () => path.join(dir, "downloads") };
         if (name === "./local-library") return { resetLocalLibrary: async () => {} };
+        if (name === "./sync-merge") return { DEVICE_SETTINGS_FIELDS };
         if (name === "./pip") return { registerPipIpc() {}, isTrustedSender: () => true, restrictNavigation() {}, rendererUrl: () => "http://127.0.0.1:5173/" };
+        if (name === "./stream-proxy") return { setDownloadedFileLookup() {} };
+        if (name === "./downloaded-files") return { noteLibrary() {}, noteDownloaded() {}, downloadedFilePath: () => null };
+        if (name === "./spotify") return { forgetSpotify: async () => {}, moveGuestSpotify: async () => {} };
+        if (name === "./rooms") return { onRoomChange() {}, leaveRoom: async () => ({}), roomView: () => ({ state: null }) };
+        if (name.startsWith("../src/")) return srcModule(name);
         if (name.startsWith("./")) return {};
         return require(name);
       },

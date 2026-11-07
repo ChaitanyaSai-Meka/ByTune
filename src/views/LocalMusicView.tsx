@@ -2,7 +2,8 @@
  * Local music — the user's imported folders as independent collections.
  * The list view shows every imported folder (a picked parent appears with
  * its music-bearing subfolders); opening one scopes songs/albums/artists to
- * it. "All songs" keeps the whole index in one list. Scanning lives in the
+ * it, and its Folders tab walks the folders inside it one level at a time.
+ * "All songs" keeps the whole index in one list. Scanning lives in the
  * main process; this view renders from the persisted cache and rescans on
  * request. Renames and removals only edit ByTune's metadata/index — the
  * folders and files on disk are never touched.
@@ -10,26 +11,43 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
-  ArrowLeft,
+  ChevronRight,
+  FileMusic,
+  Folder,
   FolderOpen,
   FolderPlus,
+  HardDrive,
   ListMusic,
+  MoreHorizontal,
   Music2,
   Pencil,
+  Play,
   RefreshCw,
   Search,
+  Shuffle,
   Trash2,
   User,
+  X,
 } from "lucide-react";
 import { TrackList } from "../components/TrackList";
+import { CollectionHero, HERO_PLAY } from "../components/CollectionHero";
+import { CoverStack } from "../components/CoverStack";
+import { HERO_PILL, HERO_ROUND } from "../components/PlaylistHero";
 import { Artwork, EmptyState, Pills } from "../components/primitives";
+import { FitText } from "../components/FitText";
+import { collectionFacts } from "../lib/collection";
+import { shortTitle } from "../lib/format";
+import { usePlayer } from "../stores/player";
 import { isUnderPath } from "../../electron/local-paths";
 import { useSettings } from "../stores/settings";
 import { useUI } from "../stores/ui";
 import type { FolderStatus, LocalFolderEntry, LocalTrack } from "../../electron/local-library";
 import type { Track } from "../types";
+import { localToTrack } from "../lib/localTrack";
+import { OPENED_FILES_EVENT } from "../lib/openedFiles";
+import { trackMenuItems } from "../lib/trackActions";
 
-type Tab = "songs" | "albums" | "artists";
+type Tab = "songs" | "albums" | "artists" | "folders";
 type Sort = "title" | "artist" | "recent";
 
 /** The open collection: the route param is "all" or an imported folder path. */
@@ -39,25 +57,35 @@ interface LibState {
   folders: LocalFolderEntry[];
   scannedAt: number;
   tracks: LocalTrack[];
+  /** files the last scan left out because ByTune can't play their format */
+  unplayable?: { format: string; count: number }[];
 }
 
-function toTrack(t: LocalTrack): Track & { mtime: number } {
-  return {
-    id: t.id,
-    title: t.title,
-    artist: t.artist,
-    album: t.album,
-    duration: t.duration,
-    thumb: t.art ?? "",
-    // Mark local origin explicitly: the id prefix already routes playback,
-    // but dependents (canvas lookup, silence analysis) check this flag.
-    localPath: t.path,
-    mtime: t.mtime,
-  };
+/** One folder's contents: its subfolders (with how many songs each holds, deeper ones included) and the songs right in it. */
+function folderListing(tracks: LocalTrack[], at: string): { folders: [string, number][]; here: Set<string> } {
+  const sub = new Map<string, number>();
+  const here = new Set<string>();
+  for (const t of tracks) {
+    if (!isUnderPath(t.path, at)) continue;
+    const parts = t.path.slice(at.length).replace(/^[\\/]+/, "").split(/[\\/]/);
+    if (parts.length === 1) here.add(t.id);
+    else sub.set(parts[0], (sub.get(parts[0]) ?? 0) + 1);
+  }
+  return { folders: [...sub].sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true })), here };
 }
+
+/** A subfolder's path, written with its parent's own separator. */
+const childPath = (parent: string, name: string): string => {
+  const sep = parent.includes("\\") ? "\\" : "/";
+  return parent.endsWith(sep) ? parent + name : parent + sep + name;
+};
+
+/** The route param of the files opened with ByTune (Open with, a double-click, a drop on the window). */
+const OPENED = "opened";
 
 export function LocalMusicView() {
   const [lib, setLib] = useState<LibState | null>(null);
+  const [opened, setOpened] = useState<LocalTrack[]>([]);
   const [missing, setMissing] = useState<Set<string>>(new Set());
   const [scanning, setScanning] = useState(false);
   const [tab, setTab] = useState<Tab>("songs");
@@ -65,9 +93,12 @@ export function LocalMusicView() {
   const [q, setQ] = useState("");
   const [albumFilter, setAlbumFilter] = useState<string | null>(null);
   const [artistFilter, setArtistFilter] = useState<string | null>(null);
+  /** the Folders tab's current folder (null: the collection's own) */
+  const [folderAt, setFolderAt] = useState<string | null>(null);
   const settings = useSettings();
   const toast = useUI((s) => s.toast);
   const openDialog = useUI((s) => s.openDialog);
+  const openContextMenu = useUI((s) => s.openContextMenu);
   const navigate = useUI((s) => s.navigate);
   const routeParam = useUI((s) => (s.view.name === "local" ? s.view.param ?? null : null));
 
@@ -76,14 +107,16 @@ export function LocalMusicView() {
     [routeParam, lib]
   );
   // A param pointing at a folder that is no longer imported reads as the list.
-  const openPath = routeParam === ALL || openFolder ? routeParam : null;
+  const openPath = routeParam === ALL || routeParam === OPENED || openFolder ? routeParam : null;
 
   const refresh = async (): Promise<void> => {
-    const [l, statuses] = await Promise.all([
+    const [l, statuses, files] = await Promise.all([
       window.bytune?.localLibrary(),
       window.bytune?.libraryFolderStatuses?.(),
+      window.bytune?.openedFiles?.(),
     ]);
     if (l) setLib(l as LibState);
+    if (files) setOpened(files);
     if (statuses) {
       setMissing(new Set((statuses as FolderStatus[]).filter((st) => !st.exists).map((st) => st.path)));
     }
@@ -99,8 +132,20 @@ export function LocalMusicView() {
       else void refresh();
     };
     window.addEventListener("bytune:local-library-updated", onChanged);
-    return () => window.removeEventListener("bytune:local-library-updated", onChanged);
+    const onOpened = (): void => void refresh();
+    window.addEventListener(OPENED_FILES_EVENT, onOpened);
+    return () => {
+      window.removeEventListener("bytune:local-library-updated", onChanged);
+      window.removeEventListener(OPENED_FILES_EVENT, onOpened);
+    };
   }, []);
+
+  const forgetOpened = (track: Track): void => {
+    void window.bytune?.forgetOpenedFile(track.id).then((files) => {
+      setOpened(files);
+      if (files.length === 0 && routeParam === OPENED) navigate({ name: "local" });
+    });
+  };
 
   // Filters are per-collection — a new collection starts clean.
   useEffect(() => {
@@ -108,6 +153,7 @@ export function LocalMusicView() {
     setQ("");
     setAlbumFilter(null);
     setArtistFilter(null);
+    setFolderAt(null);
   }, [openPath]);
 
   const rescan = async (): Promise<void> => {
@@ -197,11 +243,12 @@ export function LocalMusicView() {
     const all = lib?.tracks ?? [];
     if (!openPath) return [];
     if (openPath === ALL) return all;
+    if (openPath === OPENED) return opened;
     return all.filter((t) => isUnderPath(t.path, openPath));
-  }, [lib, openPath]);
+  }, [lib, openPath, opened]);
 
   const tracks: (Track & { mtime: number })[] = useMemo(() => {
-    let out = scoped.map(toTrack);
+    let out = scoped.map(localToTrack);
     const needle = q.trim().toLowerCase();
     if (needle) {
       out = out.filter(
@@ -243,6 +290,25 @@ export function LocalMusicView() {
     return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [scoped]);
 
+  // The Folders tab of a folder collection: its subfolders, one level at a time.
+  const folderRoot = openFolder?.path ?? null;
+  const rootListing = useMemo(() => (folderRoot ? folderListing(scoped, folderRoot) : null), [scoped, folderRoot]);
+  const listing = useMemo(
+    () => (folderRoot && folderAt ? folderListing(scoped, folderAt) : rootListing),
+    [scoped, folderRoot, folderAt, rootListing]
+  );
+  const folderTracks = useMemo(() => (listing ? tracks.filter((t) => listing.here.has(t.id)) : []), [tracks, listing]);
+
+  // Files the last scan left out, by format: "3 files left out: ByTune can't play WMA or ALAC files."
+  const leftOut = useMemo(() => {
+    const formats = lib?.unplayable ?? [];
+    const n = formats.reduce((sum, f) => sum + f.count, 0);
+    if (!n) return null;
+    const names = formats.map((f) => f.format);
+    const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}` : names[0];
+    return `${n} file${n === 1 ? "" : "s"} left out: ByTune can't play ${list} files.`;
+  }, [lib]);
+
   const scannedLabel =
     lib?.scannedAt && lib.scannedAt > 0
       ? `Scanned ${new Date(lib.scannedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`
@@ -251,7 +317,7 @@ export function LocalMusicView() {
   const folderTitle = (f: LocalFolderEntry): string => f.displayName ?? f.name;
 
   /* ---------------- Empty: nothing imported yet ---------------- */
-  if (!lib || lib.folders.length === 0) {
+  if (!lib || (lib.folders.length === 0 && opened.length === 0)) {
     return (
       <div className="pt-6">
         <EmptyState
@@ -274,222 +340,246 @@ export function LocalMusicView() {
   }
 
   /* ---------------- List: the imported collections ---------------- */
+  /** Plays songs as Local Music (its left-panel row shows them playing). */
+  const playLocal = (list: Track[], shuffle = false): void => {
+    if (!list.length) return;
+    if (shuffle) usePlayer.setState({ shuffle: true });
+    usePlayer.getState().playQueue(list, shuffle ? Math.floor(Math.random() * list.length) : 0, "__local__");
+  };
+  /** A folder's options: renaming and removing touch ByTune's list only, never the disk. */
+  const folderMenu =
+    (f: LocalFolderEntry) =>
+    (x: number, y: number): void =>
+      openContextMenu(x, y, [
+        { label: "Rename in ByTune", icon: Pencil, action: () => renameFolder(f) },
+        { label: "Remove from ByTune", icon: Trash2, danger: true, action: () => removeFolder(f) },
+      ]);
+  const songs = (n: number): string => `${n} song${n === 1 ? "" : "s"}`;
+
   if (!openPath) {
+    const everything = lib.tracks.map(localToTrack);
+    const facts = collectionFacts(everything);
     return (
-      <div className="space-y-5">
-        <div className="flex items-center justify-between gap-4 flex-wrap animate-slide-up">
-          <div className="min-w-0">
-            <h1 className="font-display text-[34px] font-bold tracking-[-0.03em] text-ink-hi">Local Music</h1>
-            <p className="text-[13px] text-ink-faint mt-1">
-              {lib.folders.length} folder{lib.folders.length === 1 ? "" : "s"} on this device
-              {scannedLabel ? ` — ${scannedLabel}` : ""}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => void rescan()}
-              disabled={scanning}
-              title="Rescan every folder"
-              className="w-9 h-9 grid place-items-center rounded-lg bg-ink-hi/[0.06] hover:bg-ink-hi/[0.12] text-ink-dim hover:text-ink-hi transition-colors disabled:opacity-50"
-            >
-              <RefreshCw className={`w-4 h-4 ${scanning ? "animate-spin" : ""}`} />
-            </button>
-            <button
-              onClick={() => void addFolders()}
-              disabled={scanning}
-              className="inline-flex items-center gap-2 h-9 px-4 rounded-lg bg-accent text-[13px] font-semibold text-on-primary hover:brightness-110 transition-all disabled:opacity-50"
-            >
-              <FolderPlus className="w-4 h-4" />
-              Add folders
-            </button>
-          </div>
-        </div>
-
-        {scanning && (
-          <div className="flex items-center gap-3 text-[13px] text-ink-dim">
-            <span className="w-4 h-4 rounded-full border-2 border-ink-hi/15 border-t-accent animate-spin" />
-            Reading tags and artwork…
-          </div>
-        )}
-
-        <div className="space-y-1.5">
+      <div className="pb-14">
+        <CollectionHero
+          icon={HardDrive}
+          kind="On this device"
+          title="Local Music"
+          covers={lib.tracks.map((t) => t.art)}
+          facts={
+            <>
+              {[facts.songs, `${lib.folders.length} folder${lib.folders.length === 1 ? "" : "s"}`, scannedLabel].filter(Boolean).join(" · ")}
+              {leftOut && <span className="block mt-1.5 text-[13px] text-white/55">{leftOut}</span>}
+            </>
+          }
+        >
           <button
-            onClick={() => navigate({ name: "local", param: ALL })}
-            className="w-full flex items-center gap-3.5 p-3 rounded-xl hover:bg-ink-hi/[0.05] transition-colors text-left group"
+            type="button"
+            className={HERO_PLAY}
+            aria-label="Play all your local music"
+            disabled={!everything.length}
+            onClick={() => playLocal(everything)}
           >
-            <span className="w-11 h-11 rounded-md bg-accent/15 grid place-items-center shrink-0">
-              <ListMusic className="w-5 h-5 text-accent" />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-[14.5px] font-semibold text-ink-hi truncate">All songs</span>
-              <span className="block text-[12.5px] text-ink-dim truncate">
-                Everything imported · {lib.tracks.length} song{lib.tracks.length === 1 ? "" : "s"}
-              </span>
-            </span>
+            <Play className="w-5 h-5 fill-current" />
+            Play
           </button>
+          <button
+            type="button"
+            className={HERO_ROUND}
+            aria-label="Shuffle"
+            title="Shuffle"
+            disabled={!everything.length}
+            onClick={() => playLocal(everything, true)}
+          >
+            <Shuffle className="w-5 h-5" />
+          </button>
+          <button
+            type="button"
+            className={HERO_ROUND}
+            aria-label="Rescan every folder"
+            title="Rescan every folder"
+            disabled={scanning}
+            onClick={() => void rescan()}
+          >
+            <RefreshCw className={`w-5 h-5 ${scanning ? "animate-spin" : ""}`} />
+          </button>
+          <button type="button" className={HERO_PILL} disabled={scanning} onClick={() => void addFolders()}>
+            <FolderPlus className="w-[18px] h-[18px]" />
+            Add folders
+          </button>
+        </CollectionHero>
 
+        {scanning && <Scanning />}
+
+        <section aria-label="Your local music" className="stack-grid mt-8">
+          {lib.folders.length > 0 && (
+            <CoverStack
+              covers={lib.tracks.map((t) => t.art)}
+              title="All songs"
+              subtitle={`Everything imported · ${songs(lib.tracks.length)}`}
+              fallback={ListMusic}
+              onOpen={() => navigate({ name: "local", param: ALL })}
+              onPlay={everything.length ? () => playLocal(everything) : undefined}
+            />
+          )}
           {lib.folders.map((f) => {
-            const count = lib.tracks.filter((t) => isUnderPath(t.path, f.path)).length;
+            const inside = lib.tracks.filter((t) => isUnderPath(t.path, f.path));
             const gone = missing.has(f.path);
             return (
-              <div
+              <CoverStack
                 key={f.path}
-                className="w-full flex items-center gap-3.5 p-3 rounded-xl hover:bg-ink-hi/[0.05] transition-colors text-left group cursor-pointer"
-                onClick={() => navigate({ name: "local", param: f.path })}
-              >
-                <span
-                  className={`w-11 h-11 rounded-md grid place-items-center shrink-0 ${
-                    gone ? "bg-amber-500/15" : "bg-ink-hi/[0.06]"
-                  }`}
-                >
-                  {gone ? (
-                    <AlertTriangle className="w-5 h-5 text-amber-400" />
-                  ) : (
-                    <FolderOpen className="w-5 h-5 text-ink-hi/55" />
-                  )}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[14.5px] font-semibold text-ink-hi truncate">{folderTitle(f)}</span>
-                  <span
-                    className={`block text-[12.5px] truncate mt-0.5 ${gone ? "text-amber-400/90" : "text-ink-dim"}`}
-                    title={f.path}
-                  >
-                    {gone
-                      ? "Folder missing — check the drive, or remove it from ByTune"
-                      : `${count} song${count === 1 ? "" : "s"} · ${f.path}`}
-                  </span>
-                </span>
-                <span className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      renameFolder(f);
-                    }}
-                    title="Rename in ByTune"
-                    className="w-8 h-8 grid place-items-center rounded-lg text-ink-dim hover:text-ink-hi hover:bg-ink-hi/[0.08] transition-colors"
-                  >
-                    <Pencil className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeFolder(f);
-                    }}
-                    title="Remove from ByTune (files stay on disk)"
-                    className="w-8 h-8 grid place-items-center rounded-lg text-ink-dim hover:text-red-400 hover:bg-red-400/10 transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </span>
-              </div>
+                covers={inside.map((t) => t.art)}
+                title={folderTitle(f)}
+                subtitle={gone ? "Folder missing: check the drive, or remove it" : songs(inside.length)}
+                warn={gone}
+                fallback={FolderOpen}
+                onOpen={() => navigate({ name: "local", param: f.path })}
+                onPlay={inside.length ? () => playLocal(inside.map(localToTrack)) : undefined}
+                onMenu={folderMenu(f)}
+                rootProps={{
+                  title: f.path,
+                  onContextMenu: (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    folderMenu(f)(e.clientX, e.clientY);
+                  },
+                }}
+              />
             );
           })}
-
+          {opened.length > 0 && (
+            <CoverStack
+              covers={opened.map((t) => t.art)}
+              title="Opened files"
+              subtitle={`Opened with ByTune · ${songs(opened.length)}`}
+              fallback={FileMusic}
+              onOpen={() => navigate({ name: "local", param: OPENED })}
+              onPlay={() => playLocal(opened.map(localToTrack))}
+            />
+          )}
           <button
+            type="button"
             onClick={() => void addFolders()}
             disabled={scanning}
-            className="w-full flex items-center justify-center gap-2 p-3 rounded-xl border border-dashed border-ink-hi/15 text-[13.5px] text-ink-dim hover:text-ink-hi hover:border-ink-hi/30 transition-colors disabled:opacity-50"
+            className="stack-card stack-add group text-left disabled:opacity-50"
           >
-            <FolderPlus className="w-4 h-4" />
-            Import another folder
+            <span className="stack-art grid place-items-center">
+              <FolderPlus className="relative w-7 h-7 text-ink-hi/40 group-hover:text-ink-hi/75 transition-colors" />
+            </span>
+            <span className="block mt-3 text-[15px] font-semibold text-ink-dim group-hover:text-ink-hi transition-colors">
+              Import another folder
+            </span>
+            <span className="block text-[13px] text-ink-faint mt-0.5">Your files stay where they are</span>
           </button>
-        </div>
+        </section>
       </div>
     );
   }
 
   /* ---------------- Inside a collection ---------------- */
-  const collectionTitle = openPath === ALL ? "All songs" : folderTitle(openFolder as LocalFolderEntry);
-  const collectionPath = openPath === ALL ? null : (openFolder as LocalFolderEntry).path;
+  const collectionTitle =
+    openPath === ALL ? "All songs" : openPath === OPENED ? "Opened files" : folderTitle(openFolder as LocalFolderEntry);
+  const collectionPath = openFolder?.path ?? null;
+  // Opened files keep a way out of the list (the files themselves stay where they are).
+  const menuFor =
+    openPath === OPENED
+      ? (t: Track) => [
+          ...trackMenuItems(t),
+          { label: "Remove from Opened files", icon: X, separatorBefore: true, action: () => forgetOpened(t) },
+        ]
+      : undefined;
+  const facts = collectionFacts(scoped.map(localToTrack));
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between gap-4 flex-wrap animate-slide-up">
-        <div className="min-w-0 flex items-center gap-3">
+    <div className="pb-14">
+      <CollectionHero
+        icon={openPath === OPENED ? FileMusic : openPath === ALL ? ListMusic : FolderOpen}
+        kind={
           <button
+            type="button"
             onClick={() => navigate({ name: "local" })}
-            title="Back to folders"
-            className="w-9 h-9 grid place-items-center rounded-lg bg-ink-hi/[0.06] hover:bg-ink-hi/[0.12] text-ink-dim hover:text-ink-hi transition-colors shrink-0"
+            title="Back to Local Music"
+            className="hover:underline underline-offset-4"
           >
-            <ArrowLeft className="w-4 h-4" />
+            Local Music
           </button>
-          <div className="min-w-0">
-            <h1 className="font-display text-[30px] font-bold tracking-[-0.03em] text-ink-hi truncate">
-              {collectionTitle}
-            </h1>
-            {collectionPath && (
-              <p className="text-[13px] text-ink-faint mt-0.5 truncate" title={collectionPath}>
-                {collectionPath}
-                {scannedLabel ? ` — ${scannedLabel}` : ""}
-              </p>
+        }
+        title={collectionTitle}
+        covers={scoped.map((t) => t.art)}
+        facts={
+          <>
+            {[facts.songs, facts.length, scannedLabel].filter(Boolean).join(" · ")}
+            {facts.topArtist && (
+              <>
+                {" · Top artist: "}
+                <span className="font-semibold text-white">{facts.topArtist.name}</span>
+              </>
             )}
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-faint pointer-events-none" />
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search your files"
-              className="w-52 h-9 pl-8 pr-3 rounded-lg bg-ink-hi/[0.05] border border-ink-hi/10 text-[13px] text-ink-hi placeholder:text-ink-faint outline-none focus:border-ink-hi/25"
-            />
-          </div>
-          {openFolder && (
-            <>
-              <button
-                onClick={() => renameFolder(openFolder)}
-                title="Rename in ByTune"
-                className="w-9 h-9 grid place-items-center rounded-lg bg-ink-hi/[0.06] hover:bg-ink-hi/[0.12] text-ink-dim hover:text-ink-hi transition-colors"
-              >
-                <Pencil className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => removeFolder(openFolder)}
-                title="Remove from ByTune (files stay on disk)"
-                className="w-9 h-9 grid place-items-center rounded-lg bg-ink-hi/[0.06] hover:bg-red-400/10 hover:text-red-400 text-ink-dim transition-colors"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </>
-          )}
+            {collectionPath && (
+              <span className="block mt-1.5 text-[13px] text-white/55 truncate max-w-[70ch]" title={collectionPath}>
+                {collectionPath}
+              </span>
+            )}
+            {openPath === OPENED && (
+              <span className="block mt-1.5 text-[13px] text-white/55">Songs you opened with ByTune. The files stay where they are.</span>
+            )}
+          </>
+        }
+      >
+        {/* Play plays the songs as listed: searched, filtered and sorted. */}
+        <button
+          type="button"
+          className={HERO_PLAY}
+          aria-label={`Play ${collectionTitle}`}
+          disabled={!tracks.length}
+          onClick={() => playLocal(tracks)}
+        >
+          <Play className="w-5 h-5 fill-current" />
+          Play
+        </button>
+        <button
+          type="button"
+          className={HERO_ROUND}
+          aria-label="Shuffle"
+          title="Shuffle"
+          disabled={!tracks.length}
+          onClick={() => playLocal(tracks, true)}
+        >
+          <Shuffle className="w-5 h-5" />
+        </button>
+        <button type="button" className={HERO_ROUND} aria-label="Rescan" title="Rescan" disabled={scanning} onClick={() => void rescan()}>
+          <RefreshCw className={`w-5 h-5 ${scanning ? "animate-spin" : ""}`} />
+        </button>
+        {openFolder && (
           <button
-            onClick={() => void rescan()}
-            disabled={scanning}
-            title="Rescan"
-            className="w-9 h-9 grid place-items-center rounded-lg bg-ink-hi/[0.06] hover:bg-ink-hi/[0.12] text-ink-dim hover:text-ink-hi transition-colors disabled:opacity-50"
+            type="button"
+            className={HERO_ROUND}
+            aria-label="Folder options"
+            title="More options"
+            onClick={(e) => folderMenu(openFolder)(e.clientX, e.clientY)}
           >
-            <RefreshCw className={`w-4 h-4 ${scanning ? "animate-spin" : ""}`} />
+            <MoreHorizontal className="w-5 h-5" />
           </button>
-        </div>
-      </div>
+        )}
+      </CollectionHero>
 
       {missing.has(collectionPath ?? "") && (
-        <div className="flex items-center gap-2.5 p-3 rounded-xl bg-amber-500/10 text-[13px] text-amber-300">
+        <div className="mt-6 flex items-center gap-2.5 p-3 rounded-xl bg-amber-500/10 text-[13px] text-amber-300">
           <AlertTriangle className="w-4 h-4 shrink-0" />
-          This folder can't be reached right now. The list below is ByTune's last scan — rescan after reconnecting the
-          drive, or remove the folder from ByTune.
+          This folder can't be reached right now. The list below is ByTune's last scan: rescan after reconnecting the drive, or
+          remove the folder from ByTune.
         </div>
       )}
 
-      {(albumFilter || artistFilter) && (
-        <button
-          onClick={() => {
-            setAlbumFilter(null);
-            setArtistFilter(null);
-          }}
-          className="text-[13px] text-ink-dim hover:text-ink-hi transition-colors"
-        >
-          ← Clear filter: {albumFilter ?? artistFilter}
-        </button>
-      )}
-
-      <div className="flex items-center gap-2 flex-wrap">
+      <div className="mt-6 flex items-center gap-2 flex-wrap">
         <Pills
           options={[
             { key: "songs", label: `Songs${scoped.length ? ` · ${scoped.length}` : ""}` },
             { key: "albums", label: `Albums · ${albums.length}` },
             { key: "artists", label: `Artists · ${artists.length}` },
+            ...(rootListing && rootListing.folders.length > 0
+              ? [{ key: "folders", label: `Folders · ${rootListing.folders.length}` }]
+              : []),
           ]}
           value={tab}
           onChange={(k) => setTab(k as Tab)}
@@ -504,76 +594,156 @@ export function LocalMusicView() {
             onChange={(k) => setSort(k as Sort)}
           />
         )}
+        <div className="relative ml-auto">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-faint pointer-events-none" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search your files"
+            aria-label="Search your files"
+            className="w-56 h-9 pl-8 pr-3 rounded-full bg-ink-hi/[0.05] border border-ink-hi/10 text-[13px] text-ink-hi placeholder:text-ink-faint outline-none focus:border-ink-hi/25 focus:bg-ink-hi/[0.07] transition-colors"
+          />
+        </div>
       </div>
 
-      {scanning && (
-        <div className="flex items-center gap-3 text-[13px] text-ink-dim">
-          <span className="w-4 h-4 rounded-full border-2 border-ink-hi/15 border-t-accent animate-spin" />
-          Reading tags and artwork…
-        </div>
+      {(albumFilter || artistFilter) && (
+        <button
+          onClick={() => {
+            setAlbumFilter(null);
+            setArtistFilter(null);
+          }}
+          className="mt-4 text-[13px] text-ink-dim hover:text-ink-hi transition-colors"
+        >
+          ← Clear filter: {albumFilter ?? artistFilter}
+        </button>
       )}
 
-      {!scanning && tab === "songs" && (scoped.length === 0 || tracks.length === 0) && (
-        <EmptyState
-          icon={Music2}
-          title={scoped.length === 0 ? "No music found in this folder" : "Nothing matches that search"}
-          body={scoped.length === 0 ? "Drop some audio files in and rescan." : undefined}
-        />
-      )}
+      {scanning && <Scanning />}
 
-      {tab === "songs" && tracks.length > 0 && <TrackList tracks={tracks} showAlbum emptyLabel="No songs." />}
+      <div className="mt-5">
+        {!scanning && tab === "songs" && (scoped.length === 0 || tracks.length === 0) && (
+          <EmptyState
+            icon={Music2}
+            title={scoped.length === 0 ? "No music found in this folder" : "Nothing matches that search"}
+            body={scoped.length === 0 ? "Drop some audio files in and rescan." : undefined}
+          />
+        )}
 
-      {tab === "albums" && (
-        <div className="flex flex-wrap gap-5">
-          {albums.map((a) => (
-            <button
-              key={`${a.name}|${a.artist}`}
-              onClick={() => {
-                setAlbumFilter(a.name);
-                setTab("songs");
-              }}
-              className="group w-[168px] text-left cursor-pointer"
-            >
-              <Artwork src={a.art ?? ""} className="w-full aspect-square rounded-xl" iconClassName="w-7 h-7" alt="" />
-              <div className="mt-2.5">
-                <div className="text-[15px] font-semibold text-ink-hi truncate leading-snug">{a.name}</div>
-                <div className="text-[13px] text-ink-dim truncate mt-0.5">
-                  {a.artist} · {a.count} song{a.count === 1 ? "" : "s"}
-                </div>
+        {tab === "songs" && tracks.length > 0 && (
+          <TrackList tracks={tracks} from="__local__" showAlbum emptyLabel="No songs." menuFor={menuFor} />
+        )}
+
+        {tab === "albums" && (
+          <div className="stack-grid">
+            {albums.map((a) => {
+              const inAlbum = scoped.filter((t) => t.album === a.name && t.artist === a.artist);
+              return (
+                <CoverStack
+                  key={`${a.name}|${a.artist}`}
+                  covers={[a.art]}
+                  title={shortTitle(a.name)}
+                  subtitle={`${a.artist} · ${songs(a.count)}`}
+                  onOpen={() => {
+                    setAlbumFilter(a.name);
+                    setTab("songs");
+                  }}
+                  onPlay={inAlbum.length ? () => playLocal(inAlbum.map(localToTrack)) : undefined}
+                />
+              );
+            })}
+          </div>
+        )}
+
+        {tab === "folders" && folderRoot && listing && (
+          <div className="space-y-6">
+            {folderAt && (
+              <nav aria-label="Folder path" className="flex items-center gap-1 flex-wrap text-[13px]">
+                <button onClick={() => setFolderAt(null)} className="text-ink-dim hover:text-ink-hi transition-colors">
+                  {collectionTitle}
+                </button>
+                {(() => {
+                  const crumbs = folderAt.slice(folderRoot.length).replace(/^[\\/]+/, "").split(/[\\/]/);
+                  return crumbs.map((name, i) => (
+                    <span key={i} className="flex items-center gap-1">
+                      <ChevronRight className="w-3.5 h-3.5 text-ink-faint" />
+                      {i === crumbs.length - 1 ? (
+                        <span className="font-semibold text-ink-hi">{name}</span>
+                      ) : (
+                        <button
+                          onClick={() => setFolderAt(crumbs.slice(0, i + 1).reduce(childPath, folderRoot))}
+                          className="text-ink-dim hover:text-ink-hi transition-colors"
+                        >
+                          {name}
+                        </button>
+                      )}
+                    </span>
+                  ));
+                })()}
+              </nav>
+            )}
+            {listing.folders.length > 0 && (
+              <div className="stack-grid">
+                {listing.folders.map(([name, count]) => {
+                  const path = childPath(folderAt ?? folderRoot, name);
+                  const inside = scoped.filter((t) => isUnderPath(t.path, path));
+                  return (
+                    <CoverStack
+                      key={name}
+                      covers={inside.map((t) => t.art)}
+                      title={name}
+                      subtitle={songs(count)}
+                      fallback={Folder}
+                      onOpen={() => setFolderAt(path)}
+                      onPlay={inside.length ? () => playLocal(inside.map(localToTrack)) : undefined}
+                    />
+                  );
+                })}
               </div>
-            </button>
-          ))}
-        </div>
-      )}
+            )}
+            {folderTracks.length > 0 && <TrackList tracks={folderTracks} from="__local__" showAlbum emptyLabel="No songs." />}
+            {listing.folders.length === 0 && folderTracks.length === 0 && (
+              <EmptyState icon={Music2} title="Nothing matches that search" />
+            )}
+          </div>
+        )}
 
-      {tab === "artists" && (
-        <div className="grid sm:grid-cols-2 gap-2">
-          {artists.map((a) => (
-            <button
-              key={a.name}
-              onClick={() => {
-                setArtistFilter(a.name);
-                setTab("songs");
-              }}
-              className="flex items-center gap-3 p-3 rounded-xl hover:bg-ink-hi/[0.05] transition-colors text-left"
-            >
-              {a.art ? (
-                <Artwork src={a.art} className="w-11 h-11 rounded-full shrink-0" iconClassName="w-4 h-4" alt="" />
-              ) : (
-                <span className="w-11 h-11 rounded-full bg-ink-hi/[0.07] grid place-items-center shrink-0">
-                  <User className="w-4 h-4 text-ink-dim" />
+        {tab === "artists" && (
+          <div className="grid sm:grid-cols-2 gap-2">
+            {artists.map((a) => (
+              <button
+                key={a.name}
+                onClick={() => {
+                  setArtistFilter(a.name);
+                  setTab("songs");
+                }}
+                className="fit-host flex items-center gap-3 p-3 rounded-xl hover:bg-ink-hi/[0.05] transition-colors text-left"
+              >
+                {a.art ? (
+                  <Artwork src={a.art} className="w-11 h-11 rounded-full shrink-0" iconClassName="w-4 h-4" alt="" />
+                ) : (
+                  <span className="w-11 h-11 rounded-full bg-ink-hi/[0.07] grid place-items-center shrink-0">
+                    <User className="w-4 h-4 text-ink-dim" />
+                  </span>
+                )}
+                <span className="min-w-0 flex-1">
+                  <FitText text={a.name} className="text-[14px] font-semibold text-ink-hi" />
+                  <span className="block text-[12.5px] text-ink-dim">{songs(a.count)}</span>
                 </span>
-              )}
-              <span className="min-w-0 flex-1">
-                <span className="block text-[14px] font-semibold text-ink-hi truncate">{a.name}</span>
-                <span className="block text-[12.5px] text-ink-dim">
-                  {a.count} song{a.count === 1 ? "" : "s"}
-                </span>
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** While a scan runs: what it's doing. */
+function Scanning() {
+  return (
+    <div className="mt-6 flex items-center gap-3 text-[13px] text-ink-dim">
+      <span className="w-4 h-4 rounded-full border-2 border-ink-hi/15 border-t-accent animate-spin" />
+      Reading tags and artwork…
     </div>
   );
 }

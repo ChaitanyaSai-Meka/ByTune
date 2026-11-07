@@ -19,11 +19,12 @@
  *  - seek row (8px below transport): fixed 50px time boxes (12/17
  *    #b3b3b3) flanking a flexible bar — 12px hit area, 4px track (2px
  *    radius, white @30%), white fill, 12px white handle on hover
- *  - right: lyrics / queue / volume (speaker 32px + 67px track)
+ *  - right: sleep timer / lyrics / queue / volume (speaker 32px + 67px track)
  *    / miniplayer / fullscreen — 16px icons white @70% → white on hover
  */
 import { useEffect, useRef, useState } from "react";
-import { Check, Heart, ListMusic, ListPlus, Loader2 } from "lucide-react";
+import { Heart, ListMusic, ListPlus, Loader2, Moon, Users } from "lucide-react";
+import { useRoom } from "../stores/room";
 import {
   SpCheck,
   SpCoverNote,
@@ -45,11 +46,15 @@ import {
 } from "./SpotifyIcons";
 import { SeekBar, VolumeControl } from "./Controls";
 import { useLibrary } from "../stores/library";
-import { usePlayer } from "../stores/player";
+import { usePlayer, shownTrack } from "../stores/player";
 import { useSettings } from "../stores/settings";
 import { useUI, type MenuItem } from "../stores/ui";
 import { upgradeArtwork } from "../lib/artwork";
 import { useDrag } from "../lib/dnd";
+import { shortTitle } from "../lib/format";
+import { addSongsToPlaylists, newPlaylistWith } from "../lib/devicePlaylists";
+import { FitText } from "./FitText";
+import { SLEEP_MAX_MINUTES, formatSleepLeft, parseSleepMinutes, useSleepTimer } from "../lib/sleepTimer";
 
 /* Transport button — 32×32, 16px glyph, colour-only hover (Spotify). */
 function TransportButton({
@@ -86,12 +91,15 @@ function BarButton({
   active,
   title,
   className: extra = "",
+  menu,
   children,
 }: {
   onClick: () => void;
   active?: boolean;
   title: string;
   className?: string;
+  /** opens a menu instead of toggling */
+  menu?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -99,7 +107,8 @@ function BarButton({
       onClick={onClick}
       title={title}
       aria-label={title}
-      aria-pressed={active}
+      aria-pressed={menu ? undefined : active}
+      aria-haspopup={menu ? "menu" : undefined}
       className={`relative grid h-8 w-8 place-items-center rounded-full transition-colors ${extra} ${
         active ? "text-white" : "text-white/70 hover:text-white"
       }`}
@@ -114,8 +123,83 @@ function BarButton({
   );
 }
 
+/* Sleep timer — a moon in the right cluster; its menu hangs above it. While a
+   timer runs the moon carries the active dot and the time left beside it. */
+function SleepTimerButton() {
+  const endsAt = useSleepTimer((s) => s.endsAt);
+  const endOfSong = useSleepTimer((s) => s.endOfSong);
+  const anchorRef = useRef<HTMLSpanElement>(null);
+  const [now, setNow] = useState(() => performance.now());
+  useEffect(() => {
+    if (endsAt == null) return;
+    setNow(performance.now());
+    const id = window.setInterval(() => setNow(performance.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [endsAt]);
+
+  const left = endsAt != null ? formatSleepLeft(endsAt - now) : null;
+  const status = endOfSong ? "Stops after this song" : left ? `Stops in ${left}` : null;
+
+  const open = (): void => {
+    const ui = useUI.getState();
+    const sleep = useSleepTimer.getState();
+    const start = (minutes: number, label: string): void => {
+      sleep.start(minutes);
+      ui.toast(`Music stops in ${label}`, "info");
+    };
+    const preset = (minutes: number, label: string): MenuItem => ({ label, action: () => start(minutes, label) });
+    const items: MenuItem[] = [
+      { label: status ?? "Sleep timer", header: true },
+      preset(5, "5 minutes"),
+      preset(15, "15 minutes"),
+      preset(30, "30 minutes"),
+      preset(45, "45 minutes"),
+      preset(60, "1 hour"),
+      preset(120, "2 hours"),
+      {
+        label: "End of this song",
+        action: () => {
+          sleep.startEndOfSong();
+          ui.toast("Music stops after this song", "info");
+        },
+      },
+      {
+        label: "Custom",
+        action: () =>
+          ui.openDialog({
+            title: "Sleep timer",
+            body: "Stop the music after how long? Minutes, or hours and minutes like 1:30 — up to 12 hours.",
+            initialValue: "60",
+            placeholder: "Minutes",
+            confirmLabel: "Start",
+            onConfirm: (value) => {
+              const minutes = parseSleepMinutes(value);
+              if (minutes == null || minutes < 1 || minutes > SLEEP_MAX_MINUTES) {
+                useUI.getState().toast("Enter a time from 1 minute to 12 hours", "error");
+                return;
+              }
+              start(minutes, formatSleepLeft(minutes * 60_000));
+            },
+          }),
+      },
+    ];
+    if (status) items.push({ label: "Turn off", separatorBefore: true, action: () => sleep.cancel() });
+    const rect = anchorRef.current?.getBoundingClientRect();
+    ui.openContextMenu(rect?.left ?? window.innerWidth / 2, rect?.top ?? window.innerHeight / 2, items, { above: true });
+  };
+
+  return (
+    <span ref={anchorRef} className="flex items-center">
+      <BarButton onClick={open} title={status ? `Sleep timer: ${status.toLowerCase()}` : "Sleep timer"} active={!!status} menu>
+        <Moon size={16} strokeWidth={2} />
+      </BarButton>
+      {left && <span className="-ml-0.5 mr-1 text-[11px] tabular-nums text-white/70">{left}</span>}
+    </span>
+  );
+}
+
 export function PlayerBar() {
-  const track = usePlayer((s) => s.queue[s.index] ?? null);
+  const track = usePlayer(shownTrack);
   const playing = usePlayer((s) => s.playing);
   const buffering = usePlayer((s) => s.buffering);
   const shuffle = usePlayer((s) => s.shuffle);
@@ -157,18 +241,20 @@ export function PlayerBar() {
         label: "Add to playlist",
         icon: ListMusic,
         children: [
-          ...lib.playlists.map((p) => {
+          // Each playlist on or off: checked when it holds the song, and choosing it adds or removes.
+          ...lib.playlists.map((p): MenuItem => {
             const inList = p.tracks.some((t) => t.id === track.id);
             return {
-              icon: inList ? Check : undefined,
-              label: inList ? `Remove from "${p.name}"` : `Add to "${p.name}"`,
+              label: p.name,
+              checked: inList,
+              toggle: true,
               action: () => {
                 if (inList) {
                   useLibrary.getState().removeFromPlaylist(p.id, track.id);
                   useUI.getState().toast(`Removed from "${p.name}"`);
                 } else {
-                  const added = useLibrary.getState().addToPlaylist(p.id, track);
-                  useUI.getState().toast(added ? `Added to "${p.name}"` : "Already in this playlist");
+                  const { added, told } = addSongsToPlaylists([p.id], [track]);
+                  if (!told) useUI.getState().toast(added ? `Added to "${p.name}"` : "Already in this playlist");
                 }
               },
             };
@@ -183,14 +269,12 @@ export function PlayerBar() {
               const suggested = `Playlist ${useLibrary.getState().playlists.length + 1}`;
               useUI.getState().openDialog({
                 title: "New playlist",
-                body: `Add "${track.title}" to a new playlist.`,
+                body: `Add "${shortTitle(track.title)}" to a new playlist.`,
                 initialValue: suggested,
                 placeholder: "Playlist name",
                 confirmLabel: "Create",
                 onConfirm: (value) => {
-                  const fresh = useLibrary.getState();
-                  const playlist = fresh.createPlaylist(value.trim() || suggested);
-                  fresh.addToPlaylist(playlist.id, track);
+                  const playlist = newPlaylistWith(value.trim() || suggested, [track]);
                   useUI.getState().navigate({ name: "playlist", param: playlist.id });
                 },
               });
@@ -198,6 +282,7 @@ export function PlayerBar() {
           },
         ],
       },
+      { subject: { title: track.title, subtitle: track.artist, thumb: track.thumb } },
     ];
     const rect = addToPlaylistRef.current?.getBoundingClientRect();
     // The playbar hugs the window bottom — the menu hangs ABOVE the button.
@@ -213,6 +298,8 @@ export function PlayerBar() {
   const nowPlayingOpen = useUI((s) => s.nowPlayingOpen);
   const toggleLyrics = useUI((s) => s.toggleLyrics);
   const toggleQueue = useUI((s) => s.toggleQueue);
+  const toggleRoom = useUI((s) => s.toggleRoom);
+  const roomCode = useRoom((s) => s.view.state?.code ?? null);
   const toggleNowPlaying = useUI((s) => s.toggleNowPlaying);
 
   // The miniplayer is a separate native always-on-top window (see
@@ -252,7 +339,7 @@ export function PlayerBar() {
                 key={track.id}
                 src={upgradeArtwork(track.thumb)}
                 alt=""
-                className="h-full w-full object-cover"
+                className="h-full w-full object-cover animate-art-in"
               />
             ) : (
               <div className="grid h-full w-full place-items-center">
@@ -261,12 +348,12 @@ export function PlayerBar() {
             )}
           </button>
           <div className="ml-2.5 min-w-0">
-            <button onClick={toggleNowPlaying} className="block w-full text-left" key={track ? `meta-${track.id}` : "meta-none"}>
-              <span className="block truncate px-1.5 -mx-1.5 text-[14px] leading-[19px] text-white hover:underline">
-                {track ? track.title : "Nothing playing"}
+            <button onClick={toggleNowPlaying} className="block w-full text-left animate-meta-in" key={track ? `meta-${track.id}` : "meta-none"}>
+              <span className="block min-w-0 px-1.5 -mx-1.5 text-[14px] leading-[19px] text-white hover:underline">
+                <FitText mode="auto" text={track ? shortTitle(track.title) : "Nothing playing"} full={track?.title} />
               </span>
-              <span className="block truncate px-1.5 -mx-1.5 text-[12px] leading-[17px] text-[#b3b3b3] hover:underline">
-                {track ? track.artist : "Search for something to play"}
+              <span className="block min-w-0 px-1.5 -mx-1.5 text-[12px] leading-[17px] text-[#b3b3b3] hover:underline">
+                <FitText mode="auto" text={track ? track.artist : "Search for something to play"} />
               </span>
             </button>
           </div>
@@ -340,11 +427,16 @@ export function PlayerBar() {
 
         {/* Right — lyrics, queue, volume, miniplayer, fullscreen. */}
         <div className="flex items-center justify-end">
+          <SleepTimerButton />
           <BarButton onClick={toggleLyrics} title="Lyrics" active={lyricsCenter}>
             <SpLyrics />
           </BarButton>
           <BarButton onClick={toggleQueue} title="Queue" active={rightPanel === "queue"}>
             <SpQueue />
+          </BarButton>
+          {/* In a room the button stays lit, as the sleep timer's moon does while it runs. */}
+          <BarButton onClick={toggleRoom} title={roomCode ? `Room ${roomCode}` : "Room"} active={rightPanel === "room" || !!roomCode}>
+            <Users size={16} strokeWidth={2} />
           </BarButton>
           {!hideVolumeBar && <VolumeControl VolIcon={VolIcon} />}
           <BarButton

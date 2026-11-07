@@ -158,3 +158,11 @@ test("standard edit roles are present (mac text editing must work)", () => {
     assert.ok(edit.find((i) => i?.role === role), `missing Edit role: ${role}`);
   }
 });
+
+test("the sleep timer submenu sends its commands", () => {
+  const sent = [];
+  const wiring = { ...NOOP_WIRING, sendCommand: (c) => sent.push(c) };
+  const sleep = findByLabel(findByLabel(buildAppMenu(STATE, wiring, false), "Playback").submenu, "Sleep Timer");
+  for (const item of sleep.submenu) item.click?.();
+  assert.deepEqual(sent, ["sleep-15", "sleep-30", "sleep-60", "sleep-end", "sleep-off"]);
+});

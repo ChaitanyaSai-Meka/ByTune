@@ -1,6 +1,6 @@
 # ByTune — YouTube Music desktop app for Windows & macOS
 
-![ByTune YouTube Music desktop app for Windows and macOS — home feed with Jump back in, library sidebar, now-playing panel and player bar](docs/screenshots/home.png)
+![ByTune YouTube Music desktop app for Windows and macOS — home feed with Jump back in, library sidebar, now-playing panel and player bar](docs/screenshots/home.jpg)
 
 **ByTune is a free, open-source YouTube Music desktop app for Windows & macOS.** Stream music, keep your own library, and get word-synced lyrics, a fullscreen player, a mini player and real downloads — in one fast, native app. If ByTune has earned a spot on your taskbar, consider starring the repo (the ★ button, top right) — it's how other people find the project.
 
@@ -10,7 +10,7 @@
 [![Downloads](https://img.shields.io/github/downloads/rishiteja21/ByTune/total?label=downloads&color=a8324a)](https://github.com/rishiteja21/ByTune/releases)
 [![Stars](https://img.shields.io/github/stars/rishiteja21/ByTune?color=a8324a)](https://github.com/rishiteja21/ByTune/stargazers)
 [![License](https://img.shields.io/github/license/rishiteja21/ByTune?color=a8324a)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20·%20macOS%2011%2B-1f6f5c)](#installation)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20·%20macOS%2013%2B-1f6f5c)](#installation)
 
 ---
 
@@ -38,61 +38,61 @@ Captured on the Windows edition — the macOS edition shares this same interface
 
 ### The player
 
-![ByTune artist page with top songs, play controls and the persistent player bar](docs/screenshots/artist.png)
+![ByTune artist page with top songs, play controls and the persistent player bar](docs/screenshots/artist.jpg)
 
 Album pages, artist pages and the persistent player bar: every view keeps playback, the queue and lyrics one click away.
 
 ### Fullscreen
 
-![ByTune fullscreen now-playing view with album artwork, audio visualizer and word-synced lyrics](docs/screenshots/fullscreen.png)
+![ByTune fullscreen now-playing view with album artwork, audio visualizer and word-synced lyrics](docs/screenshots/fullscreen.jpg)
 
 Click the artwork in the player bar (or press <kbd>N</kbd>) for a cinematic view: large artwork, a live visualizer, the queue and word-synced lyrics — all tinted by the colors of the current track.
 
 ### Mini player
 
-![ByTune mini player picture-in-picture window floating over the desktop, playing Sailor Song by Gigi Perez](docs/screenshots/miniplayer.jpg)
+![ByTune mini player picture-in-picture window floating over the desktop, playing Self Aware by Temper City](docs/screenshots/miniplayer.jpg)
 
 The mini player is a real picture-in-picture window: always on top, resizable, with playback controls on hover. Work in something else and keep the music one glance away.
 
 ### Lyrics
 
-![ByTune synchronized lyrics interface with the current word highlighted](docs/screenshots/lyrics.png)
+![ByTune synchronized lyrics interface with the current word highlighted](docs/screenshots/lyrics.jpg)
 
 Lyrics open in the main view or the fullscreen player, highlight the current word, auto-scroll, and let you click any line to seek there. If YouTube Music has no lyrics for a track, ByTune falls back to LRCLIB.
 
 ### Search
 
-![ByTune music search interface with songs, artists and albums results](docs/screenshots/search.png)
+![ByTune music search interface with songs, artists and albums results](docs/screenshots/search.jpg)
 
 Search songs, videos, albums, artists and playlists from YouTube Music, with live suggestions as you type. Press <kbd>/</kbd> to jump to the search bar from anywhere.
 
 ### Queue & playlists
 
-![ByTune queue panel showing now playing and next up tracks](docs/screenshots/queue.png)
+![ByTune queue panel showing now playing and next up tracks](docs/screenshots/queue.jpg)
 
 A proper queue: see what's playing and what's next, reorder by drag, add with "Play next" or "Add to queue" from any track's right-click menu, and keep the music going with Autoplay when the queue ends. Shuffle, repeat (off / all / one) and crossfade are one click away.
 
 ### Your library
 
-![ByTune library view with liked songs, playlists and play all controls](docs/screenshots/library.png)
+![ByTune Liked Songs page under a wall of its covers, with play and shuffle](docs/screenshots/library.jpg)
 
 Your library persists on disk and restores on launch: liked songs, your own playlists, downloads and listening history — with an optional account to keep it safe even if this computer's app data is wiped.
 
 ### Local music
 
-![ByTune local music library — an imported folder with its songs, albums and artists](docs/screenshots/local-music.png)
+![ByTune Local Music page with imported folders under a wall of their covers](docs/screenshots/local-music.jpg)
 
 Import folders from your PC and they sit beside your streaming library — full track lists, album and artist browsing, embedded artwork, and a filter that hides short recordings and voice notes.
 
 ### Downloads
 
-![ByTune downloads view showing a saved track with downloaded status](docs/screenshots/downloads.png)
+![ByTune Downloads page with saved songs under a wall of their covers](docs/screenshots/downloads.jpg)
 
 Save any track as a `.m4a` file, with live progress, an "Open folder" shortcut, a configurable download location and quality options up to the app's "Lossless" setting.
 
 ### Settings
 
-![ByTune settings page with playback, lyrics and local music options](docs/screenshots/settings.png)
+![ByTune settings, Sound section with streaming quality, volume leveling, output device and equalizer](docs/screenshots/settings.jpg)
 
 Streaming quality ceilings, download quality, crossfade and Auto Mix, skip silence, autoplay, pitch-preserving playback speed, lyric behavior, appearance (liquid glass, reduced motion) and local-music management — all in one settings page.
 
@@ -178,7 +178,7 @@ No. ByTune is an independent, open-source desktop player that uses YouTube Music
 
 **Which platforms does it run on?**
 
-Windows 10 and 11 (64-bit), and macOS 11 or later on Apple Silicon and Intel. The Windows edition is the more mature of the two; macOS builds are newer.
+Windows 10 and 11 (64-bit), and macOS 13 Ventura or later on Apple Silicon and Intel. The Windows edition is the more mature of the two; macOS builds are newer.
 
 **Can I save songs for offline listening?**
 
@@ -204,21 +204,34 @@ Yes — any track can be downloaded as a `.m4a` file, with your choice of folder
 
 Also available on the [website](https://bytune.space/) and the [releases page](https://github.com/rishiteja21/ByTune/releases).
 
-**macOS 11+ (Apple Silicon & Intel)** — the macOS edition is new. DMG and ZIP artifacts are attached to the [releases page](https://github.com/rishiteja21/ByTune/releases) as they're cut, and you can always build the current code yourself: `npm run dist:mac` produces `ByTune-<version>-arm64.dmg` / `ByTune-<version>-x64.dmg` in `release/`. On first launch of an unsigned build, right-click **ByTune.app** in Applications and choose **Open** (needed once). Signing and notarization steps live in [MAC_BUILD_AND_SIGNING.md](MAC_BUILD_AND_SIGNING.md), the distribution checklist in [DISTRIBUTION.md](DISTRIBUTION.md), and current caveats in [MAC_KNOWN_LIMITATIONS.md](MAC_KNOWN_LIMITATIONS.md).
+**macOS 13 Ventura or later (Apple Silicon & Intel)** — download the DMG for your Mac from the [releases page](https://github.com/rishiteja21/ByTune/releases) or the [website](https://bytune.space/): `-arm64` for Apple Silicon (M1 and newer), `-x64` for Intel. Not sure which you have? Apple menu → **About This Mac**: "Chip: Apple M…" is Apple Silicon, "Processor: …Intel…" is Intel. Open the DMG and drag **ByTune** into **Applications**.
+
+The app isn't notarized by Apple yet, so macOS blocks the first launch once:
+
+- **macOS 15 Sequoia and later:** open ByTune, click **Done** on the warning, then go to **System Settings → Privacy & Security**, scroll down to "ByTune was blocked…" and click **Open Anyway**.
+- **macOS 13–14:** right-click (Control-click) ByTune in Applications, choose **Open**, then **Open** again.
+
+If macOS instead says **"ByTune is damaged and can't be opened"** (builds up to v1.0.1), the download is fine — those builds weren't signed. Run this once in Terminal, then open ByTune normally:
+
+```bash
+xattr -cr /Applications/ByTune.app
+```
+
+To build it yourself, `npm run dist:mac` produces `ByTune-<version>-arm64.dmg` / `ByTune-<version>-x64.dmg` in `release/`. Signing and notarization steps live in [MAC_BUILD_AND_SIGNING.md](MAC_BUILD_AND_SIGNING.md), the distribution checklist in [DISTRIBUTION.md](DISTRIBUTION.md), and current caveats in [MAC_KNOWN_LIMITATIONS.md](MAC_KNOWN_LIMITATIONS.md).
 
 Run the installer, launch ByTune, and pick **Continue as guest** (data stays on this computer) or create an account for cloud backup.
 
 ### Verify your download
 
-Every release asset has a published SHA-256 checksum. Check yours against the list below (current as of **v1.0.1**):
+Every release asset has a published SHA-256 checksum. Check yours against the list below (current as of **v1.1.0**):
 
 | Asset | SHA-256 |
 |---|---|
-| `ByTune-Setup.exe` | `a0a712b16047b9ceac26f5dc862a5f9db92041c78983aa01b44db760f3e1324c` |
-| `ByTune-1.0.1-arm64.dmg` | `4c5301df28fe16a37a887a34318d72ce04447418b8b82abb1cf860189cdf7273` |
-| `ByTune-1.0.1-arm64.zip` | `e4a9a11dd412db0da36aaa820008e50017aa19606d1518d5e70c63c91df3991c` |
-| `ByTune-1.0.1-x64.dmg` | `64816c1b19efd2ec2213f4a79a8d8d63bfb5cb17e70ebea8a9818e3927901062` |
-| `ByTune-1.0.1-x64.zip` | `2e06fefae815eb57d62c0656472d740e010bc9a554897ee6d701036eb26f9634` |
+| `ByTune-Setup.exe` | `c5dfcd6852e573b1ca7eea7d7ef608d036f9fde07b4ebfaf81ec497afc5eb6b1` |
+| `ByTune-1.1.0-arm64.dmg` | `f185bfaedd16a51d813a0a22b3738d8e6ec73f30af60a3e14925a29a89505e73` |
+| `ByTune-1.1.0-arm64.zip` | `fc780c9e7d66762ff910b968b7cfaebf3fa677ebf6483f6c9fef841dfd3faecf` |
+| `ByTune-1.1.0-x64.dmg` | `fa19db4a9b433b37dec12e524b068f0192ea538e77a71c4dd49ab0580354157d` |
+| `ByTune-1.1.0-x64.zip` | `f1be5c0542443de002ea97c206aa247c9b227b0eb35c94f129eac1387d63185b` |
 
 ```powershell
 # Windows (PowerShell)
@@ -227,10 +240,10 @@ Get-FileHash .\ByTune-Setup.exe -Algorithm SHA256
 
 ```bash
 # macOS / Linux
-shasum -a 256 ByTune-1.0.1-arm64.dmg
+shasum -a 256 ByTune-1.1.0-arm64.dmg
 ```
 
-The installers are unsigned (no code-signing certificate yet), so Windows SmartScreen and macOS Gatekeeper will warn on first run — the checksum table above is the way to confirm the file you downloaded is the one this project built.
+The installers aren't signed with a code-signing certificate yet, so Windows SmartScreen and macOS Gatekeeper ask for confirmation on first run (steps above) — the checksum table above is the way to confirm the file you downloaded is the one this project built.
 
 ### Development
 

@@ -9,15 +9,20 @@
  * YouTube's continuation token, exactly like the phone.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Disc3, LayoutGrid, ListMusic, ListPlus, MoreVertical, Music2, Play, SearchX, User, X, type LucideIcon } from "lucide-react";
-import { Artwork, ErrorState, ExplicitBadge, ListSkeleton, Pills } from "../components/primitives";
-import { trackMenuItems } from "../lib/trackActions";
+import { Disc3, LayoutGrid, ListMusic, ListPlus, ListStart, Mic, MoreVertical, Music2, Play, Search as SearchIcon, SearchX, User, X, type LucideIcon } from "lucide-react";
+import { Artwork, EqBars, ErrorState, ExplicitBadge, IconBtn, ListSkeleton, Pills } from "../components/primitives";
+import { browseMenuItems, trackMenuItems } from "../lib/trackActions";
+import { playAlbum } from "../lib/album";
+import { playPlaylist } from "../lib/playlist";
 import { useDrag } from "../lib/dnd";
-import { fmtTime } from "../lib/format";
+import { fmtTime, shortTitle } from "../lib/format";
+import { FitText } from "../components/FitText";
 import { isMac } from "../lib/platform";
-import { usePlayer } from "../stores/player";
+import { usePlayer, useTrackPlayback } from "../stores/player";
 import { useRecents } from "../stores/recents";
-import { tintHoverHandlers, useUI } from "../stores/ui";
+import { useRecentItems, type RecentItem } from "../stores/recentItems";
+import { searchPageOnce } from "../lib/searchOnce";
+import { tintHoverHandlers, useUI, type MenuItem } from "../stores/ui";
 import type { BrowseItem, SearchFilter, SearchPageResult, SearchRow, Track } from "../types";
 
 const FILTERS: { key: SearchFilter; label: string; icon: LucideIcon }[] = [
@@ -27,6 +32,7 @@ const FILTERS: { key: SearchFilter; label: string; icon: LucideIcon }[] = [
   { key: "albums", label: "Albums", icon: Disc3 },
   { key: "artists", label: "Artists", icon: User },
   { key: "playlists", label: "Playlists", icon: ListMusic },
+  { key: "podcasts", label: "Podcasts", icon: Mic },
 ];
 
 /** The All tab's mixed page, grouped the way the mobile app groups it. */
@@ -42,6 +48,7 @@ function searchSections(rows: SearchRow[], filter: SearchFilter): SearchSection[
     { title: "Artists", rows: rows.filter((r) => r.kind === "browse" && r.item.type === "artist") },
     { title: "Albums", rows: rows.filter((r) => r.kind === "browse" && r.item.type === "album") },
     { title: "Playlists", rows: rows.filter((r) => r.kind === "browse" && r.item.type === "playlist") },
+    { title: "Podcasts", rows: rows.filter((r) => r.kind === "browse" && r.item.type === "podcast") },
     { title: "More", rows: rows.filter((r) => r.kind === "browse" && r.item.type === "other") },
   ];
   return sections.filter((section) => section.rows.length > 0);
@@ -59,6 +66,7 @@ function rowKey(row: SearchRow, i: number): string {
 function SongSearchRow({ song, onPlay }: { song: Track; onPlay: () => void }) {
   const openContextMenu = useUI((s) => s.openContextMenu);
   const drag = useDrag({ track: song });
+  const state = useTrackPlayback(song.id);
   const openMenu = (x: number, y: number): void => {
     openContextMenu(x, y, trackMenuItems(song));
   };
@@ -71,17 +79,47 @@ function SongSearchRow({ song, onPlay }: { song: Track; onPlay: () => void }) {
         e.preventDefault();
         openMenu(e.clientX, e.clientY);
       }}
-      className={`group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none hover:bg-ink-hi/[0.05] ${
-        drag.dragging ? "opacity-40" : ""
-      }`}
+      className={`fit-host group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none ${
+        state ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.05]"
+      } ${drag.dragging ? "opacity-40" : ""}`}
     >
-      <Artwork src={song.thumb} className="w-[52px] h-[52px] rounded-lg shrink-0" iconClassName="w-4 h-4" alt="" />
+      <span className="relative shrink-0">
+        <Artwork src={song.thumb} className="w-[52px] h-[52px] rounded-lg" iconClassName="w-4 h-4" alt="" />
+        {state === "playing" && (
+          <span className="absolute inset-0 grid place-items-center rounded-lg bg-black/50">
+            <EqBars />
+          </span>
+        )}
+      </span>
+      {/* Search keeps full titles, so you can see why a song matched. */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 text-[16px] font-semibold tracking-[-0.2px] text-ink-hi">
           {song.explicit && <ExplicitBadge />}
-          <span className="truncate">{song.title}</span>
+          <FitText text={song.title} />
         </div>
-        <div className="text-[14px] truncate text-ink-dim mt-0.5">{song.artist}</div>
+        <FitText text={song.artist} className="text-[14px] text-ink-dim mt-0.5" />
+      </div>
+      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">
+        <IconBtn
+          icon={ListStart}
+          size="sm"
+          title="Play next"
+          onClick={(e) => {
+            e.stopPropagation();
+            usePlayer.getState().addToQueue([song], true);
+            useUI.getState().toast(`"${shortTitle(song.title)}" plays next`);
+          }}
+        />
+        <IconBtn
+          icon={ListPlus}
+          size="sm"
+          title="Add to queue"
+          onClick={(e) => {
+            e.stopPropagation();
+            const added = usePlayer.getState().addToQueue([song]);
+            useUI.getState().toast(added ? "Added to queue" : "Already in your queue");
+          }}
+        />
       </div>
       <div className="shrink-0 text-[13px] text-ink-faint tabular-nums">
         {song.duration > 0 ? fmtTime(song.duration) : ""}
@@ -105,10 +143,11 @@ const TYPE_LABEL: Record<string, string> = {
   album: "Album",
   artist: "Artist",
   playlist: "Playlist",
+  podcast: "Podcast",
   other: "More",
 };
 
-function BrowseSearchRow({ item }: { item: BrowseItem }) {
+function BrowseSearchRow({ item, onOpened }: { item: BrowseItem; onOpened?: () => void }) {
   const navigate = useUI((s) => s.navigate);
   const toast = useUI((s) => s.toast);
   const isArtist = item.type === "artist";
@@ -126,12 +165,15 @@ function BrowseSearchRow({ item }: { item: BrowseItem }) {
   const draggableItem = isPlaylist || isArtist || isAlbum;
 
   const onOpen = (): void => {
+    onOpened?.();
     if (isArtist || item.browseId.startsWith("UC")) {
       navigate({ name: "artist", param: item.browseId });
     } else if (item.type === "album") {
       navigate({ name: "album", param: item.browseId });
     } else if (item.type === "playlist") {
       navigate({ name: "ytplaylist", param: item.browseId });
+    } else if (item.type === "podcast") {
+      navigate({ name: "podcast", param: item.browseId });
     } else {
       // Profiles and podcasts open their page on the phone; the desktop only
       // browses music pages, so say so rather than dead-click.
@@ -143,9 +185,15 @@ function BrowseSearchRow({ item }: { item: BrowseItem }) {
     <div
       {...tintHoverHandlers(item.thumb)}
       onClick={onOpen}
+      onContextMenu={(e) => {
+        const items = browseMenuItems(item);
+        if (!items.length) return;
+        e.preventDefault();
+        useUI.getState().openContextMenu(e.clientX, e.clientY, items);
+      }}
       {...(draggableItem ? drag.props : {})}
       title={isPlaylist ? "Drag into Your Library to import this playlist" : isArtist ? "Drag into Your Library to import this artist's top songs" : isAlbum ? "Drag into Your Library to import this album" : undefined}
-      className={`flex items-center gap-3.5 h-[68px] px-3 rounded-lg cursor-pointer select-none hover:bg-ink-hi/[0.05] ${
+      className={`fit-host flex items-center gap-3.5 h-[68px] px-3 rounded-lg cursor-pointer select-none hover:bg-ink-hi/[0.05] ${
         drag.dragging ? "opacity-40" : ""
       }`}
     >
@@ -156,16 +204,76 @@ function BrowseSearchRow({ item }: { item: BrowseItem }) {
         alt=""
       />
       <div className="flex-1 min-w-0">
-        <div className="text-[16px] font-semibold tracking-[-0.2px] text-ink-hi truncate">{item.title}</div>
-        <div className="text-[14px] truncate text-ink-dim mt-0.5">
-          {item.subtitle || TYPE_LABEL[item.type]}
-        </div>
+        <FitText text={item.title} className="text-[16px] font-semibold tracking-[-0.2px] text-ink-hi" />
+        <FitText text={item.subtitle || TYPE_LABEL[item.type]} className="text-[14px] text-ink-dim mt-0.5" />
       </div>
     </div>
   );
 }
 
 /** The All tab's promoted card — mobile TopResultCard. */
+/** The promoted artist, album or playlist: open it, or play an album/playlist straight away. */
+function TopBrowseCard({ item, onOpened }: { item: BrowseItem; onOpened: () => void }) {
+  const artist = item.type === "artist";
+  const open = (): void => {
+    onOpened();
+    const ui = useUI.getState();
+    if (artist) ui.navigate({ name: "artist", param: item.browseId });
+    else if (item.type === "album") ui.navigate({ name: "album", param: item.browseId });
+    else if (item.type === "podcast") ui.navigate({ name: "podcast", param: item.browseId });
+    else ui.navigate({ name: "ytplaylist", param: item.browseId });
+  };
+  const play = (): void => {
+    onOpened();
+    void (item.type === "album" ? playAlbum(item.browseId) : playPlaylist(item.browseId));
+  };
+  return (
+    <section className="animate-slide-up">
+      <h2 className="section-title text-[21px] mb-4">Top result</h2>
+      <div
+        {...tintHoverHandlers(item.thumb)}
+        role="button"
+        tabIndex={0}
+        onClick={open}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") open();
+        }}
+        onContextMenu={(e) => {
+          const items = browseMenuItems(item);
+          if (!items.length) return;
+          e.preventDefault();
+          useUI.getState().openContextMenu(e.clientX, e.clientY, items);
+        }}
+        className="fit-host group flex items-center gap-4 p-4 rounded-xl bg-ink-hi/[0.04] hover:bg-ink-hi/[0.07] transition-colors cursor-pointer select-none"
+      >
+        <Artwork
+          src={item.thumb}
+          className={`w-[72px] h-[72px] shrink-0 ${artist ? "rounded-full" : "rounded-[10px]"}`}
+          iconClassName="w-6 h-6"
+          alt=""
+        />
+        <div className="min-w-0 flex-1">
+          <FitText lines={2} text={item.title} className="font-display text-[20px] font-bold tracking-[-0.02em] text-ink-hi leading-tight" />
+          <FitText text={item.subtitle || TYPE_LABEL[item.type]} className="text-[13px] text-ink-dim mt-0.5" />
+        </div>
+        {!artist && item.type !== "podcast" && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              play();
+            }}
+            title={`Play ${item.title}`}
+            aria-label={`Play ${item.title}`}
+            className="w-11 h-11 grid place-items-center rounded-full bg-primary text-on-primary shadow-elev opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity shrink-0"
+          >
+            <Play className="w-4 h-4 fill-current ml-0.5" />
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function TopResultCard({ song, onPlay }: { song: Track; onPlay: () => void }) {
   const openContextMenu = useUI((s) => s.openContextMenu);
   const navigate = useUI((s) => s.navigate);
@@ -181,17 +289,17 @@ function TopResultCard({ song, onPlay }: { song: Track; onPlay: () => void }) {
           e.preventDefault();
           openContextMenu(e.clientX, e.clientY, trackMenuItems(song));
         }}
-        className={`group flex items-center gap-4 p-4 rounded-xl bg-ink-hi/[0.04] hover:bg-ink-hi/[0.07] transition-colors cursor-pointer select-none ${
+        className={`fit-host group flex items-center gap-4 p-4 rounded-xl bg-ink-hi/[0.04] hover:bg-ink-hi/[0.07] transition-colors cursor-pointer select-none ${
           drag.dragging ? "opacity-40" : ""
         }`}
       >
         <Artwork src={song.thumb} className="w-[72px] h-[72px] rounded-[10px] shrink-0" iconClassName="w-6 h-6" alt="" />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 font-display text-[20px] font-bold tracking-[-0.02em] text-ink-hi line-clamp-2">
+          <div className="flex items-center gap-1.5 font-display text-[20px] font-bold tracking-[-0.02em] text-ink-hi">
             {song.explicit && <ExplicitBadge />}
-            {song.title}
+            <FitText lines={2} text={song.title} className="min-w-0 leading-tight" />
           </div>
-          <div className="text-[13.5px] text-ink-dim truncate mt-1">{song.artist}</div>
+          <FitText text={song.artist} className="text-[13.5px] text-ink-dim mt-1" />
         </div>
         <button
           title="More options"
@@ -229,11 +337,92 @@ function TopResultCard({ song, onPlay }: { song: Track; onPlay: () => void }) {
 /* Page                                                             */
 /* ---------------------------------------------------------------- */
 
+const KIND_LABEL: Record<RecentItem["kind"], string> = { song: "Song", artist: "Artist", album: "Album", playlist: "Playlist" };
+
+/** Songs, artists, albums and playlists you opened from search, one click away. */
+function RecentlyOpened() {
+  const items = useRecentItems((s) => s.items);
+  const { remove, clear } = useRecentItems.getState();
+  if (items.length === 0) return null;
+  const open = (item: RecentItem): void => {
+    const ui = useUI.getState();
+    if (item.kind === "song") usePlayer.getState().playQueue([item.track], 0);
+    else if (item.kind === "artist") ui.navigate({ name: "artist", param: item.id });
+    else if (item.kind === "album") ui.navigate({ name: "album", param: item.id });
+    else ui.navigate({ name: "ytplaylist", param: item.id });
+  };
+  // The menu the same song, artist, album or playlist gets everywhere else.
+  const menu = (item: RecentItem): MenuItem[] => [
+    ...(item.kind === "song"
+      ? trackMenuItems(item.track)
+      : browseMenuItems({ browseId: item.id, title: item.title, subtitle: item.subtitle, thumb: item.thumb, type: item.kind })),
+    { label: "Remove from recently opened", icon: X, separatorBefore: true, action: () => remove(item.kind, item.id) },
+  ];
+  return (
+    <section className="tile-host animate-slide-up">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="section-title text-[21px]">Recently opened</h2>
+        <button onClick={clear} className="text-xs text-ink-faint hover:text-ink transition-colors">
+          Clear all
+        </button>
+      </div>
+      <div className="tile-grid">
+        {items.map((item) => (
+          <div
+            key={`${item.kind}:${item.id}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => open(item)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              useUI.getState().openContextMenu(e.clientX, e.clientY, menu(item));
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                open(item);
+              }
+            }}
+            className="fit-host group relative flex items-center gap-3 h-16 pr-9 rounded-lg bg-ink-hi/[0.03] hover:bg-ink-hi/[0.08] transition-colors overflow-hidden cursor-pointer select-none"
+          >
+            <Artwork
+              src={item.thumb}
+              className={`h-16 w-16 shrink-0 ${item.kind === "artist" ? "rounded-full scale-[0.8]" : "rounded-none"}`}
+              iconClassName="w-5 h-5"
+              alt=""
+            />
+            <div className="min-w-0 flex-1">
+              <FitText lines={2} text={item.title} className="text-[13px] font-medium text-ink-hi leading-[1.3]" />
+              <FitText
+                // YouTube subtitles often start with the type word already ("Artist • …").
+                text={`${KIND_LABEL[item.kind]}${item.subtitle ? ` · ${item.subtitle.replace(/^(artist|album|single|ep|playlist|song)\s*•\s*/i, "")}` : ""}`}
+                className="text-xs text-ink-faint mt-0.5"
+              />
+            </div>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                remove(item.kind, item.id);
+              }}
+              title="Remove"
+              aria-label={`Remove "${item.title}" from recently opened`}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 rounded-full text-ink-faint opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-ink-hi hover:bg-ink-hi/[0.08] transition-all"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function RecentSearches() {
   const recents = useRecents((s) => s.searches);
   const removeSearch = useRecents((s) => s.removeSearch);
   const clearSearches = useRecents((s) => s.clearSearches);
   const setQuery = useUI((s) => s.setSearchQuery);
+  const pushSearch = useRecents((s) => s.pushSearch);
 
   if (recents.length === 0) return null;
 
@@ -247,8 +436,23 @@ function RecentSearches() {
       </div>
       <div className="flex flex-wrap gap-2">
         {recents.map((q) => (
-          <span key={q} className="group flex items-center gap-1 pl-3.5 pr-1.5 py-1.5 rounded-full glass text-[13px] text-ink">
-            <button className="hover:text-ink-hi transition-colors" onClick={() => setQuery(q)} title={`Search "${q}"`}>
+          <span
+            key={q}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              useUI.getState().openContextMenu(e.clientX, e.clientY, [
+                { label: `Search "${q}"`, icon: SearchIcon, action: () => { setQuery(q); pushSearch(q); } },
+                { label: "Remove from recent searches", icon: X, separatorBefore: true, action: () => removeSearch(q) },
+              ]);
+            }}
+            className="group flex items-center gap-1 pl-3.5 pr-1.5 py-1.5 rounded-full glass text-[13px] text-ink"
+          >
+            <button className="hover:text-ink-hi transition-colors" onClick={() => {
+                setQuery(q);
+                pushSearch(q);
+              }}
+              title={`Search "${q}"`}
+            >
               {q}
             </button>
             <button
@@ -284,8 +488,27 @@ export function SearchView() {
   const [error, setError] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
 
-  const trimmed = useMemo(() => query.trim(), [query]);
+  // Typing on this page searches once the query settles, not per keystroke.
+  const typed = useMemo(() => query.trim(), [query]);
+  const [trimmed, setTrimmed] = useState(typed);
+  useEffect(() => {
+    if (typed === trimmed) return;
+    const t = window.setTimeout(() => setTrimmed(typed), typed ? 300 : 0);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [typed]);
   const sessionKey = `${filter}:${trimmed.toLowerCase()}`;
+  /** The listener used these results: now the query counts as a real search,
+   *  and what they opened joins "Recently opened". */
+  const remember = (item?: RecentItem): void => {
+    if (trimmed) pushSearch(trimmed);
+    if (item) useRecentItems.getState().add(item);
+  };
+  const songItem = (t: Track): RecentItem => ({ kind: "song", id: t.id, title: t.title, subtitle: t.artist, thumb: t.thumb, track: t });
+  const browseItem = (b: BrowseItem): RecentItem | undefined =>
+    b.type === "artist" || b.type === "album" || b.type === "playlist"
+      ? { kind: b.type, id: b.browseId, title: b.title, subtitle: b.subtitle, thumb: b.thumb }
+      : undefined;
 
   useEffect(() => {
     if (!trimmed) {
@@ -309,8 +532,7 @@ export function SearchView() {
     setError(null);
     setRows([]);
     setContinuation(null);
-    window.bytune
-      ?.searchPage(trimmed, filter)
+    searchPageOnce(trimmed, filter)
       .then((page) => {
         if (cancelled) return;
         cache.current.set(sessionKey, page);
@@ -323,7 +545,6 @@ export function SearchView() {
         setRows(page.rows);
         setContinuation(page.continuation);
         setLoading(false);
-        pushSearch(trimmed);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -378,6 +599,7 @@ export function SearchView() {
   if (!trimmed) {
     return (
       <div className="space-y-10">
+        <RecentlyOpened />
         <RecentSearches />
         <div className="flex flex-col items-center text-center py-16">
           <SearchX className="w-10 h-10 text-ink-ghost mb-4" />
@@ -390,21 +612,24 @@ export function SearchView() {
     );
   }
 
-  // Every playable song on the page, in page order — what a row click queues
-  // through (the mobile app's `tracks` list, top result's song included).
-  const tracks: Track[] = rows
-    .filter((r) => r.kind === "top" || r.kind === "track")
-    .map((r) => (r as { song: Track }).song);
   const topSong = rows.find((r): r is Extract<SearchRow, { kind: "top" }> => r.kind === "top")?.song ?? null;
-  const sections = searchSections(rows, filter);
+  // An artist, album or playlist can be the promoted result too.
+  const topBrowse =
+    filter === "all" && !topSong
+      ? (rows.find((r): r is Extract<SearchRow, { kind: "browse" }> => r.kind === "browse" && !!r.top && r.item.type !== "other")?.item ?? null)
+      : null;
+  const sections = searchSections(
+    topBrowse ? rows.filter((r) => !(r.kind === "browse" && r.item.browseId === topBrowse.browseId)) : rows,
+    filter,
+  );
 
   return (
     <div className="space-y-4">
       {/* pointer-events-none: rows scrolling under this strip keep their
           hover — only the pills themselves take the pointer. The frosted
           blur band behind them is NOT painted here: it lives at panel level
-          (see .search-band in index.css and App.tsx) so it can reach the
-          panel's true right edge past the scrollbar gutter. This row just
+          (see .search-band in index.css and App.tsx) so it stays put over
+          the panel's full width. This row just
           sticks to the top and sits above that band (z-10). Pills are
           full-size but narrow-padded so all six fit the content column at
           the default window size; flex-wrap is the safety valve below
@@ -442,8 +667,20 @@ export function SearchView() {
 
       {!error && !loading && rows.length > 0 && (
         <div className="animate-fade-in">
+          {topBrowse && (
+            <TopBrowseCard
+              item={topBrowse}
+              onOpened={() => remember(browseItem(topBrowse))}
+            />
+          )}
           {filter === "all" && topSong && (
-            <TopResultCard song={topSong} onPlay={() => playQueue([topSong], 0)} />
+            <TopResultCard
+              song={topSong}
+              onPlay={() => {
+                remember(songItem(topSong));
+                playQueue([topSong], 0);
+              }}
+            />
           )}
 
           {sections.map((section) => (
@@ -455,10 +692,15 @@ export function SearchView() {
                     {row.kind === "top" ? null : row.kind === "track" ? (
                       <SongSearchRow
                         song={row.song}
-                        onPlay={() => playQueue(tracks, Math.max(0, tracks.findIndex((t) => t.id === row.song.id)))}
+                        // Just the song clicked: AutoPlay carries on with songs like it,
+                        // rather than the rest of the results page.
+                        onPlay={() => {
+                          remember(songItem(row.song));
+                          playQueue([row.song], 0);
+                        }}
                       />
                     ) : (
-                      <BrowseSearchRow item={row.item} />
+                      <BrowseSearchRow item={row.item} onOpened={() => remember(browseItem(row.item))} />
                     )}
                     {i < section.rows.length - 1 && <div className="h-px bg-ink-hi/[0.05] ml-[80px] mr-3" />}
                   </div>

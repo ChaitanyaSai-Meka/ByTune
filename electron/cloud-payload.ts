@@ -1,5 +1,7 @@
 import { SYNCED_STORES } from "../src/lib/config";
 import { artworkUrlOk } from "../src/lib/artwork";
+import { eqGainsOk, eqPresetsOk, matchLanguageOk } from "./backup-transfer";
+import { DEVICE_SETTINGS_FIELDS } from "./sync-merge";
 
 export const MAX_CLOUD_PAYLOAD_BYTES = 8 * 1024 * 1024;
 const MAX_NODES = 200_000;
@@ -118,6 +120,7 @@ export function validateCloudPayload(name: string, payload: unknown): boolean {
       const clean = cleanRecords(state.playlists, (p) => {
         if (!text(p.name) || !timestamp(p.createdAt) || !Array.isArray(p.tracks)) return false;
         stripUnsafeThumbs(p.tracks);
+        if (p.orderedAt !== undefined && !timestamp(p.orderedAt)) delete p.orderedAt;
         const tracks = cleanRecords(p.tracks, trackOk);
         if (tracks === undefined) return false;
         p.tracks = tracks;
@@ -143,6 +146,14 @@ export function validateCloudPayload(name: string, payload: unknown): boolean {
         delete state.pinnedSingles;
       }
       if (JSON.stringify(state.pinnedSingles ?? null) !== before) sanitized = true;
+    }
+    if (state.libraryOrder !== undefined) {
+      // Your Library's row order: row keys ("playlist:<id>"), short and bounded.
+      const before = JSON.stringify(state.libraryOrder);
+      state.libraryOrder = Array.isArray(state.libraryOrder)
+        ? state.libraryOrder.filter((k: unknown) => typeof k === "string" && k.length > 0 && k.length <= 200).slice(0, 5000)
+        : [];
+      if (JSON.stringify(state.libraryOrder) !== before) sanitized = true;
     }
   } else if (name === "recent-searches") {
     if (state.searches !== undefined) {
@@ -189,16 +200,24 @@ export function validateCloudPayload(name: string, payload: unknown): boolean {
       // Device-owned fields must never arrive from the cloud: strip them so a
       // hostile row cannot plant a path on a fresh machine (local values are
       // re-attached by the device merge, and consumption re-gates anyway).
-      if (["downloadDir", "localMusicFolder"].includes(key)) {
+      if ((DEVICE_SETTINGS_FIELDS as readonly string[]).includes(key)) {
         delete state[key];
         sanitized = true;
         continue;
       }
-      if (["downloadQuality", "streamingQuality"].includes(key)) {
+      if (key === "loudnessLevel") {
+        if (typeof v !== "string" || !["off", "quiet", "normal", "loud"].includes(v)) { delete state[key]; sanitized = true; }
+      } else if (key === "matchLanguage") {
+        if (!matchLanguageOk(v)) { delete state[key]; sanitized = true; }
+      } else if (["downloadQuality", "streamingQuality"].includes(key)) {
         const allowed = key === "downloadQuality" ? ["standard", "high", "lossless"] : ["low", "medium", "high", "lossless"];
         if (typeof v !== "string" || !allowed.includes(v)) { delete state[key]; sanitized = true; }
       } else if (key === "crossfadeSeconds" || key === "playbackSpeed") {
         if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > (key === "playbackSpeed" ? 2 : 30)) { delete state[key]; sanitized = true; }
+      } else if (key === "eqGains") {
+        if (!eqGainsOk(v)) { delete state[key]; sanitized = true; }
+      } else if (key === "eqPresets") {
+        if (!eqPresetsOk(v)) { delete state[key]; sanitized = true; }
       } else if (typeof v !== "boolean") {
         // Unknown or non-conforming keys are dropped, not fatal: a value from
         // a different build must not be able to brick the whole account.
