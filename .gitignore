@@ -47,3 +47,6 @@ phase*-rect-results.json
 # ZCode agent scratch (local plans/temp scripts, never shared)
 /.zcode/
 /.zcodeignore
+
+# Per-run temp dir for tests (scripts/with-test-temp.mjs)
+.test-tmp/
