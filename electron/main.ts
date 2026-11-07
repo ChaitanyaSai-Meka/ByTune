@@ -1,5 +1,5 @@
 /** ByTune desktop — Electron main process. */
-import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, nativeImage, powerMonitor, protocol, session, shell, Tray } from "electron";
+import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, nativeImage, powerMonitor, protocol, screen, session, shell, Tray } from "electron";
 import type { NativeImage } from "electron";
 import { pathToFileURL } from "url";
 import * as fs from "fs";
@@ -28,6 +28,7 @@ import * as updates from "./updater";
 import * as transition from "./data-transition";
 import { buildAppMenu, type MenuCommand, type MenuPlaybackState, type MenuWiring } from "./mac-menu";
 import { buildTrayMenu, closeAction } from "./close-to-tray";
+import { placeOnScreen, readWindowState } from "./window-state";
 import type { Track } from "../src/types";
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
@@ -284,10 +285,38 @@ function setGlass(on: boolean): void {
   }
 }
 
+/*
+ * The main window reopens the way it was closed (#11, electron/window-state.ts): saved 400 ms after a move,
+ * resize or (un)maximize, and at once on close, a hide to the tray or the Dock included.
+ */
+let windowStateTimer: ReturnType<typeof setTimeout> | null = null;
+
+function saveWindowState(): void {
+  if (windowStateTimer) {
+    clearTimeout(windowStateTimer);
+    windowStateTimer = null;
+  }
+  const win = mainWindow;
+  // Minimized or fullscreen isn't how it should reopen, and Windows reports a minimized window as not
+  // maximized: keep the state saved before.
+  if (!win || win.isDestroyed() || win.isMinimized() || win.isFullScreen()) return;
+  try {
+    persist.writeDataSync("window-state", { ...win.getNormalBounds(), maximized: win.isMaximized() });
+  } catch (err) {
+    console.warn("[bytune] window-state save failed:", err);
+  }
+}
+
+function saveWindowStateSoon(): void {
+  if (windowStateTimer) clearTimeout(windowStateTimer);
+  windowStateTimer = setTimeout(saveWindowState, 400);
+}
+
 function createWindow(): void {
+  const saved = readWindowState(persist.readData("window-state"));
+  const place = saved && placeOnScreen(saved, screen.getAllDisplays().map((d) => d.workArea));
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 820,
+    ...(place ?? { width: 1280, height: 820 }),
     minWidth: 1000,
     minHeight: 640,
     ...(process.platform === "win32"
@@ -322,9 +351,9 @@ function createWindow(): void {
   });
 
   mainWindow.once("ready-to-show", () => {
-    // Windows opens maximized by default; macOS keeps a normal-sized window
-    // (Spotify's convention) — the user's own zoom is remembered by the OS.
-    if (!isMac && !mainWindow?.isMaximized()) mainWindow?.maximize();
+    // The first launch opens maximized on Windows and at a normal size on
+    // macOS (Spotify's convention); after that, the way it was closed.
+    if ((saved ? saved.maximized : !isMac) && !mainWindow?.isMaximized()) mainWindow?.maximize();
     mainWindow?.show();
   });
   mainWindow.webContents.on("did-start-navigation", (details) => {
@@ -364,6 +393,10 @@ function createWindow(): void {
   };
   mainWindow.on("maximize", sendMaximized);
   mainWindow.on("unmaximize", sendMaximized);
+  mainWindow.on("resize", saveWindowStateSoon);
+  mainWindow.on("move", saveWindowStateSoon);
+  mainWindow.on("maximize", saveWindowStateSoon);
+  mainWindow.on("unmaximize", saveWindowStateSoon);
 
   // Keyboard shortcuts live in the renderer (a window keydown listener). A
   // focused WINDOW alone isn't enough: after alt-tabbing back the webContents
@@ -445,6 +478,7 @@ function createWindow(): void {
   mainWindow.on("close", (event) => {
     const win = mainWindow;
     if (!win) return;
+    saveWindowState();
     const action = closeAction({
       platform: process.platform,
       quitting,
