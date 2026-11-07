@@ -29,7 +29,9 @@ permissions:
 
 jobs:
   mac:
-    runs-on: macos-14
+    # macos-14 was retired by GitHub (runs were cancelled as "not supported");
+    # latest survives the next retirement too.
+    runs-on: macos-latest
     steps:
       - name: Check out
         uses: actions/checkout@v4
