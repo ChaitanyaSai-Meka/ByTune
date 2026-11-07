@@ -121,6 +121,8 @@ const api = {
   // Real native minimize (the window stays alive and restorable from the
   // Windows taskbar) — playback and the main window are untouched.
   pipMinimize: () => ipcRenderer.send("pip:minimize"),
+  /** the miniplayer's bar button: the compact bar, or back to the square */
+  pipSetCompact: (on: boolean) => ipcRenderer.send("pip:compact", on === true),
   pipShowMain: () => ipcRenderer.send("pip:show-main"),
   pipSendState: (snapshot: unknown) => ipcRenderer.send("pip:state", snapshot),
   pipSendCommand: (command: unknown) => ipcRenderer.send("pip:command", command),

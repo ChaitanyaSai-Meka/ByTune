@@ -11,6 +11,8 @@
  * Sizing follows Spotify's desktop MiniPlayer, measured via CDP: a 330×342
  * logical-px viewport with a 26px top bar, 48px metadata bar, 4px artwork
  * inset and 8px gaps. Outer window adjusted for the frame (see constants).
+ * A button in the miniplayer switches it to the compact bar (PR #10's design,
+ * by bevinkatti), a fixed 320×110 window, and back (setPipCompact).
  *
  * Closing the PiP only destroys this window — the main window keeps playing.
  */
@@ -63,17 +65,20 @@ export function restrictNavigation(win: BrowserWindow, isPip = false): void {
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 }
 
-/** Sizing defaults (logical px).
- * - Default size: 352×353 (matching Spotify's ~330×342 viewport plus resize margins).
- * - Min clamps: 200×75, allowing the window to shrink down to an ultra-compact
- *   horizontal music controller (~220–280 px wide by ~80–110 px high).
- * - Max clamps: 640×580, accommodating wide bars or expanded square formats. */
+/** Spotify MiniPlayer-measured defaults (logical px). Spotify's viewport is
+ * 330×342; ByTune's frameless window carries ~22px of horizontal and ~11px
+ * of vertical invisible resize frame, so the outer window is sized to land
+ * that viewport. Min/max mirror Spotify's own clamps (253×228 / 569×569
+ * outer) converted through the same frame. */
 export const PIP_DEFAULT_W = 352;
 export const PIP_DEFAULT_H = 353;
-const PIP_MIN_W = 200;
-const PIP_MIN_H = 75;
-const PIP_MAX_W = 640;
-const PIP_MAX_H = 580;
+const PIP_MIN_W = 262;
+const PIP_MIN_H = 233;
+const PIP_MAX_W = 578;
+const PIP_MAX_H = 574;
+/** The compact bar: a fixed size, only ever reached with its button. */
+const PIP_BAR_W = 320;
+const PIP_BAR_H = 110;
 /** default resting spot: bottom-right of the work area */
 const REST_MARGIN = 16;
 
@@ -92,8 +97,12 @@ interface PipRect {
 }
 
 let pipWindow: BrowserWindow | null = null;
-/** last known bounds, for saving when the window is already gone */
+/** last known bounds, for saving when the window is already gone. While the
+    bar shows, still the square window's rect: the bar sits at its
+    bottom-right corner, so the square comes back where the bar was. */
 let lastRect: PipRect | null = null;
+/** showing the compact bar (saved with the rect, so it reopens that way) */
+let compact = false;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let getMainWindow: () => BrowserWindow | null = () => null;
 let showMainWindow: () => void = () => undefined;
@@ -140,32 +149,50 @@ function notifyMain(channel: string, payload?: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
 }
 
-function defaultRect(): PipRect {
+function defaultRect(w = PIP_DEFAULT_W, h = PIP_DEFAULT_H): PipRect {
   const wa = screen.getPrimaryDisplay().workArea;
   return {
-    x: wa.x + wa.width - PIP_DEFAULT_W - REST_MARGIN,
-    y: wa.y + wa.height - PIP_DEFAULT_H - REST_MARGIN,
-    w: PIP_DEFAULT_W,
-    h: PIP_DEFAULT_H,
+    x: wa.x + wa.width - w - REST_MARGIN,
+    y: wa.y + wa.height - h - REST_MARGIN,
+    w,
+    h,
   };
 }
 
-function readSavedRect(): PipRect | null {
-  const r = persist.readData("pip-rect") as Partial<PipRect> | null;
+function readSaved(): { rect: PipRect; compact: boolean } | null {
+  const r = persist.readData("pip-rect") as (Partial<PipRect> & { compact?: unknown }) | null;
   if (!r || typeof r.x !== "number" || typeof r.y !== "number") return null;
   const w = clamp(Number(r.w) || PIP_DEFAULT_W, PIP_MIN_W, PIP_MAX_W);
   const h = clamp(Number(r.h) || PIP_DEFAULT_H, PIP_MIN_H, PIP_MAX_H);
-  return { x: Math.round(r.x), y: Math.round(r.y), w, h };
+  return { rect: { x: Math.round(r.x), y: Math.round(r.y), w, h }, compact: r.compact === true };
+}
+
+/** The bar's box: the square's bottom-right corner, so switching keeps that corner put. */
+function barBox(r: PipRect): PipRect {
+  return { x: r.x + r.w - PIP_BAR_W, y: r.y + r.h - PIP_BAR_H, w: PIP_BAR_W, h: PIP_BAR_H };
+}
+
+/** The square rect for a bar at `bar`: the bar's bottom-right corner, the square's size. */
+function squareAt(bar: PipRect, square: PipRect): PipRect {
+  return { x: bar.x + bar.w - square.w, y: bar.y + bar.h - square.h, w: square.w, h: square.h };
+}
+
+/** The window's live bounds as the square rect (lastRect), the bar included.
+ *  The bar counts by its own size: Windows reports a frameless window held to
+ *  110px as 111px tall, and carrying that back would creep it down a pixel a switch. */
+function liveRect(win: BrowserWindow): PipRect {
+  const b = win.getBounds();
+  if (compact) return squareAt({ x: b.x, y: b.y, w: PIP_BAR_W, h: PIP_BAR_H }, lastRect ?? defaultRect());
+  return { x: b.x, y: b.y, w: b.width, h: b.height };
 }
 
 /** A remembered position is only used while it is reachable on some display. */
 function visibleRect(r: PipRect): PipRect {
   const reachable = screen.getAllDisplays().some((d) => {
     const a = d.workArea;
-    const minReach = Math.min(32, Math.floor(r.h / 2));
-    return r.x + r.w > a.x + minReach && r.x < a.x + a.width - minReach && r.y + r.h > a.y + minReach && r.y < a.y + a.height - minReach;
+    return r.x + r.w > a.x + 56 && r.x < a.x + a.width - 56 && r.y + r.h > a.y + 56 && r.y < a.y + a.height - 56;
   });
-  if (!reachable) return defaultRect();
+  if (!reachable) return defaultRect(r.w, r.h);
   // Final safety net: keep the box inside the work area of the display it is
   // on (never under the taskbar, never off-screen) — a second monitor's spot
   // must not be dragged back onto the primary one.
@@ -196,8 +223,7 @@ function loadInto(win: BrowserWindow): void {
 
 function scheduleRectSave(): void {
   if (!pipWindow || pipWindow.isDestroyed()) return;
-  const b = pipWindow.getBounds();
-  lastRect = { x: b.x, y: b.y, w: b.width, h: b.height };
+  lastRect = liveRect(pipWindow);
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(savePipRect, 400);
 }
@@ -210,16 +236,13 @@ export function savePipRect(): void {
   }
   // A bounds change that landed between the last moved/resized event and a
   // quit would otherwise save a stale snapshot; prefer the live window.
-  if (pipWindow && !pipWindow.isDestroyed()) {
-    const b = pipWindow.getBounds();
-    lastRect = { x: b.x, y: b.y, w: b.width, h: b.height };
-  }
+  if (pipWindow && !pipWindow.isDestroyed()) lastRect = liveRect(pipWindow);
   if (!lastRect) return;
   // Synchronous on purpose: this also runs from before-quit/close, where an
   // async write could still be in flight when the process exits — the saved
   // rect would be lost and the miniplayer would reopen at its default spot.
   try {
-    persist.writeDataSync("pip-rect", lastRect);
+    persist.writeDataSync("pip-rect", { ...lastRect, compact });
   } catch (err) {
     console.warn("[bytune] pip-rect save failed:", err);
   }
@@ -243,19 +266,24 @@ export function openPip(): void {
     pipWindow?.show();
     return;
   }
-  const rect = visibleRect(readSavedRect() ?? defaultRect());
-  lastRect = rect;
+  const saved = readSaved();
+  compact = saved?.compact ?? false;
+  const square = saved?.rect ?? defaultRect();
+  const rect = visibleRect(compact ? barBox(square) : square);
+  lastRect = compact ? squareAt(rect, square) : rect;
   pipWindow = new BrowserWindow({
     width: rect.w,
     height: rect.h,
     x: rect.x,
     y: rect.y,
-    minWidth: PIP_MIN_W,
-    minHeight: PIP_MIN_H,
-    maxWidth: PIP_MAX_W,
-    maxHeight: PIP_MAX_H,
+    minWidth: compact ? PIP_BAR_W : PIP_MIN_W,
+    minHeight: compact ? PIP_BAR_H : PIP_MIN_H,
+    maxWidth: compact ? PIP_BAR_W : PIP_MAX_W,
+    maxHeight: compact ? PIP_BAR_H : PIP_MAX_H,
     frame: false,
     show: false,
+    // Always resizable: the bar is held to its size by min = max. Turning
+    // resizing off on a frameless Windows window grows it 1-3px every time.
     resizable: true,
     minimizable: true,
     maximizable: false,
@@ -333,6 +361,27 @@ export function closePip(): void {
   notifyMain("pip:open-changed", false);
 }
 
+/**
+ * The miniplayer's bar button: the compact bar or the square miniplayer. The
+ * window's bottom-right corner stays put (then the box is kept on screen);
+ * the bar is held to its size (min = max), the square resizable as always.
+ */
+export function setPipCompact(on: boolean): void {
+  const win = pipWindow;
+  if (!win || win.isDestroyed() || on === compact) return;
+  const square = liveRect(win);
+  compact = on;
+  const target = visibleRect(on ? barBox(square) : square);
+  lastRect = on ? squareAt(target, square) : target;
+  // Loosen the limits for the switch itself, then set the new mode's own.
+  win.setMinimumSize(Math.min(PIP_BAR_W, PIP_MIN_W), Math.min(PIP_BAR_H, PIP_MIN_H));
+  win.setMaximumSize(Math.max(PIP_BAR_W, PIP_MAX_W), Math.max(PIP_BAR_H, PIP_MAX_H));
+  win.setBounds({ x: target.x, y: target.y, width: target.w, height: target.h });
+  win.setMinimumSize(on ? PIP_BAR_W : PIP_MIN_W, on ? PIP_BAR_H : PIP_MIN_H);
+  win.setMaximumSize(on ? PIP_BAR_W : PIP_MAX_W, on ? PIP_BAR_H : PIP_MAX_H);
+  savePipRect();
+}
+
 export function togglePip(): boolean {
   // A minimized miniplayer comes back (openPip restores it) rather than closing.
   if (isPipShown()) closePip();
@@ -356,6 +405,10 @@ export function registerPipIpc(): void {
   });
   ipcMain.on("pip:show-main", (event) => {
     if (fromPip(event)) showMainWindow();
+  });
+  // The bar button: the compact bar (true) or the square miniplayer (false).
+  ipcMain.on("pip:compact", (event, on: unknown) => {
+    if (fromPip(event)) setPipCompact(on === true);
   });
   // Playback snapshots flow main window → PiP.
   ipcMain.on("pip:state", (event, snapshot: unknown) => {

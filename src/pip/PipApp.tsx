@@ -31,11 +31,11 @@
  *   the whole artwork area is the native drag surface (buttons carve
  *   no-drag) — exactly Spotify's fixed drag layer.
  *
- * A short window (under BAR_MAX_H, ./layout) gets the one-row bar instead,
- * from PR #10 by bevinkatti: the cover at the left as tall as the row
- * allows, the title (its album) and artist (their page), the like button,
- * then as many transport buttons as fit; the cover's own blurred glow
- * behind, a 3px seek strip along the bottom, minimize and close top right.
+ * The top bar's fold button switches to the compact bar (PR #10's design, by
+ * bevinkatti), a fixed 320×110 window (pip.ts): the cover, the title (its
+ * album) and artist (their page), like, previous, play and next; the cover's
+ * own blurred glow behind, a 3px seek strip along the bottom, and its unfold
+ * button, minimize and close top right.
  *
  * Playback is NOT here. This window holds no audio: it renders snapshots
  * pushed from the main window (pip:state) and sends transport commands back
@@ -48,7 +48,7 @@
  * moves the window, it never plays or pauses.
  */
 import { useEffect, useRef, useState, type ReactNode, type FocusEvent } from "react";
-import { Loader2 } from "lucide-react";
+import { FoldVertical, Loader2, UnfoldVertical } from "lucide-react";
 import {
   SpCheck,
   SpCoverNote,
@@ -68,7 +68,6 @@ import { FitText } from "../components/FitText";
 import { upgradeArtwork } from "../lib/artwork";
 import { isWindows } from "../lib/platform";
 import type { PipCommand, PipSnapshot } from "./types";
-import { pipLayout, type BarButton } from "./layout";
 
 const dragRegion = { WebkitAppRegion: "drag" } as React.CSSProperties;
 const noDragRegion = { WebkitAppRegion: "no-drag" } as React.CSSProperties;
@@ -86,6 +85,9 @@ const GRADIENT = "linear-gradient(rgba(18, 18, 18, 0.53) 0%, rgb(10, 10, 10) 100
 /** The bar's shade over its cover glow: the glow shows behind the cover, the
     text and buttons sit on dark (a flat tint would turn warm covers brown). */
 const BAR_SHADE = "linear-gradient(90deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.55) 40%, rgba(0,0,0,0.82) 100%)";
+/** Shorter than this, the window is the compact bar: pip.ts makes it 320×110,
+    and the square miniplayer can't be dragged below 233px. */
+const BAR_MAX_H = 175;
 
 /** like-burst confetti — flight target (--tx/--ty), spin (--rot), size and
     shade of each square in the Spotify-style "added" celebration */
@@ -205,15 +207,13 @@ export function PipApp() {
   const [ambient, setAmbient] = useState("#282828");
   const rootRef = useRef<HTMLDivElement | null>(null);
   const zoneRef = useRef<HTMLDivElement | null>(null);
-  /** the window's size, which picks the layout (./layout) */
-  const [size, setSize] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
+  /** the compact bar (the window's height says, as pip.ts sized it) or the square */
+  const [bar, setBar] = useState(() => window.innerHeight < BAR_MAX_H);
   useEffect(() => {
-    const onResize = (): void => setSize({ w: window.innerWidth, h: window.innerHeight });
+    const onResize = (): void => setBar(window.innerHeight < BAR_MAX_H);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const layout = pipLayout(size.w, size.h);
-  const has = (b: BarButton): boolean => layout.mode === "bar" && layout.buttons.includes(b);
 
   useEffect(() => {
     const off = window.bytune?.onPipState((s) => setSnap(s as PipSnapshot));
@@ -283,7 +283,7 @@ export function PipApp() {
     ro.observe(zone);
     return () => ro.disconnect();
     // Again whenever the square layout (and with it the zone) comes back from the bar.
-  }, [layout.mode]);
+  }, [bar]);
 
   /* The OS window's corners are rounded by the OS itself; the shell stays
      square and black so shell, corner squares and window edge all read as
@@ -573,7 +573,7 @@ export function PipApp() {
       onContextMenu={(e) => e.preventDefault()}
       className="pip-root animate-pip-in fixed inset-0 flex select-none flex-col overflow-hidden bg-black text-white"
     >
-      {layout.mode === "bar" ? (
+      {bar ? (
         <>
           {/* ------------------------- the bar (short windows) ------------------------- */}
           {/* Native drag surface: the whole bar, the cover included (a click on
@@ -595,10 +595,7 @@ export function PipApp() {
           </div>
 
           <div className="relative flex min-h-0 flex-1 items-center gap-2.5 px-2 pb-[3px]">
-            <div
-              className="shrink-0 overflow-hidden bg-[#181818] shadow-[0_2px_10px_rgba(0,0,0,0.5)]"
-              style={{ width: layout.cover, height: layout.cover, borderRadius: Math.min(8, Math.round(layout.cover / 8)) }}
-            >
+            <div className="h-20 w-20 shrink-0 overflow-hidden rounded-lg bg-[#181818] shadow-[0_2px_10px_rgba(0,0,0,0.5)]">
               {thumb ? (
                 <img key={trackId ?? "none"} src={thumb} alt="" draggable={false} className="animate-art-in h-full w-full object-cover" />
               ) : (
@@ -614,9 +611,9 @@ export function PipApp() {
                 type="button"
                 onClick={() => openInMain("album")}
                 title={track ? "Go to album" : "Open ByTune"}
-                className={`animate-meta-in block w-full min-w-0 cursor-pointer text-left font-semibold leading-[1.35] text-white ${
-                  layout.cover >= 88 ? "text-[15px]" : "text-[13px]"
-                } ${track ? "hover:underline" : ""}`}
+                className={`animate-meta-in block w-full min-w-0 cursor-pointer text-left text-[13px] font-semibold leading-[1.35] text-white ${
+                  track ? "hover:underline" : ""
+                }`}
               >
                 <FitText mode="auto" text={track ? shortTitle(track.title) : "Nothing playing"} full={track?.title} />
               </button>
@@ -625,27 +622,20 @@ export function PipApp() {
                 type="button"
                 onClick={() => openInMain("artist")}
                 title={track ? "Go to artist" : "Open ByTune"}
-                className={`animate-meta-in block w-full min-w-0 cursor-pointer text-left leading-[1.4] text-white/60 ${
-                  layout.cover >= 88 ? "text-[12px]" : "text-[11px]"
-                } ${track ? "hover:text-white hover:underline" : ""}`}
+                className={`animate-meta-in block w-full min-w-0 cursor-pointer text-left text-[11px] leading-[1.4] text-white/60 ${
+                  track ? "hover:text-white hover:underline" : ""
+                }`}
               >
                 <FitText mode="auto" text={track ? track.artist : ""} />
               </button>
             </div>
 
-            {has("like") && likeButton("h-7 w-7", "h-4 w-4")}
+            {likeButton("h-7 w-7", "h-4 w-4")}
 
             <div className="flex shrink-0 items-center gap-0.5" style={noDragRegion}>
-              {has("shuffle") && (
-                <IconBtn className="h-7 w-7" onClick={() => send({ type: "shuffle" })} active={snap?.shuffle} title="Shuffle" disabled={!track}>
-                  <SpShuffle className="h-3.5 w-3.5" />
-                </IconBtn>
-              )}
-              {has("prev") && (
-                <IconBtn className="h-7 w-7" onClick={() => send({ type: "prev" })} title="Previous" disabled={!track}>
-                  <SpPrev className="h-4 w-4" />
-                </IconBtn>
-              )}
+              <IconBtn className="h-7 w-7" onClick={() => send({ type: "prev" })} title="Previous" disabled={!track}>
+                <SpPrev className="h-4 w-4" />
+              </IconBtn>
               <button
                 type="button"
                 style={noDragRegion}
@@ -663,62 +653,9 @@ export function PipApp() {
                   </span>
                 )}
               </button>
-              {has("next") && (
-                <IconBtn className="h-7 w-7" onClick={() => send({ type: "next" })} title="Next" disabled={!track}>
-                  <SpNext className="h-4 w-4" />
-                </IconBtn>
-              )}
-              {has("repeat") && (
-                <IconBtn
-                  className="h-7 w-7"
-                  onClick={() => send({ type: "repeat" })}
-                  active={snap?.repeat !== "off"}
-                  title={snap?.repeat === "one" ? "Repeat one" : "Repeat"}
-                  disabled={!track}
-                >
-                  {snap?.repeat === "one" ? <SpRepeatOne className="h-3.5 w-3.5" /> : <SpRepeat className="h-3.5 w-3.5" />}
-                </IconBtn>
-              )}
-              {has("volume") && (
-                <div
-                  className="relative"
-                  onMouseEnter={openVol}
-                  onMouseLeave={scheduleVolClose}
-                  onFocus={(e) => {
-                    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) openVol();
-                  }}
-                  onBlur={(e) => {
-                    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) scheduleVolClose();
-                  }}
-                >
-                  <IconBtn className="h-7 w-7" onClick={() => send({ type: "mute" })} title={snap?.muted ? "Unmute" : "Mute"}>
-                    <span key={snap?.muted ? "off" : "on"} className="icon-swap">
-                      {snap?.muted ? <SpVolumeOff className="h-3.5 w-3.5" /> : <SpVolumeHigh className="h-3.5 w-3.5" />}
-                    </span>
-                  </IconBtn>
-                  {/* The pill opens to the left: a short bar has no room above. */}
-                  <div
-                    className={`absolute right-full top-1/2 -translate-y-1/2 pr-1 transition-all duration-150 ease-[cubic-bezier(0.2,0.8,0.3,1)] ${
-                      volOpen ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-1 opacity-0"
-                    }`}
-                    style={noDragRegion}
-                  >
-                    <div className="w-[90px] rounded-xl bg-[#282828] px-2 py-1.5 shadow-elev">
-                      <input
-                        type="range"
-                        aria-label="Volume"
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        value={snap?.muted ? 0 : snap?.volume ?? 0.8}
-                        onChange={(e) => send({ type: "volume", v: Number(e.target.value) })}
-                        className="slider mp-slider w-full"
-                        style={{ "--fill": `${Math.round((snap?.muted ? 0 : (snap?.volume ?? 0.8)) * 100)}%` } as React.CSSProperties}
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
+              <IconBtn className="h-7 w-7" onClick={() => send({ type: "next" })} title="Next" disabled={!track}>
+                <SpNext className="h-4 w-4" />
+              </IconBtn>
             </div>
           </div>
 
@@ -736,11 +673,21 @@ export function PipApp() {
             </div>
           </div>
 
-          {/* Minimize and close, top right: faint until the cursor is over the window. */}
+          {/* Back to the full miniplayer, minimize and close, top right: faint
+              until the cursor is over the window. */}
           <div
             className={`absolute right-1.5 top-1.5 z-30 flex items-center gap-1 transition-opacity duration-150 ${expanded ? "opacity-100" : "opacity-40"}`}
             style={noDragRegion}
           >
+            <button
+              type="button"
+              onClick={() => window.bytune?.pipSetCompact(false)}
+              title="Full miniplayer"
+              aria-label="Full miniplayer"
+              className="grid h-4 w-4 cursor-pointer place-items-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white active:scale-95"
+            >
+              <UnfoldVertical className="h-3 w-3" strokeWidth={2.25} aria-hidden />
+            </button>
             <button
               type="button"
               onClick={() => window.bytune?.pipMinimize()}
@@ -962,6 +909,18 @@ export function PipApp() {
               >
                 <SpGrip className="h-6 w-6 text-[#b3b3b3]" />
                 {/* 20px hit boxes around the 12px marks — same look, easier to hit */}
+                <button
+                  type="button"
+                  style={noDragRegion}
+                  onClick={() => window.bytune?.pipSetCompact(true)}
+                  title="Compact player"
+                  aria-label="Compact player"
+                  className="group absolute right-[45px] top-[3px] grid h-5 w-5 cursor-pointer place-items-center rounded-full text-white active:scale-95"
+                >
+                  <span className="grid h-3 w-3 place-items-center rounded-full transition-colors duration-150 group-hover:bg-white/10">
+                    <FoldVertical className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
+                  </span>
+                </button>
                 <button
                   type="button"
                   style={noDragRegion}
