@@ -34,6 +34,8 @@ export type MenuCommand =
   | "now-playing"
   | "miniplayer"
   | "settings"
+  /** Settings › About, where an update shows (Check for Updates, the update notification). */
+  | "updates"
   | "focus-search"
   | "sleep-15"
   | "sleep-30"
@@ -55,6 +57,8 @@ export interface MenuWiring {
   backupImport(): void;
   /** Raise (unhide + focus) the main window. */
   showMainWindow(): void;
+  /** Settings › About in front, and a fresh look for a new version. */
+  checkForUpdates(): void;
 }
 
 export type MenuTemplate = import("electron").MenuItemConstructorOptions[];
@@ -113,6 +117,7 @@ export function buildAppMenu(state: MenuPlaybackState, wiring: MenuWiring, isDev
       label: "ByTune",
       submenu: [
         { role: "about", label: "About ByTune" },
+        { label: "Check for Updates", click: (): void => wiring.checkForUpdates() },
         { type: "separator" },
         {
           label: "Settings…",

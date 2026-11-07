@@ -55,6 +55,9 @@ function runCommand(command: string): void {
     case "settings":
       ui.openSettings();
       break;
+    case "updates":
+      ui.openSettings("about");
+      break;
     case "focus-search": {
       const el = document.getElementById("global-search") as HTMLInputElement | null;
       el?.focus();

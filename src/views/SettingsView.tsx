@@ -70,6 +70,7 @@ import { useLibrary } from "../stores/library";
 import { shownName, useSession } from "../lib/session";
 import { displayNameProblem, normalizeDisplayName } from "../lib/account-validators";
 import { askToDisconnectSpotify, connectSpotify, useSpotify } from "../lib/spotify";
+import { useUpdates } from "../lib/updates";
 import { SpotifyIcon } from "../components/SpotifyIcon";
 import { MATCH_LANGUAGES, type MatchLanguage } from "../../electron/track-match";
 import { LYRICS_NUDGE_STEP, describeLyricsShift } from "../lib/lyricsOffset";
@@ -1483,6 +1484,47 @@ function DataPane() {
 
 /* ============================================================ about */
 
+/** Where updates stand (electron/updater.ts), and the one thing to do about it. */
+function UpdatesGroup() {
+  const u = useUpdates();
+  if (!u) return null;
+  const { status, current, version, percent } = u;
+  const check = <Button onClick={() => void window.bytune?.checkForUpdates()}>Check for updates</Button>;
+  const view: { title: string; note: string; control?: ReactNode } =
+    status === "checking"
+      ? { title: "Checking for updates…", note: `You have version ${current}`, control: <Button disabled onClick={() => undefined}>Check for updates</Button> }
+      : status === "current"
+        ? { title: "ByTune is up to date", note: `Version ${current} is the newest`, control: check }
+        : status === "available"
+          ? {
+              title: `Version ${version} is available`,
+              note: u.installs ? `You have version ${current}. It installs right here.` : `You have version ${current}. Get it from bytune.space.`,
+              control: <Button kind="primary" onClick={() => void window.bytune?.installUpdate()}>{u.installs ? "Update" : "Download"}</Button>,
+            }
+          : status === "downloading"
+            ? { title: `Downloading version ${version}…`, note: `${percent ?? 0}%` }
+            : status === "ready"
+              ? {
+                  title: `Version ${version} is ready`,
+                  note: "Restart ByTune to finish updating",
+                  control: <Button kind="primary" onClick={() => void window.bytune?.restartToUpdate()}>Restart to update</Button>,
+                }
+              : status === "error"
+                ? {
+                    title: version ? "Couldn't update" : "Couldn't check for updates",
+                    note: u.error ?? "Try again in a moment",
+                    control: version
+                      ? <Button onClick={() => window.open("https://bytune.space", "_blank", "noopener")}>Download</Button>
+                      : check,
+                  }
+                : { title: "Updates", note: `You have version ${current}`, control: check };
+  return (
+    <Group title="Updates">
+      <Row icon={RefreshCw} title={view.title} note={view.note} control={view.control} />
+    </Group>
+  );
+}
+
 function AboutPane() {
   const versions = window.bytune?.versions;
   return (
@@ -1496,6 +1538,7 @@ function AboutPane() {
           <p className="st-about-meta">Free and open source under GPL-3.0</p>
         </div>
       </section>
+      <UpdatesGroup />
       <Group title="Links">
         <Row
           icon={Globe}

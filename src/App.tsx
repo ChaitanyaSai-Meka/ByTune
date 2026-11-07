@@ -21,6 +21,7 @@ import { listenForRooms } from "./lib/rooms";
 import { FileDropOverlay } from "./components/FileDropOverlay";
 import { LYRICS_NUDGE_STEP, useLyricsNudge } from "./lib/lyricsOffset";
 import { watchMenuCommands } from "./lib/menuCommands";
+import { watchUpdateNotice } from "./lib/updates";
 import { usePanelDrop } from "./lib/panelDrop";
 import { CoverGlow } from "./components/CoverGlow";
 import { PanelScrollbar } from "./components/PanelScrollbar";
@@ -353,6 +354,9 @@ export default function App() {
   // macOS application menu: commands in (play/pause, navigation…), playback
   // state out (menu checkmarks). No-op off macOS.
   useEffect(() => watchMenuCommands(), []);
+
+  // The old versions' synced "update available" playlist: this version is the update.
+  useEffect(() => watchUpdateNotice(), []);
 
   // Maximize / restore settle: the OS zooms the window while the layout snaps
   // underneath, and the seam reads as a jarring reflow. A short settle on the

@@ -24,6 +24,7 @@ import { naturalScrolling } from "./scroll-direction";
 import { proxyUrlFor, proxyUrlForLocalTrack, setDownloadedFileLookup, startStreamProxy } from "./stream-proxy";
 import * as auth from "./supabase";
 import * as sync from "./sync";
+import * as updates from "./updater";
 import * as transition from "./data-transition";
 import { buildAppMenu, type MenuCommand, type MenuPlaybackState, type MenuWiring } from "./mac-menu";
 import { buildTrayMenu, closeAction } from "./close-to-tray";
@@ -159,7 +160,15 @@ function menuWiring(): MenuWiring {
       );
     },
     showMainWindow,
+    checkForUpdates: (): void => showUpdates(true),
   };
+}
+
+/** Settings › About in front, where an update shows (the Mac menu's Check for Updates, the update notification). */
+function showUpdates(check: boolean): void {
+  showMainWindow();
+  menuWiring().sendCommand("updates");
+  if (check) void updates.checkForUpdates(false);
 }
 
 /** (Re)build the macOS app menu from the current playback state. */
@@ -737,6 +746,11 @@ function registerIpc(): void {
     canvas.canvasFor(String(q?.title ?? ""), String(q?.artist ?? ""), q?.album ? String(q.album) : undefined)
   );
 
+  ipc.handle("updates:state", () => updates.updateState());
+  ipc.handle("updates:check", () => updates.checkForUpdates(false));
+  ipc.handle("updates:install", () => updates.installUpdate());
+  ipc.handle("updates:restart", () => updates.restartToUpdate());
+
   // Listening telemetry: one fire-and-forget channel feeding stats.
   ipc.on(
     "playback:event",
@@ -1131,6 +1145,9 @@ const gotLock =
 if (!gotLock) {
   app.quit();
 } else {
+  // Windows shows an app's notifications (a new version) under its Start menu shortcut's ID, which the
+  // installer sets to the appId; the media helper (media-helper.cs) speaks for the same one.
+  if (process.platform === "win32") app.setAppUserModelId("com.bytune.music");
   // Windows: ByTune's own media session replaces Chromium's (full-size cover
   // in the media flyout); the switch it sets only works before app ready.
   mediaControls.init();
@@ -1318,6 +1335,12 @@ if (!gotLock) {
     void startStreamProxy().catch((err) => console.warn("[bytune] stream proxy failed:", err));
     createWindow();
     createTray();
+    updates.startUpdates(
+      (s) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("updates:changed", s);
+      },
+      () => showUpdates(false)
+    );
     mediaControls.start({
       onAction: (action) => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("media:action", action);

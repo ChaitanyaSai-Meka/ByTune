@@ -5,6 +5,8 @@ import type {
   SpotifyPlaylistInfo, SpotifyStatus, Track,
 } from "../src/types";
 import type { LocalTrack } from "./local-library";
+import type { UpdateState } from "./updater";
+import { version as appVersion } from "../package.json";
 
 // The PiP window loads this same preload but its scope requests are rejected
 // by design (main-window-only handler) — an eager invoke there would leave an
@@ -26,7 +28,7 @@ const documentScope = (): Promise<string> => {
 const api = {
   platform: process.platform,
   versions: {
-    app: "1.0.1",
+    app: appVersion,
     electron: process.versions.electron ?? "",
     chrome: process.versions.chrome ?? "",
     node: process.versions.node ?? "",
@@ -75,6 +77,17 @@ const api = {
   remoteArtBytes: (url: string) => ipcRenderer.invoke("art:remoteBytes", url),
   getCanvas: (q: { title: string; artist: string; album?: string }) =>
     ipcRenderer.invoke("canvas:get", q),
+
+  // Updates (electron/updater.ts): where things stand, and what can be done about it.
+  updateState: (): Promise<UpdateState> => ipcRenderer.invoke("updates:state"),
+  checkForUpdates: (): Promise<void> => ipcRenderer.invoke("updates:check"),
+  installUpdate: (): Promise<void> => ipcRenderer.invoke("updates:install"),
+  restartToUpdate: (): Promise<void> => ipcRenderer.invoke("updates:restart"),
+  onUpdateState: (cb: (state: UpdateState) => void): (() => void) => {
+    const listener = (_e: unknown, state: UpdateState): void => cb(state);
+    ipcRenderer.on("updates:changed", listener as never);
+    return () => ipcRenderer.removeListener("updates:changed", listener as never);
+  },
 
   // Window controls (frameless window — chrome drawn by the renderer)
   windowMinimize: () => ipcRenderer.send("window:minimize"),

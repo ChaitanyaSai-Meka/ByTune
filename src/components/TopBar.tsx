@@ -12,6 +12,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import {
+  ArrowDownToLine,
   ArrowUpLeft,
   ChevronLeft,
   ChevronRight,
@@ -21,6 +22,7 @@ import {
   Home,
   Minus,
   RefreshCw,
+  RotateCw,
   Search,
   Square,
   X,
@@ -41,6 +43,7 @@ import { Artwork } from "./primitives";
 import { FitText } from "./FitText";
 import { useMenuLight } from "./ContextMenu";
 import { StreakChip } from "./Streak";
+import { useUpdates } from "../lib/updates";
 import brandLogo from "../assets/brand/bytune-logo.svg";
 import brandText from "../assets/brand/bytune-Text.svg";
 
@@ -64,6 +67,34 @@ function BrandHeader() {
         className="h-[19px] w-auto block"
       />
     </div>
+  );
+}
+
+/**
+ * A newer ByTune: Update (downloads it on Windows, opens the download page on a Mac), its progress,
+ * then Restart to update. Only there while there's one; a failed download sends you to Settings › About.
+ */
+function UpdateChip() {
+  const u = useUpdates();
+  // A known version stays up while Check for updates looks again ("checking" keeps it).
+  if (!u?.version || u.status === "current") return null;
+  const ready = u.status === "ready";
+  const label = u.status === "downloading" ? `Updating ${u.percent ?? 0}%` : ready ? "Restart to update" : "Update";
+  const act = (): void => {
+    if (ready) void window.bytune?.restartToUpdate();
+    else if (u.status === "available") void window.bytune?.installUpdate();
+    else useUI.getState().openSettings("about");
+  };
+  return (
+    <button
+      onClick={act}
+      title={ready ? `Restart ByTune to install version ${u.version}` : `ByTune ${u.version} is available`}
+      aria-label={ready ? `Restart to install ByTune ${u.version}` : `${label}: ByTune ${u.version}`}
+      className="update-chip"
+    >
+      {ready ? <RotateCw className="w-4 h-4" strokeWidth={2.5} /> : <ArrowDownToLine className="w-4 h-4" strokeWidth={2.5} />}
+      <span className="update-label">{label}</span>
+    </button>
   );
 }
 
@@ -656,7 +687,8 @@ export function TopBar() {
           caption buttons flush to the window edge. macOS uses the native
           traffic lights, so nothing is drawn here. */}
       <div className="ml-auto h-full flex items-center gap-1 shrink-0">
-        <div className="app-no-drag flex items-center">
+        <div className="app-no-drag flex items-center gap-1">
+          <UpdateChip />
           <StreakChip />
         </div>
         <div className="app-no-drag ml-1 mr-2 flex items-center">
