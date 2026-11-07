@@ -223,15 +223,15 @@ Run the installer, launch ByTune, and pick **Continue as guest** (data stays on 
 
 ### Verify your download
 
-Every release asset has a published SHA-256 checksum. Check yours against the list below (current as of **v1.0.1**):
+Every release asset has a published SHA-256 checksum. Check yours against the list below (current as of **v1.1.0**):
 
 | Asset | SHA-256 |
 |---|---|
-| `ByTune-Setup.exe` | `a0a712b16047b9ceac26f5dc862a5f9db92041c78983aa01b44db760f3e1324c` |
-| `ByTune-1.0.1-arm64.dmg` | `4c5301df28fe16a37a887a34318d72ce04447418b8b82abb1cf860189cdf7273` |
-| `ByTune-1.0.1-arm64.zip` | `e4a9a11dd412db0da36aaa820008e50017aa19606d1518d5e70c63c91df3991c` |
-| `ByTune-1.0.1-x64.dmg` | `64816c1b19efd2ec2213f4a79a8d8d63bfb5cb17e70ebea8a9818e3927901062` |
-| `ByTune-1.0.1-x64.zip` | `2e06fefae815eb57d62c0656472d740e010bc9a554897ee6d701036eb26f9634` |
+| `ByTune-Setup.exe` | `c5dfcd6852e573b1ca7eea7d7ef608d036f9fde07b4ebfaf81ec497afc5eb6b1` |
+| `ByTune-1.1.0-arm64.dmg` | `f185bfaedd16a51d813a0a22b3738d8e6ec73f30af60a3e14925a29a89505e73` |
+| `ByTune-1.1.0-arm64.zip` | `fc780c9e7d66762ff910b968b7cfaebf3fa677ebf6483f6c9fef841dfd3faecf` |
+| `ByTune-1.1.0-x64.dmg` | `fa19db4a9b433b37dec12e524b068f0192ea538e77a71c4dd49ab0580354157d` |
+| `ByTune-1.1.0-x64.zip` | `f1be5c0542443de002ea97c206aa247c9b227b0eb35c94f129eac1387d63185b` |
 
 ```powershell
 # Windows (PowerShell)
@@ -240,7 +240,7 @@ Get-FileHash .\ByTune-Setup.exe -Algorithm SHA256
 
 ```bash
 # macOS / Linux
-shasum -a 256 ByTune-1.0.1-arm64.dmg
+shasum -a 256 ByTune-1.1.0-arm64.dmg
 ```
 
 The installers aren't signed with a code-signing certificate yet, so Windows SmartScreen and macOS Gatekeeper ask for confirmation on first run (steps above) — the checksum table above is the way to confirm the file you downloaded is the one this project built.
