@@ -1,6 +1,6 @@
 # ByTune — YouTube Music desktop app for Windows & macOS
 
-![ByTune YouTube Music desktop app for Windows and macOS — home feed with Jump back in, library sidebar, now-playing panel and player bar](docs/screenshots/home.png)
+![ByTune YouTube Music desktop app for Windows and macOS — home feed with Jump back in, library sidebar, now-playing panel and player bar](docs/screenshots/home.jpg)
 
 **ByTune is a free, open-source YouTube Music desktop app for Windows & macOS.** Stream music, keep your own library, and get word-synced lyrics, a fullscreen player, a mini player and real downloads — in one fast, native app. If ByTune has earned a spot on your taskbar, consider starring the repo (the ★ button, top right) — it's how other people find the project.
 
@@ -10,7 +10,7 @@
 [![Downloads](https://img.shields.io/github/downloads/rishiteja21/ByTune/total?label=downloads&color=a8324a)](https://github.com/rishiteja21/ByTune/releases)
 [![Stars](https://img.shields.io/github/stars/rishiteja21/ByTune?color=a8324a)](https://github.com/rishiteja21/ByTune/stargazers)
 [![License](https://img.shields.io/github/license/rishiteja21/ByTune?color=a8324a)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20·%20macOS%2011%2B-1f6f5c)](#installation)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20·%20macOS%2013%2B-1f6f5c)](#installation)
 
 ---
 
@@ -38,13 +38,13 @@ Captured on the Windows edition — the macOS edition shares this same interface
 
 ### The player
 
-![ByTune artist page with top songs, play controls and the persistent player bar](docs/screenshots/artist.png)
+![ByTune artist page with top songs, play controls and the persistent player bar](docs/screenshots/artist.jpg)
 
 Album pages, artist pages and the persistent player bar: every view keeps playback, the queue and lyrics one click away.
 
 ### Fullscreen
 
-![ByTune fullscreen now-playing view with album artwork, audio visualizer and word-synced lyrics](docs/screenshots/fullscreen.png)
+![ByTune fullscreen now-playing view with album artwork, audio visualizer and word-synced lyrics](docs/screenshots/fullscreen.jpg)
 
 Click the artwork in the player bar (or press <kbd>N</kbd>) for a cinematic view: large artwork, a live visualizer, the queue and word-synced lyrics — all tinted by the colors of the current track.
 
@@ -56,43 +56,43 @@ The mini player is a real picture-in-picture window: always on top, resizable, w
 
 ### Lyrics
 
-![ByTune synchronized lyrics interface with the current word highlighted](docs/screenshots/lyrics.png)
+![ByTune synchronized lyrics interface with the current word highlighted](docs/screenshots/lyrics.jpg)
 
 Lyrics open in the main view or the fullscreen player, highlight the current word, auto-scroll, and let you click any line to seek there. If YouTube Music has no lyrics for a track, ByTune falls back to LRCLIB.
 
 ### Search
 
-![ByTune music search interface with songs, artists and albums results](docs/screenshots/search.png)
+![ByTune music search interface with songs, artists and albums results](docs/screenshots/search.jpg)
 
 Search songs, videos, albums, artists and playlists from YouTube Music, with live suggestions as you type. Press <kbd>/</kbd> to jump to the search bar from anywhere.
 
 ### Queue & playlists
 
-![ByTune queue panel showing now playing and next up tracks](docs/screenshots/queue.png)
+![ByTune queue panel showing now playing and next up tracks](docs/screenshots/queue.jpg)
 
 A proper queue: see what's playing and what's next, reorder by drag, add with "Play next" or "Add to queue" from any track's right-click menu, and keep the music going with Autoplay when the queue ends. Shuffle, repeat (off / all / one) and crossfade are one click away.
 
 ### Your library
 
-![ByTune library view with liked songs, playlists and play all controls](docs/screenshots/library.png)
+![ByTune Liked Songs page under a wall of its covers, with play and shuffle](docs/screenshots/library.jpg)
 
 Your library persists on disk and restores on launch: liked songs, your own playlists, downloads and listening history — with an optional account to keep it safe even if this computer's app data is wiped.
 
 ### Local music
 
-![ByTune local music library — an imported folder with its songs, albums and artists](docs/screenshots/local-music.png)
+![ByTune Local Music page with imported folders under a wall of their covers](docs/screenshots/local-music.jpg)
 
 Import folders from your PC and they sit beside your streaming library — full track lists, album and artist browsing, embedded artwork, and a filter that hides short recordings and voice notes.
 
 ### Downloads
 
-![ByTune downloads view showing a saved track with downloaded status](docs/screenshots/downloads.png)
+![ByTune Downloads page with saved songs under a wall of their covers](docs/screenshots/downloads.jpg)
 
 Save any track as a `.m4a` file, with live progress, an "Open folder" shortcut, a configurable download location and quality options up to the app's "Lossless" setting.
 
 ### Settings
 
-![ByTune settings page with playback, lyrics and local music options](docs/screenshots/settings.png)
+![ByTune settings, Sound section with streaming quality, volume leveling, output device and equalizer](docs/screenshots/settings.jpg)
 
 Streaming quality ceilings, download quality, crossfade and Auto Mix, skip silence, autoplay, pitch-preserving playback speed, lyric behavior, appearance (liquid glass, reduced motion) and local-music management — all in one settings page.
 
