@@ -90,6 +90,14 @@ Import folders from your PC and they sit beside your streaming library — full 
 
 Save any track as a `.m4a` file, with live progress, an "Open folder" shortcut, a configurable download location and quality options up to the app's "Lossless" setting.
 
+### Replay
+
+![ByTune Replay page for this month: minutes listened, plays, top artist and the hour you listen most](docs/screenshots/replay.jpg)
+
+<p align="center"><img src="docs/screenshots/replay-card.jpg" alt="ByTune Replay story card with minutes listened, top songs and top artists" width="300"></p>
+
+Replay counts your listening on this device: minutes, plays, your top songs, artists and albums, your streak and the hour you listen most, by week, month, year or all time. **Share** turns it into a 1080 × 1920 card sized for a story.
+
 ### Settings
 
 ![ByTune settings, Sound section with streaming quality, volume leveling, output device and equalizer](docs/screenshots/settings.jpg)
