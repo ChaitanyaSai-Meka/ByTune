@@ -1387,6 +1387,25 @@ input[type="range"].slider.mp-slider:active::-webkit-slider-thumb {
   animation: spin-slow 14s linear infinite;
 }
 
+/* Window lifecycle: explicit decorative/status-motion allowlist. Pausing
+   preserves progress and the existing playing/reduced-motion rules. Status
+   data keeps updating. Entrance/exit, toast countdown and interaction
+   animations are intentionally not selected. New effects must opt in here
+   or carry data-visual-animation="decorative" on the animated element. */
+html[data-visual-active="false"] :is(
+  [data-visual-animation="decorative"],
+  .animate-drift, .animate-drift2,
+  .cover-wall-row, .st-id-wall-row,
+  .eq-bar, .spin-slow, .tt-record, .rp-disc,
+  .fs-art-breathe, .fs-viz-bar,
+  .fire-body, .fire-burst, .fire-spark,
+  .skeleton, .animate-spin, .animate-pulse
+),
+html[data-visual-active="false"] .tl-playing::before,
+html[data-visual-active="false"] .st-id-sync.is-busy::before {
+  animation-play-state: paused !important;
+}
+
 /* ---------- text helpers ---------- */
 .micro-label {
   @apply text-[11px] font-semibold uppercase tracking-[0.18em];

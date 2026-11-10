@@ -11,6 +11,7 @@
  * the whole of it is the hover tooltip.
  */
 import { useLayoutEffect, useRef } from "react";
+import { visualActivity } from "../lib/visualActivity";
 
 /** Reading pace for a slide, in px per second. */
 const SPEED = 40;
@@ -81,8 +82,11 @@ export function FitText({
     const body = inner.current;
     if (!el || !body) return;
     let running: Animation[] = [];
+    let unregister: Array<() => void> = [];
     let slidingBy = 0;
     const stop = (): void => {
+      for (const off of unregister) off();
+      unregister = [];
       for (const a of running) a.cancel();
       running = [];
       slidingBy = 0;
@@ -132,6 +136,7 @@ export function FitText({
             { duration: total * 1000, iterations: Infinity }
           ),
         ];
+        unregister = running.map(visualActivity.registerAnimation);
       };
     };
     const unwatch = watch(lines === 1 ? [el, body] : [el], measure);

@@ -43,6 +43,7 @@ import { FitText } from "./FitText";
 import { playFragmented, useCanvas } from "../lib/canvas";
 import { useLyricsOffset } from "../lib/lyricsOffset";
 import { useIdle } from "../lib/useIdle";
+import { visualActivity } from "../lib/visualActivity";
 import type { LyricsResult } from "../types";
 
 /** How long the pointer rests before the controls and the cursor go (YouTube's wait). */
@@ -364,14 +365,13 @@ export function NowPlaying() {
   useEffect(() => {
     const v = canvasVideoRef.current;
     if (!v || !canvasUrl || !canvasFragmented) return;
-    return playFragmented(v, canvasUrl);
-  }, [canvasUrl, canvasFragmented, animatedCanvas]);
+    return playFragmented(v, canvasUrl, () => visualActivity.getSnapshot() && usePlayer.getState().playing);
+  }, [canvasUrl, canvasFragmented, animatedCanvas, mounted]);
   useEffect(() => {
     const v = canvasVideoRef.current;
     if (!v) return;
-    if (playing) void v.play().catch(() => undefined);
-    else v.pause();
-  }, [playing, canvasUrl]);
+    return visualActivity.registerVideo(v, () => playing);
+  }, [playing, canvasUrl, canvasFragmented, animatedCanvas, mounted]);
 
   const palette: ArtworkPalette = useArtworkPalette(shown?.thumb ?? null);
 
@@ -527,7 +527,6 @@ export function NowPlaying() {
                           key={canvasUrl}
                           ref={canvasVideoRef}
                           src={canvasFragmented ? undefined : canvasUrl}
-                          autoPlay
                           loop={!canvasFragmented}
                           muted
                           playsInline
