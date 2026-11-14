@@ -43,7 +43,7 @@ import { FitText } from "./FitText";
 import { playFragmented, useCanvas } from "../lib/canvas";
 import { useLyricsOffset } from "../lib/lyricsOffset";
 import { useIdle } from "../lib/useIdle";
-import { visualActivity } from "../lib/visualActivity";
+import { visibleActivity } from "../lib/visualActivity";
 import { homeVisualActivity } from "../lib/visualScope";
 import type { LyricsResult } from "../types";
 
@@ -380,12 +380,12 @@ export function NowPlaying() {
   useEffect(() => {
     const v = canvasVideoRef.current;
     if (!v || !canvasUrl || !canvasFragmented) return;
-    return playFragmented(v, canvasUrl, () => visualActivity.getSnapshot() && usePlayer.getState().playing);
+    return playFragmented(v, canvasUrl, () => visibleActivity.getSnapshot() && usePlayer.getState().playing);
   }, [canvasUrl, canvasFragmented, animatedCanvas, mounted]);
   useEffect(() => {
     const v = canvasVideoRef.current;
     if (!v) return;
-    return visualActivity.registerVideo(v, () => playing);
+    return visibleActivity.registerVideo(v, () => playing);
   }, [playing, canvasUrl, canvasFragmented, animatedCanvas, mounted]);
 
   const palette: ArtworkPalette = useArtworkPalette(shown?.thumb ?? null);

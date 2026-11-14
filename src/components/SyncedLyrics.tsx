@@ -18,7 +18,7 @@ import { romanize } from "../lib/romanize";
 import { LYRICS_LOADING_LINES, pickLyricsLine } from "../lib/lyricsPhrases";
 import { usePlayer } from "../stores/player";
 import { useSettings } from "../stores/settings";
-import { useVisualActivity, useVisualSnapshot, visualActivity } from "../lib/visualActivity";
+import { useWindowVisible, useVisualSnapshot, visibleActivity } from "../lib/visualActivity";
 import type { LyricsResult, SyncedLyricWord } from "../types";
 
 /** How long the lyrics take to glide to the next line. */
@@ -117,7 +117,7 @@ function WordLine({
     // The sweep only moves while audio is playing; parked at pause, the line
     // holds its last state instead of burning frames re-rendering.
     if (!playing) return;
-    return visualActivity.runFrames(() => {
+    return visibleActivity.runFrames(() => {
       force((n) => (n + 1) % 1000000);
     });
   }, [playing]);
@@ -189,7 +189,7 @@ export function LyricsView({
   trackKey,
 }: LyricsViewProps & { offset?: number }) {
   const variant: LyricsVariant = hero ? "hero" : large ? "large" : "compact";
-  const visualActive = useVisualActivity();
+  const windowVisible = useWindowVisible();
   const position = useVisualSnapshot(usePlayer.subscribe, readPosition);
   const seek = usePlayer((s) => s.seek);
   // Appearance switches with defined mobile behavior: synced lyrics gates
@@ -261,7 +261,7 @@ export function LyricsView({
   // re-measured every frame), the line follows at once instead of easing in
   // behind the cover; a glide already under way just takes the new target.
   useEffect(() => {
-    if (!visualActive) {
+    if (!windowVisible) {
       window.cancelAnimationFrame(glide.current);
       glideTo.current = null;
       resuming.current = true;
@@ -314,7 +314,7 @@ export function LyricsView({
       glide.current = window.requestAnimationFrame(step);
     });
     return () => window.cancelAnimationFrame(raf);
-  }, [activeIndex, synced, anchor, visualActive]);
+  }, [activeIndex, synced, anchor, windowVisible]);
   const stopGlide = (): void => {
     window.cancelAnimationFrame(glide.current);
     glideTo.current = null;

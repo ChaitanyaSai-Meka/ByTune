@@ -90,14 +90,15 @@ function check(name, condition, detail) {
   assert.ok(condition, name);
 }
 async function state(win) {
-  return { native: { focused: win.isFocused(), visible: win.isVisible(), minimized: win.isMinimized() }, renderer: await evaluate(win, () => ({ activity: document.documentElement.dataset.windowActivity, active: document.documentElement.dataset.visualActive, visibility: document.visibilityState, focused: document.hasFocus(), size: [innerWidth, innerHeight, devicePixelRatio], animations: document.getAnimations().filter(a => a.playState === 'running').map(a => ({ name: a.animationName || 'WAAPI', target: a.effect?.target?.getAttribute?.('class') })), video: [...document.querySelectorAll('video')].map(v => ({ time: v.currentTime, paused: v.paused, frames: v.getVideoPlaybackQuality().totalVideoFrames, src: v.currentSrc, ready: v.readyState, error: v.error?.message })), title: document.querySelector('.fit-text[data-mode="auto"]')?.textContent, lyrics: [...document.querySelectorAll('.lyrics-lines button')].filter(b => b.style.opacity === '1').map(b => b.textContent) })), media: { ...media } };
+  return { native: { focused: win.isFocused(), visible: win.isVisible(), minimized: win.isMinimized() }, renderer: await evaluate(win, () => ({ activity: document.documentElement.dataset.windowActivity, active: document.documentElement.dataset.visualActive, visible: document.documentElement.dataset.visualVisible, visibility: document.visibilityState, focused: document.hasFocus(), size: [innerWidth, innerHeight, devicePixelRatio], animations: document.getAnimations().filter(a => a.playState === 'running').map(a => ({ name: a.animationName || 'WAAPI', target: a.effect?.target?.getAttribute?.('class') })), video: [...document.querySelectorAll('video')].map(v => ({ time: v.currentTime, paused: v.paused, frames: v.getVideoPlaybackQuality().totalVideoFrames, src: v.currentSrc, ready: v.readyState, error: v.error?.message })), title: document.querySelector('.fit-text[data-mode="auto"]')?.textContent, lyrics: [...document.querySelectorAll('.lyrics-lines button')].filter(b => b.style.opacity === '1').map(b => b.textContent) })), media: { ...media } };
 }
 async function expectState(win, name) {
   await until(async () => {
-    if (name === 'focused' && !win.isFocused()) { app.focus({ steal: true }); win.focus(); }
+    if (name === 'focused' && !win.isFocused()) { other?.hide(); app.focus({ steal: true }); win.focus(); await sleep(400); }
+    if (name === 'unfocused' && win.isFocused() && other) { other.show(); other.focus(); await sleep(400); }
     const s = await state(win);
     const native = s.native.minimized ? 'minimized' : !s.native.visible ? 'hidden' : s.native.focused ? 'focused' : 'unfocused';
-    return native === name && (baseline || (s.renderer.activity === name && s.renderer.active === String(name === 'focused' && s.renderer.visibility !== 'hidden')));
+    return native === name && (baseline || (s.renderer.activity === name && s.renderer.active === String(name === 'focused' && s.renderer.visibility !== 'hidden') && s.renderer.visible === String(name === 'focused' || name === 'unfocused')));
   }, 'window state ' + name);
 }
 async function verifyWindowActivity() {
@@ -111,7 +112,7 @@ async function verifyWindowActivity() {
     await until(async () => {
       const s = await state(win);
       const native = s.native.minimized ? 'minimized' : !s.native.visible ? 'hidden' : s.native.focused ? 'focused' : 'unfocused';
-      return native === expected && s.renderer.activity === expected && s.renderer.active === String(expected === 'focused');
+      return native === expected && s.renderer.activity === expected && s.renderer.active === String(expected === 'focused') && s.renderer.visible === String(expected === 'focused' || expected === 'unfocused');
     }, 'passive state ' + expected);
   };
   const show = async () => {
@@ -209,6 +210,8 @@ async function run() {
   await until(() => BrowserWindow.getAllWindows().some(w => /index\.html/.test(w.webContents.getURL())), 'main created');
   main = BrowserWindow.getAllWindows().find(w => /index\.html/.test(w.webContents.getURL()));
   await until(() => evaluate(main, selector => !!document.querySelector(selector), onboarding ? '.ob-drum' : 'button[aria-label="Play"]'), 'view ready', 30000);
+  await until(() => results.events.some(e => e.id === main.id && e.event === 'ready-to-show'), 'native ready-to-show');
+  await sleep(800);
   if (!backgroundOnly) { app.focus({ steal: true }); main.show(); main.focus(); await expectState(main, 'focused'); }
   main.webContents.debugger.attach('1.3');
   await main.webContents.debugger.sendCommand('Performance.enable');
@@ -240,6 +243,9 @@ async function run() {
     return [...new Uint8Array(await new Blob(chunks).arrayBuffer())];
   }));
   other = new BrowserWindow({ width: 240, height: 120, x: 0, y: 0, show: false, title: 'Lifecycle focus target', webPreferences: { sandbox: true } });
+  // Keep the focus target beside native fullscreen rather than switching Spaces.
+  other.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  other.setAlwaysOnTop(true, 'floating');
   await other.loadURL('data:text/html,<title>Lifecycle focus target</title>Focus target');
   if (!backgroundOnly) {
     app.focus({ steal: true }); main.focus(); await sleep(400); main.focus(); await expectState(main, 'focused');
@@ -277,8 +283,10 @@ async function run() {
   const background = await measure('playing-unfocused');
   check('audio clock continues while unfocused', background.after.media.position > background.before.media.position + 2);
   if (!baseline) {
-    check('decorative animations stopped while unfocused', background.after.renderer.animations.length === 0, background.after.renderer.animations);
-    check('artwork decoder stopped', background.after.renderer.video.every((v, i) => v.paused && v.frames === background.before.renderer.video[i].frames));
+    check('decorative animations stopped while unfocused', background.after.renderer.animations.every(a => a.name === 'fs-viz-dance'), background.after.renderer.animations);
+    check('visible unfocused visualizer follows playing state', background.after.renderer.animations.some(a => a.name === 'fs-viz-dance'));
+    check('visible unfocused artwork advances', background.after.renderer.video.length > 0 && background.after.renderer.video.every((v, i) => !v.paused && v.frames > background.before.renderer.video[i].frames));
+    check('visible unfocused lyrics advance', JSON.stringify(background.after.renderer.lyrics) !== JSON.stringify(background.before.renderer.lyrics));
   }
   if (!baseline) {
     await evaluate(main, () => { window.__visualTestTimes = window.__visualTestAnimations.map(a => a.currentTime); });
@@ -294,7 +302,7 @@ async function run() {
   main.webContents.send('media:action', { action: 'nexttrack' });
   await until(() => media.title?.startsWith('B'), 'background media-key track advance');
   await sleep(1500);
-  if (!baseline) check('new background artwork stays paused', (await state(main)).renderer.video.every(v => v.paused));
+  if (!baseline) check('new visible background artwork plays', (await state(main)).renderer.video.every(v => !v.paused));
   main.focus(); await expectState(main, 'focused');
   await until(() => evaluate(main, () => document.querySelector('video')?.paused === false), 'video resumes');
   await until(() => evaluate(main, () => [...document.querySelectorAll('.lyrics-lines button')].some(b => b.style.opacity === '1' && b.textContent.startsWith('B'))), 'current resumed lyrics');
@@ -320,12 +328,23 @@ async function run() {
   await until(() => media.title?.startsWith('A'), 'automatic next track while hidden', 12000);
   await until(() => evaluate(pip, () => [...document.querySelectorAll('.fit-text')].some(el => el.textContent.startsWith('A'))), 'PiP current title');
   check('hidden track end advances and PiP receives current metadata', true);
+  // Metadata arrives before the incoming stream starts. Wait for its clock so
+  // a pause cannot race track initialization; allow the position IPC to settle.
+  await until(() => media.playing && media.position > 0 && media.position < 10, 'new hidden track starts');
   main.webContents.send('media:action', { action: 'pause' }); await until(() => !media.playing, 'media pause while hidden');
+  await sleep(1100);
   const paused = media.position; await sleep(1500);
-  check('background media pause remains effective', Math.abs(media.position - paused) < 1.2);
+  check('background media pause remains effective', !media.playing && Math.abs(media.position - paused) < 0.3, { paused, current: media.position, playing: media.playing });
   pip.minimize(); await expectState(pip, 'minimized');
   pip.restore(); pip.show(); pip.focus(); await expectState(pip, 'focused');
   check('PiP minimize/restore', true);
+  other.show(); other.focus(); await expectState(pip, 'unfocused'); await sleep(300);
+  check('visible unfocused PiP title runs independently of hidden main', baseline || await evaluate(pip, () => {
+    const titles = document.getAnimations().filter(a => !a.animationName && a.effect?.target?.closest('.fit-text'));
+    return titles.length > 0 && titles.every(a => a.playState === 'running');
+  }));
+  pip.minimize(); await expectState(pip, 'minimized'); await sleep(300);
+  check('minimized PiP title suspends', baseline || await evaluate(pip, () => document.getAnimations().filter(a => !a.animationName && a.effect?.target?.closest('.fit-text')).every(a => a.playState === 'paused')));
   pip.close();
   app.focus({ steal: true }); main.show(); main.focus(); await expectState(main, 'focused');
   await evaluate(main, () => { delete window.__visualTestAnimations; delete window.__visualTestTimes; });

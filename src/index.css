@@ -1397,12 +1397,18 @@ input[type="range"].slider.mp-slider:active::-webkit-slider-thumb {
   .animate-drift, .animate-drift2,
   .cover-wall-row, .st-id-wall-row,
   .eq-bar, .spin-slow, .tt-record, .rp-disc,
-  .fs-art-breathe, .fs-viz-bar,
+  .fs-art-breathe,
   .fire-body, .fire-burst, .fire-spark,
   .skeleton, .animate-spin, .animate-pulse
 ),
 :is(html[data-visual-active="false"], [data-visual-covered="true"]) .tl-playing::before,
 :is(html[data-visual-active="false"], [data-visual-covered="true"]) .st-id-sync.is-busy::before {
+  animation-play-state: paused !important;
+}
+
+/* Functional fullscreen bars follow playback while visible, including on blur.
+   Keep the existing playback/reduced-motion rules and the same CSS timeline. */
+html[data-visual-visible="false"] .fs-viz-bar {
   animation-play-state: paused !important;
 }
 

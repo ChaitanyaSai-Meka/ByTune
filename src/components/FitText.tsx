@@ -11,7 +11,7 @@
  * the whole of it is the hover tooltip.
  */
 import { useContext, useLayoutEffect, useRef } from "react";
-import { visualActivity } from "../lib/visualActivity";
+import { visualActivity, visibleActivity } from "../lib/visualActivity";
 import { createVisualActivity } from "../lib/visualActivityCore";
 import { VisualScopeContext } from "../lib/visualScope";
 
@@ -69,6 +69,7 @@ export function FitText({
   lines = 1,
   mode = "hover",
   autoActive = true,
+  activityPolicy = "focused",
 }: {
   text: string;
   /** The title before shortening; when it differs, it's the hover tooltip. */
@@ -78,6 +79,8 @@ export function FitText({
   mode?: "hover" | "auto";
   /** Playback eligibility for automatic motion; deliberate reading still works. */
   autoActive?: boolean;
+  /** Miniplayer titles remain readable while their own window is unfocused. */
+  activityPolicy?: "focused" | "visible";
 }) {
   const outer = useRef<HTMLSpanElement>(null);
   const inner = useRef<HTMLSpanElement>(null);
@@ -96,14 +99,15 @@ export function FitText({
     // One owner combines all vetoes. Playback/focus/coverage changes update
     // this owner without recreating animations or scheduling a React render.
     const activity = createVisualActivity();
+    const windowActivity = activityPolicy === "visible" ? visibleActivity : visualActivity;
     const host = el.parentElement?.closest<HTMLElement>("button, a[href], [tabindex], .fit-host");
     const update = (): void => {
       const reading = el.matches(":hover, :focus-visible") || !!host?.matches(":hover, :focus-visible");
-      activity.setActive(visualActivity.getSnapshot() && (scope?.getSnapshot() ?? true) &&
+      activity.setActive(windowActivity.getSnapshot() && (scope?.getSnapshot() ?? true) &&
         (playback.current || reading));
     };
     const offActivity = mode === "auto" ? [
-      visualActivity.subscribe(update),
+      windowActivity.subscribe(update),
       scope?.subscribe(update),
     ] : [];
     refreshActivity.current = update;
@@ -190,7 +194,7 @@ export function FitText({
       for (const off of offActivity) off?.();
       for (const target of interactionTargets) for (const event of events) target.removeEventListener(event, update);
     };
-  }, [text, full, lines, mode, scope]);
+  }, [text, full, lines, mode, scope, activityPolicy]);
 
   if (lines === 2) {
     return (
