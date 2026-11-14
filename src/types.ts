@@ -82,7 +82,7 @@ export interface BrowseItem {
 }
 
 /**
- * One search row, classified exactly as BitChord mobile classifies it: the
+ * One search row, classified as: the
  * promoted card ("top"), an ordinary track row, or a browsable page row.
  */
 export type SearchRow =
@@ -159,7 +159,7 @@ export interface MoodPage {
   shelves: HomeShelf[];
 }
 
-/** Extended artist page — the BitChord mobile artist screen's data. */
+/** Extended artist page — the artist screen's data. */
 export interface ArtistPageData {
   artist: Artist;
   /** "About the artist" editorial blurb. */

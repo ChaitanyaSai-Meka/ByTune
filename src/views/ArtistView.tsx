@@ -1,5 +1,5 @@
 /**
- * Artist page — BitChord mobile's artist screen: a full-bleed photo header
+ * Artist page: a full-bleed photo header
  * with the artist's name, subscriber / monthly-listener chips and the
  * shuffle + play controls, the "About the artist" blurb, "Top songs", then
  * YouTube's own section carousels (Albums, Singles & EPs, Featured on,

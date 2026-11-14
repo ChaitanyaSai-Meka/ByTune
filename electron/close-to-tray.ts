@@ -2,10 +2,10 @@
  * Close to tray: what closing ByTune's main window does, and the menu of the Windows tray icon. Pure, so both
  * are unit-tested without Electron; main.ts owns the window, the Tray and the wiring.
  *
- * After ZCode's desktop app (packages/desktop/src/main: desktopWindowLifecycle.ts, desktopDarwinCloseBehavior.ts,
- * desktopTray.ts), © ZCode, licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
+ * Adapted from third-party code under the Apache License, Version 2.0 (see NOTICE), and changed:
+ * http://www.apache.org/licenses/LICENSE-2.0
  * ByTune keeps running with its window closed. The window that comes back is the same one, its page still
- * loaded, so the launch intro (index.html) only plays again after a real quit. Changed from ZCode's: the tray
+ * loaded, so the launch intro (index.html) only plays again after a real quit. Changed from the original: the tray
  * carries the transport, closing to it pauses the music, and Windows only hides while the tray icon is there
  * to bring it back.
  */

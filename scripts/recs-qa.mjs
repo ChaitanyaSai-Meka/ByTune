@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
-/** project root (…/bitchord-desktop) */
+/** project root */
 const root = fileURLToPath(new URL("..", import.meta.url));
 
 const entry = `

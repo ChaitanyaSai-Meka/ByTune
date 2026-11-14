@@ -1,7 +1,7 @@
 /*
  * Turns on ByTune's launch intro before anything paints: index.html's #intro, drawn by src/intro.css and
- * public/intro-light.js, ended by src/intro.ts. After Arkemis Cut's, which follows ZCode's startup loader
- * (packages/desktop/src/renderer/index.html), © ZCode, licensed under the Apache License, Version 2.0:
+ * public/intro-light.js, ended by src/intro.ts. Adapted from a third-party startup loader
+ * under the Apache License, Version 2.0 (see NOTICE), and changed:
  * http://www.apache.org/licenses/LICENSE-2.0
  * A script rather than a class written into the page, as theirs is: the miniplayer's window
  * (?window=pip) loads the same page and never shows it, and ByTune's page allows no inline scripts.

@@ -212,7 +212,7 @@ export function LyricsView({
   const lineMoved = useRef(false);
   const resuming = useRef(false);
 
-  // BitChord mobile's LyricsLoadingLine: the lookup's stand-in is one of the
+  // While lyrics load, the lookup's stand-in is one of the
   // loading phrases — no spinner — picked once per track and held there.
   const loadingPhrase = useMemo(() => pickLyricsLine(LYRICS_LOADING_LINES), [trackKey]);
 

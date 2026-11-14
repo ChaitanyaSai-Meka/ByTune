@@ -1,5 +1,5 @@
 /**
- * Album page — BitChord mobile's DetailScreen for a release: full-bleed cover
+ * Album page — the detail screen for a release: full-bleed cover
  * hero with the artist credit in the accent colour and the "SINGLE • 2023 •
  * 2 TRACKS" metadata line, shuffle + play controls, the "About the album"
  * blurb, then the release's own numbered track rows (the sleeve's running

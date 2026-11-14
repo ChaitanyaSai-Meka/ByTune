@@ -1,11 +1,11 @@
 /*
- * Ends ByTune's launch intro (index.html's #intro, drawn by src/intro.css). After Arkemis Cut's, which
- * follows ZCode's startup loader (packages/desktop/src/renderer/index.html), © ZCode, licensed under the
- * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
+ * Ends ByTune's launch intro (index.html's #intro, drawn by src/intro.css). Adapted from a third-party
+ * startup loader under the
+ * Apache License, Version 2.0 (see NOTICE): http://www.apache.org/licenses/LICENSE-2.0
  * Once the intro has played and the app is ready (App sends "bytune-startup-ready"), the window's glass goes
  * (main.ts setGlass) and the app is drawn under the intro, unseen; then it shows as the logo glides into the
  * app's own (the top bar's, or onboarding's). With nowhere to land, or with reduced motion, the intro fades
- * out. Changed from ZCode's: it waits for the app as theirs does, and for the logo to finish; it lands the
+ * out. Changed from the original: it waits for the app as the original does, and for the logo to finish; it lands the
  * logo rather than cross-fading.
  */
 

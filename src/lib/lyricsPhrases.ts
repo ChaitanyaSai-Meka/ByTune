@@ -1,6 +1,6 @@
 /**
- * The lyric lookup's stand-in copy, BitChord mobile's own word lists
- * (strings.xml `lyrics_intro_lines` / `lyrics_loading_lines`).
+ * The lyric lookup's stand-in copy: the word lists
+ * (`lyrics_intro_lines` / `lyrics_loading_lines`).
  *
  * While a lookup is in flight the loading view shows one of the loading
  * lines instead of a bare spinner, and the player strip shows one of the

@@ -1,5 +1,5 @@
 /**
- * The launch intro, after Arkemis Cut's (which follows ZCode's startup loader):
+ * The launch intro:
  * - public/intro.js turns it on before anything paints, never in the miniplayer's window, and lights the mark
  *   in a worker (public/intro-light.js) so the app starting up can't stall it;
  * - the light show keeps the brand kit's own clock and tracks, in white light;

@@ -150,7 +150,7 @@ export async function defaultDownloadDir(): Promise<string> {
 /**
  * Export-compatible location: the OS music library, so other players and
  * the user can reach the files — the desktop equivalent of mobile's shared
- * `Music/BitChord` (vs the app download folder above).
+ * `Music` folder (vs the app download folder above).
  */
 export function exportDownloadDir(): string {
   return path.join(app.getPath("music"), "ByTune");

@@ -223,7 +223,7 @@ function itemKind(item: any): string {
 }
 
 /**
- * A video upload hiding among songs — BitChord mobile's rule: the row's kind
+ * A video upload hiding among songs: the row's kind
  * word ("Video") is the clean signal when the surface provides one, and a
  * widescreen (non-square) thumbnail gives a video upload away where a
  * catalogue track always carries square cover art.
@@ -388,7 +388,7 @@ function findCardShelf(root: any): any {
 function parseHomeItem(item: any): HomeItem | null {
   const kind = itemKind(item);
   // Home shelves stay music-only — video uploads are the version-mismatch
-  // (intro before the vocals) that breaks sync, exactly as on BitChord mobile.
+  // (intro before the vocals) that breaks sync.
   if (kind === "song") {
     const track = parseTrackItem(item, ["song"]);
     if (track) return { kind: "track", track };
@@ -423,7 +423,7 @@ function dedupeById<T extends { id: string }>(list: T[]): T[] {
 }
 
 /* ------------------------------------------------------------------ */
-/* Search — BitChord mobile's pipeline, exactly                        */
+/* Search                                                             */
 /* ------------------------------------------------------------------ */
 
 /**
@@ -756,7 +756,7 @@ export async function getMoodCovers(browseId: string, params: string): Promise<s
 }
 
 /* ------------------------------------------------------------------ */
-/* Lyrics: BitChord mobile's provider sweep — word-synced Apple TTML   */
+/* Lyrics: the provider sweep — word-synced Apple TTML                 */
 /* (lrc.red/BetterLyrics/PaxSenix/LyricsPlus), QQ karaoke, then the   */
 /* video's captions, line-synced KuGou/LRCLIB, and Genius's plain    */
 /* text last. Returns time-synced lines when any source has them.     */
@@ -907,7 +907,7 @@ const CAPTION_NOISE = /^(\[(music|applause|laughter|cheering|instrumental)\]|[�
 
 /**
  * Timed captions for the exact playing video — innertube's get_transcript,
- * asked the way BitChord asks: straight from the video id (a tiny protobuf,
+ * asked straight from the video id (a tiny protobuf,
  * field 1 = the id), no watch-page lookup first. A video without captions is
  * a miss for that video only — nothing is switched off for the session.
  */
@@ -965,13 +965,13 @@ export async function getLyrics(meta: LyricsMeta): Promise<LyricsResult | null> 
     if (Date.now() - cachedAt < 10 * 60 * 1000) return cached;
   }
 
-  // BitChord reads a local file's own timed lyrics before asking anybody; an untimed tag falls through to the sweep.
+  // A local file's own timed lyrics come before asking anybody; an untimed tag falls through to the sweep.
   const file = meta.id.startsWith("local:") ? localTrackById(meta.id)?.path : undefined;
   const embedded = file ? await readEmbeddedLyrics(file) : null;
   if (embedded) return rememberLyrics(meta.id, embedded);
 
   // The mixed "All" search page credits rows it has no links for "Unknown
-  // artist" (BitChord mobile prints the same). The lyric databases key on
+  // artist". The lyric databases key on
   // artist + title, so recover the track's real credits from its own
   // watch-queue row before the lookup — the same fully-credited line the
   // mobile player is served for the same track.
@@ -981,7 +981,7 @@ export async function getLyrics(meta: LyricsMeta): Promise<LyricsResult | null> 
   // any consumer) reads back as a broken track — never let one through.
   let duration = typeof meta.duration === "number" && Number.isFinite(meta.duration) ? Math.round(meta.duration) : 0;
   const placeholder = !artist || PLACEHOLDER_ARTISTS.has(artist.toLowerCase());
-  // BitChord never matches without the length, and the "All" search tab and Home's quick picks queue songs with
+  // Nothing matches without the length, and the "All" search tab and Home's quick picks queue songs with
   // none — so a YouTube track's length comes from the same row. Its album doesn't: a credited row keeps its own.
   if (placeholder || (!duration && /^[A-Za-z0-9_-]{11}$/.test(meta.id))) {
     const credits = await resolveQueueCredits(meta.id);
@@ -1002,7 +1002,7 @@ export async function getLyrics(meta: LyricsMeta): Promise<LyricsResult | null> 
       album,
       duration,
     },
-    // BitChord's default: the highest-priority source with timed lyrics wins, word or line timing.
+    // The default: the highest-priority source with timed lyrics wins, word or line timing.
     { prioritizeWordSync: false },
     { ytMusicPlain, ytTranscript: fetchYouTubeTranscriptCues }
   );
@@ -1021,14 +1021,14 @@ function rememberLyrics(id: string, result: LyricsResult | null): LyricsResult |
   return result;
 }
 
-/** A local file's own timed lyrics tag (BitChord's EmbeddedLyrics); null when untagged, unreadable or untimed. */
+/** A local file's own timed lyrics tag; null when untagged, unreadable or untimed. */
 async function readEmbeddedLyrics(file: string): Promise<LyricsResult | null> {
   try {
     const { parseFile } = await import("music-metadata");
     const { common } = await parseFile(file, { duration: false, skipCovers: true });
     for (const tag of common.lyrics ?? []) {
       // Tag text is untrusted (crafted frames can be multi-MB): bound it. A SYLT frame carries no text, and may be
-      // timed in MPEG frames rather than milliseconds — BitChord reads no ID3 at all.
+      // timed in MPEG frames rather than milliseconds.
       if (typeof tag.text !== "string" || tag.text.length > 256 * 1024) continue;
       // music-metadata already split an LRC string into millisecond rows (word stamps left in the text): rebuilt as
       // LRC so lyrics.ts keeps the word timing.

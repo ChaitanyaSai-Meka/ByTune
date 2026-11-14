@@ -166,7 +166,7 @@ export const useSettings = create<SettingsState>()(
 
       dontRepeatSuggestions: false,
       hideVolumeBar: false,
-      // On, as in ZCode: the main process reads it from this store's file when the window closes.
+      // On by default: the main process reads it from this store's file when the window closes.
       closeToTray: true,
 
       setDownloadDir: (downloadDir) => set({ downloadDir }),

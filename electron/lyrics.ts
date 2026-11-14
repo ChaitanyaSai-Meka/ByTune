@@ -1,7 +1,7 @@
 /**
- * Lyrics providers for the desktop player — BitChord's lyrics system, in
- * ByTune's own code: the same sources, in the same order, asked and chosen
- * between the same way.
+ * Lyrics providers for the desktop player: every source, the order it is
+ * asked in, and how the answer is chosen
+ * between them.
  *
  * The recording is settled first: the BiniLyrics search names it by ISRC
  * (identifyRecording), so lrc.red fetches that very recording's document and
@@ -9,21 +9,21 @@
  * scraper, only when nothing else answered), and the answers are taken in
  * priority order (takeInPriorityOrder): a lower source finishing first never
  * beats one still pending above it, and the highest-priority source with
- * timed lyrics wins — word or line timing, BitChord's default. Plain text is
+ * timed lyrics wins — word or line timing, by default. Plain text is
  * the fallback.
  *
- * One thing on top of BitChord: every source that searches by name must name
+ * One more rule: every source that searches by name must name
  * the playing recording before its words are used (namesRecording) — the same
  * song, the same version words ("Live", "Remix", "Sped Up", "Versión Pop"…)
- * and a shared artist. BitChord checks this for lrc.red's search only, and
- * trusts the rest; a miss is recoverable — the next source gets its turn —
+ * and a shared artist, for every source rather than one; a miss is
+ * recoverable — the next source gets its turn —
  * and the wrong words scrolling in time with the right song are not. So the
- * check doesn't refuse what BitChord would rightly show, it reads names the
+ * check doesn't refuse a right answer, it reads names the
  * way catalogues write them: Traditional and Simplified Chinese alike, an
  * artist in another script by the entry's length, "(Album Version)" as a
  * label, "Artist - Song (Lyrics)" uploads by their dash, and the playing
  * release's own entry ("Despacito (Versión Pop)") for its title track. A music
- * video takes the identify step's recording at the album length, as BitChord's
+ * video takes the identify step's recording at the album length, as the
  * identify does.
  *
  * The order: lrc.red → BiniLyrics → BetterLyrics (Apple TTML) → Portato (QQ
@@ -114,7 +114,7 @@ function stampMs(min: string, sec: string, frac: string): number {
 }
 
 /** Placeholders the mixed search page prints when a row carries no credit
- * links ("Unknown artist", same as BitChord mobile) — never a real credit,
+ * links ("Unknown artist") — never a real credit,
  * so the lyric databases must not be asked with it: they key on artist +
  * title and miss every such track. An empty artist degrades each provider
  * to title-based matching instead. */
@@ -125,14 +125,14 @@ function untopic(artist: string): string {
   return artist.replace(/\s+-\s+Topic\s*$/i, "");
 }
 
-/** The artist every source is asked with — BitChord's artistForLyricsSearch: the whole credit, " - Topic" off.
+/** The artist every source is asked with: the whole credit, " - Topic" off.
  * A " & " or "," inside it is usually one name ("Simon & Garfunkel", "Earth, Wind & Fire", "Tyler, The Creator"). */
 function searchArtist(artist: string): string {
   const credit = untopic(artist).trim();
   return PLACEHOLDER_ARTISTS.has(credit.toLowerCase()) ? "" : credit;
 }
 
-/** The credit in both of BitChord's forms: off a search, album or playlist row it lists the names "A, B, C"; off the
+/** The credit in both of its forms: off a search, album or playlist row it lists the names "A, B, C"; off the
  * queue it keeps YouTube's "A, B & C". BetterLyrics and Portato answer keyless clients only from what was asked
  * before, so both are tried, the list first — a band named with "&" ("Simon & Garfunkel") answers to the second. */
 function creditForms(artist: string): string[] {
@@ -484,7 +484,7 @@ function lineEndSec(line: SyncedLyricLine, nextStart: number): number {
 
 function toResult(source: string, lines: SyncedLyricLine[]): ProviderResult | null {
   if (!lines.length) return null;
-  // Every stamp at 0:00 is unsynced text in LRC form; BitChord reads it as plain (its timeMs > 0 test).
+  // Every stamp at 0:00 is unsynced text in LRC form, so it counts as plain text.
   if (!lines.some((l) => l.time > 0 || l.words?.length)) {
     const plainText = lines.map((l) => l.text.trim()).filter(Boolean).join("\n");
     return plainText ? { source, wordSynced: false, lines: [], plainText } : null;
@@ -992,7 +992,7 @@ function parsePlusResponse(response: { lyrics?: PlusLine[] | null }): SyncedLyri
 }
 
 async function fetchLyricsPlusOne(host: string, q: LyricQuery, isrc?: string): Promise<SyncedLyricLine[] | null> {
-  // One question, asked the way BitChord asks it: the catalogue name with its
+  // One question: the catalogue name with its
   // version words, the length, the album and — once lrc.red has named it —
   // the recording's ISRC. The looser retries this used to make (bare title,
   // no length) were where other recordings came back.
@@ -1298,7 +1298,7 @@ async function paxSenixLyrics(id: string): Promise<ProviderResult | null | undef
 /* ---------------------------- BetterLyrics ------------------------------ */
 
 async function fetchBetterLyrics(q: LyricQuery): Promise<ProviderResult | null> {
-  // Asked the way BitChord asks: the catalogue name with its version words, at
+  // Asked with the catalogue name and its version words, at
   // the upload's length, under each form of the credit. The document carries
   // no name to check, so a looser retry (the bare title, no length) could only
   // ever bring back another recording.
@@ -1378,7 +1378,7 @@ export function kugouLines(lrc: string, q: LyricQuery, mustName: boolean, length
 
 async function fetchKuGou(q: LyricQuery): Promise<ProviderResult | null> {
   const stripParen = (s: string): string => s.replace(/[(（].*?[)）]/g, "").trim() || s;
-  // BitChord's keyword: "Title - Artist", then the album when there is one.
+  // The keyword: "Title - Artist", then the album when there is one.
   const keyword = [
     [stripParen(searchTitle(q.title)), stripParen(searchArtist(q.artist || ""))].filter(Boolean).join(" - "),
     q.album ? cleanTitle(q.album) : "",
@@ -1548,7 +1548,7 @@ async function fetchLrclib(q: LyricQuery): Promise<ProviderResult | null> {
       const exact = rec && namesRecording(String(rec.trackName ?? ""), String(rec.artistName ?? ""), q, { length: rec.duration })
         ? lyricsFromLrclibRecord(rec)
         : null;
-      // BitChord's exactMatch takes synced lyrics only: a plain-only record can have a synced sibling the searches find.
+      // The exact match takes synced lyrics only: a plain-only record can have a synced sibling the searches find.
       if (exact?.lines.length) return exact;
       plainOnly = plainOnly ?? exact;
     }
@@ -1565,7 +1565,7 @@ async function fetchLrclib(q: LyricQuery): Promise<ProviderResult | null> {
 /**
  * Of the search records carrying synced lyrics that name the playing
  * recording, take the one whose own runtime sits closest to the playing
- * track — BitChord mobile's rule, and the difference between the studio cut
+ * track — the difference between the studio cut
  * and the sped-up edit that shares its name. With no credit to check, the
  * length has to carry the match: only a record within tolerance.
  */
@@ -1600,13 +1600,13 @@ function pickLrclibSearchHit(results: any, q: LyricQuery): ProviderResult | null
  * from an earlier play of the same video. Without one, lrc.red's own search
  * is asked, and its hits are matched here rather than trusted in order — the
  * search is a free-text one and ranks "Bohemian Rhapsody (Operatic Section /
- * 2011 A Cappella Mix)" above the song itself. (BitChord's LrcRed, ported.)
+ * 2011 A Cappella Mix)" above the song itself. (Adapted from GPL-3.0 code, see NOTICE.)
  */
 const LRCRED = "https://lrc.red";
 const IDENTIFY_TIMEOUT_MS = 2500;
 
 /**
- * How far a hit's length may be from the playing track's — BitChord's figure.
+ * How far a hit's length may be from the playing track's.
  * YouTube reports whole seconds and the same recording lists within one or
  * two of that; a radio edit sits further out, and the version words have to
  * tell the closer cases apart.
@@ -1730,7 +1730,7 @@ async function fetchLrcRed(
   const identified = recording.then((hit) => lrcRedDocument(hit?.isrc));
   const search = (): Promise<string | null> =>
     lrcRedSearch(q).then((hits) => lrcRedDocument(pickLrcRedHit(hits, q)?.isrc));
-  // BitChord's order: the recording identify named, and lrc.red's own search
+  // The order: the recording identify named, and lrc.red's own search
   // only when it named none. The search starts alongside, so a miss costs no
   // extra round trip, but it never goes first: one song released in four
   // languages at one length ties every test, and the search's pick among them
@@ -1755,9 +1755,9 @@ async function fetchLrcRed(
  * LyricsPlus asks for it by ISRC), and it is remembered against the video id
  * so a track asked about twice pays for it once. It is asked with the album
  * too, which the backend takes as a strict filter: a hit is that very
- * release. BitChord takes the first row as it comes; here it must also name
+ * release. The first row isn't taken as it comes: it must also name
  * the playing recording, the same test lrc.red's hits pass. Its document is
- * lrc.red's file, fetched once between the two. (BitChord's BiniLyrics.)
+ * lrc.red's file, fetched once between the two.
  */
 const BINI = "https://lyrics-api.binimum.org/";
 
@@ -1809,7 +1809,7 @@ async function biniSearch(params: Record<string, string>): Promise<LrcRedRow[]> 
  * runs a second closer — so a row must carry timed words, name the playing
  * recording and fit within LRCRED_TOLERANCE_SEC; with no credit to check, the
  * length is required. A music video — no album, no version words, a credit —
- * may run past the catalogue cut it was filmed to (BitChord's identify takes
+ * may run past the catalogue cut it was filmed to (the identify step takes
  * its row at any length), and the renderer's onset alignment takes up the
  * intro; nothing repairs an upload shorter than the cut. Of the rows that
  * pass: one within tolerance, then the playing album's, then word timing over
@@ -1979,7 +1979,7 @@ async function fetchUnison(q: LyricQuery): Promise<ProviderResult | null> {
       .join("\n");
     return joined ? { source: "Unison", wordSynced: false, lines: [], plainText: joined } : null;
   };
-  // A TTML document nobody can read is no answer — never its markup shown as text (BitChord's Unison).
+  // A TTML document nobody can read is no answer — never its markup shown as text.
   if (String(entry.format ?? "").toLowerCase() === "ttml") return toResult("Unison", parseTtml(text));
   if (String(entry.syncType ?? "").toLowerCase() === "plain") return plain();
   const enhanced = parseEnhancedLrc(text);
@@ -2087,7 +2087,7 @@ async function mxGetSecret(): Promise<string> {
   return mxSecret;
 }
 
-/** token.get answers some networks with a 403 for every client (BitChord's too): parked until restart, like Portato.
+/** token.get answers some networks with a 403 for every client: parked until restart, like Portato.
  * Only on that status — a timeout or a 5xx at startup must not switch the source off where it works. */
 let mxBlocked = false;
 
@@ -2524,7 +2524,7 @@ export interface FetchedLyrics {
   plain: string | null;
 }
 
-/** A local file's own lyrics tag, when it is timed LRC — BitChord's EmbeddedLyrics, read before any source is
+/** A local file's own lyrics tag, when it is timed LRC, read before any source is
  * asked. Untimed text is no answer here: the sources are asked instead. */
 export function embeddedLrc(raw: string): FetchedLyrics | null {
   const word = parseEnhancedLrc(raw);
@@ -2534,8 +2534,8 @@ export function embeddedLrc(raw: string): FetchedLyrics | null {
 }
 
 /**
- * The longest a lookup waits for the racing sources. BitChord waits on each
- * source only as long as that source's own requests allow; this is the safety
+ * The longest a lookup waits for the racing sources. Each source is waited on
+ * only as long as its own requests allow; this is the safety
  * net under that — for a chain of slow requests, or a promise that never
  * settles. When it passes, the pick goes on with whatever has landed. Genius,
  * asked only when nothing answered, is bounded by its own request timeouts.
@@ -2543,11 +2543,11 @@ export function embeddedLrc(raw: string): FetchedLyrics | null {
 const SWEEP_CEILING_MS = 12_000;
 
 /**
- * Take the sources' answers in priority order — BitChord's loop. Every source
+ * Take the sources' answers in priority order. Every source
  * but the lazy ones is asked at once, and their answers are awaited one at a
  * time in order, so a lower source finishing first never beats one still
  * pending above it. A word-timed answer wins outright; with
- * `prioritizeWordSync` off (BitChord's default) so does any timed answer —
+ * `prioritizeWordSync` off (the default) so does any timed answer —
  * priority is priority. Otherwise the first answer is kept as the fallback
  * and the rest of the list is searched for word timing. A lazy source (Genius,
  * a scraper) is only asked when nothing above it answered at all.
@@ -2576,7 +2576,7 @@ export async function takeInPriorityOrder(
     for (let i = 0; i < starts.length; i++) {
       if (lazy[i] && fallback) continue;
       const job = racing[i] ?? (racing[i] = begin(i));
-      // A lazy source runs whenever nothing answered (BitChord), however late that is.
+      // A lazy source runs whenever nothing answered, however late that is.
       const found = lazy[i] ? await job : await Promise.race([job, ceiling]);
       if (!found) continue;
       if (found.wordSynced || (!prioritizeWordSync && found.lines.length > 0)) return { pick: found, settled };
@@ -2589,13 +2589,13 @@ export async function takeInPriorityOrder(
 }
 
 /**
- * The sources, in BitChord's default order: the Apple hosts lead (lrc.red,
+ * The sources, in their default order: the Apple hosts lead (lrc.red,
  * then BiniLyrics, which names the recording for the rest), then QQ's karaoke
  * timings, LyricsPlus' syllables and Unison's contributions; the playing
  * video's own captions and Lyrics tab; the line-synced workhorses; and
- * Genius's plain text last, asked only when nothing else answered. (BitChord
- * keeps SimpMusic and Megalobiz hidden — one answers every request with a
- * Cloudflare 403, the other's site lost its search page — and its two
+ * Genius's plain text last, asked only when nothing else answered. (Two more
+ * sources stay hidden — one answers every request with a
+ * Cloudflare 403, the other's site lost its search page — and the two
  * PaxSenix variants need a PaxSenix API key.)
  */
 const PROVIDERS: { name: string; lazy?: boolean }[] = [

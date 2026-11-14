@@ -20,7 +20,7 @@ ByTune is a desktop music player for Windows and macOS, built with Electron, Rea
 
 The website compares ByTune with the other ways to get [YouTube Music on the desktop](https://bytune.space/youtube-music-desktop-app) and with the [free, open-source Spotify alternatives](https://bytune.space/spotify-alternative).
 
-It started as a desktop port of the GPL-licensed BitChord Android player, then grew into a full desktop app of its own — now shipping natively on Windows and macOS from one codebase.
+It ships natively on Windows and macOS from one codebase.
 
 **Highlights**
 
@@ -358,7 +358,9 @@ A deeper dive — including how anonymous YouTube Music streaming works (BotGuar
 
 ## License
 
-ByTune is licensed under the **GNU GPL v3** (see [LICENSE](LICENSE)). It began as a fork of the BitChord Android player, which shares this license — thank you to its author for building in the open.
+Copyright © 2026 Rishiteja Thabeti. ByTune is licensed under the **GNU GPL v3** (see [LICENSE](LICENSE)). Third-party code it includes, and its licenses, are listed in [NOTICE](NOTICE).
+
+The GPL covers ByTune's code, not its name or logo: forks and ports must use their own name and logo and say they're unofficial. Official downloads are only on [bytune.space](https://bytune.space) and this repository's [Releases](https://github.com/rishiteja21/ByTune/releases).
 
 Please use ByTune responsibly and in accordance with the terms of the services it accesses.
 

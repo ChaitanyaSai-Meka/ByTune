@@ -53,7 +53,7 @@ globalThis.fetch = async (input) => {
   if (url.host === "lrclib.net" && url.pathname === "/api/get" && p.get("track_name") === "벚꽃 엔딩") {
     return reply({ trackName: "벚꽃 엔딩", artistName: "Busker Busker", duration: 261, syncedLyrics: "[00:20.00]그대여 그대여 그대여 그대여\n[00:25.00]오늘은 우리 같이 걸어요 이 거리를" });
   }
-  // BetterLyrics' keyless cache knows each song under the credit BitChord asked with; anything else is uncached.
+  // BetterLyrics' keyless cache knows each song under the credit it was first asked with; anything else is uncached.
   if (url.host === "lyrics-api.boidu.dev" && url.pathname === "/getLyrics") {
     const cached = { "Raataan Lambiyan": "Jubin Nautiyal, Tanishk Bagchi, Asees Kaur", "The Boxer": "Simon & Garfunkel" };
     if (cached[p.get("s")] === p.get("a")) return reply({ ttml: ttml(`${p.get("s")} line`) });
@@ -64,7 +64,7 @@ globalThis.fetch = async (input) => {
 
 const lookUp = (q) => fetchLyrics({ album: "", duration: 0, ...q }, { prioritizeWordSync: false }, {});
 
-test("lrc.red takes the recording identify named before its own search's pick (BitChord's order)", async () => {
+test("lrc.red takes the recording identify named before its own search's pick", async () => {
   const found = await lookUp({ id: "txHO7PLGE3o", title: "Srivalli (feat. Allu Arjun, Rashmika Mandanna)", artist: "Sid Sriram", album: "Pushpa - The Rise", duration: 221 });
   assert.equal(found?.source, "lrc.red");
   assert.equal(found?.synced?.[0]?.text, "Ninu choosthu", "the Telugu release identify named, not the Tamil one the search listed first");
@@ -90,7 +90,7 @@ test("a Portato file still sung after the track has ended is another song's: the
   assert.equal(found?.synced?.[0]?.text, "그대여 그대여 그대여 그대여");
 });
 
-test("BetterLyrics is asked with BitChord's list credit first, then YouTube's own (a band named with &)", async () => {
+test("BetterLyrics is asked with the list credit first, then YouTube's own (a band named with &)", async () => {
   const list = await lookUp({ id: "Dm6YRJHy64c", title: "Raataan Lambiyan", artist: "Jubin Nautiyal, Tanishk Bagchi & Asees Kaur", duration: 231 });
   assert.deepEqual([list?.source, list?.synced?.[0]?.text], ["BetterLyrics", "Raataan Lambiyan line"]);
   const band = await lookUp({ id: "l3LFML_pxlY", title: "The Boxer", artist: "Simon & Garfunkel", duration: 308 });

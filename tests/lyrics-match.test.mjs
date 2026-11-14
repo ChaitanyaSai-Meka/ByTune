@@ -149,7 +149,7 @@ test("a local file's own timed lyrics answer; untimed text doesn't", () => {
   assert.equal(embeddedLrc("[00:00.00]Hello\n[00:00.00]World"), null, "every stamp at 0:00 is untimed text");
 });
 
-test("lrc.red keeps BitChord's 3-second rule, prefers the playing album, and needs a length or a credit", () => {
+test("lrc.red keeps the 3-second rule, prefers the playing album, and needs a length or a credit", () => {
   const row = (isrc, track_name, duration, extra = {}) => ({
     isrc, track_name, artist_name: "Queen", duration: String(duration), timing_type: "word", lyricsUrl: `https://lrc.red/s/${isrc}.ttml`, ...extra,
   });
@@ -183,7 +183,7 @@ test("a KuGou file must not name another recording, and its name line, credits a
   assert.equal(kugouLines(unnamed, playing, false)?.length, 2);
 });
 
-test("lrc.red's search: free-text hits are matched, not trusted in order (BitChord's rule)", () => {
+test("lrc.red's search: free-text hits are matched, not trusted in order", () => {
   const hit = (isrc, title, duration, artist = "Queen", album = "") => ({ isrc, title, artist, duration, album });
   const hits = [
     hit("GBUM71029605", "Bohemian Rhapsody (Operatic Section / 2011 A Cappella Mix)", 120.4),
@@ -199,7 +199,7 @@ test("lrc.red's search: free-text hits are matched, not trusted in order (BitCho
   assert.equal(pick({ title: "Bohemian Rhapsody", artist: "Unknown artist", duration: 0 }), null);
 });
 
-test("answers are taken in priority order, the way BitChord's loop takes them", async () => {
+test("answers are taken in priority order", async () => {
   const later = (value, ms) => () => new Promise((resolve) => setTimeout(() => resolve(value), ms));
   const timed = (source, word = false) => ({ source, wordSynced: word, lines: [{ time: 1, text: "la" }] });
   const plain = (source) => ({ source, wordSynced: false, lines: [], plainText: "la" });
@@ -209,7 +209,7 @@ test("answers are taken in priority order, the way BitChord's loop takes them", 
   let { pick } = await takeInPriorityOrder([later(timed("top"), 60), later(timed("below", true), 5)], [false, false], false, 1000);
   assert.equal(pick.source, "top");
 
-  // BitChord's default: the first timed answer wins, word or line timing.
+  // The default: the first timed answer wins, word or line timing.
   ({ pick } = await takeInPriorityOrder([later(null, 5), later(timed("line"), 10), later(timed("word", true), 5)], none, false, 1000));
   assert.equal(pick.source, "line");
   // Preferring word timing, the line answer is only the fallback.

@@ -232,7 +232,7 @@ function applyThumbar(): boolean {
  * with the music paused, ByTune still running. A click brings back the same
  * window; the right-click menu (close-to-tray.ts) has the transport and Quit
  * ByTune, its Play or Pause following the same menu:push-state as the
- * thumbbar. Windows only, as in ZCode: macOS has the Dock.
+ * thumbbar. Windows only: macOS has the Dock.
  */
 let tray: Tray | null = null;
 
@@ -266,7 +266,7 @@ function applyTray(): void {
 // The window's own ground: what the page paints, and what shows before it does.
 const WINDOW_BG = "#0a0a0a";
 
-// Windows 11 glass under the launch intro, as in ZCode: the intro (index.html) opens over the blurred
+// Windows 11 glass under the launch intro: the intro (index.html) opens over the blurred
 // desktop, then darkens into the app. Only while it plays: once it has (window:introDone, as the app is
 // drawn under it) the window is solid again, so the hand-over composites as an opaque window and the opaque
 // app never shows the material at its edges while it resizes. A reload replays the intro, so it brings the
@@ -369,8 +369,8 @@ function createWindow(): void {
   // back from the tray (hidden, it has no button, and its play/pause may have
   // gone stale meanwhile). If Windows still refuses (shell timing), retry
   // once — every later play/pause re-applies the bar anyway via
-  // menu:push-state. Back from the tray it's also repainted twice, as ZCode
-  // does (desktopWindowChrome.ts): a window made with acrylic can come back blank.
+  // menu:push-state. Back from the tray it's also repainted twice
+  // too: a window made with acrylic can come back blank.
   if (process.platform === "win32") {
     const win = mainWindow;
     let shownBefore = false;

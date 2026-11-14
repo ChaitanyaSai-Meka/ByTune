@@ -1,6 +1,6 @@
 /**
- * Canvas — looping video artwork behind the player. BitChord's canvas lookup,
- * in ByTune's own code: the same four sources, asked in the same order until
+ * Canvas — looping video artwork behind the player: four sources, asked
+ * in a fixed order until
  * one answers.
  *
  *  1. Apple Music's motion artwork: the most clips. Read with the anonymous

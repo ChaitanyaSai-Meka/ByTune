@@ -1,7 +1,7 @@
 /**
  * Lyric timing: synced lyrics run on the element position as it is, plus the
- * listener's own corrections (this song's nudge, this device's setting), as
- * in BitChord. Nothing is shifted automatically: measuring where the music
+ * listener's own corrections (this song's nudge, this device's setting).
+ * Nothing is shifted automatically: measuring where the music
  * starts and moving every line there put songs with a quiet intro and a long
  * instrumental outro out of sync (Daylight ran 15.7 s late).
  */

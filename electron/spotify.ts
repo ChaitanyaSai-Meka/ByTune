@@ -230,7 +230,7 @@ async function signedIn<T>(read: (token: string) => Promise<T>): Promise<T> {
   }
 }
 
-/* ---------------- Canvas, for canvas.ts (ported from BitChord, GPL-3.0: SpotifyCanvas) ---------------- */
+/* ---------------- Canvas, for canvas.ts (adapted from GPL-3.0 code, see NOTICE) ---------------- */
 
 const CANVAZ = "https://spclient.wg.spotify.com/canvaz-cache/v0/canvases";
 /** spclient keeps canvaz-cache for Spotify's own apps, so the request wears one's user agent. */

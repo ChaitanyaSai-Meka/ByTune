@@ -570,7 +570,7 @@ export function TopBar() {
               </div>
             </div>
           )}
-          {/* Recent searches — BitChord mobile's model: an empty focused field
+          {/* Recent searches: an empty focused field
               drops the history list, with a clear-all in the header and a
               per-row ✕. Choosing a row runs that search. */}
           {historyOpen && (

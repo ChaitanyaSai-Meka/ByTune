@@ -1,11 +1,11 @@
 /*
- * ByTune's launch intro (index.html's #intro; src/intro.ts ends it): ZCode's startup loader
- * (packages/desktop/src/renderer/index.html, © ZCode, Apache License 2.0), as Arkemis Cut ports it, with
+ * ByTune's launch intro (index.html's #intro; src/intro.ts ends it): a startup loader adapted from
+ * third-party code under the Apache License 2.0 (see NOTICE), with
  * ByTune's animation in it. The window opens as glass (main.ts setGlass: Windows 11's acrylic, the desktop
- * blurred behind it) and ZCode's logo shell pops in with its spring. The mark draws itself in light inside
+ * blurred behind it) and the logo shell pops in with its spring. The mark draws itself in light inside
  * the shell (the brand kit's logo intro, 06_Motion) as the glass darkens into the app's ground; then the
  * shell slides into the lockup as "ByTune" rises in beside it, and intro.ts lands the logo in the top bar's.
- * Changed from ZCode's: ByTune's mark and wordmark and their motion, the darkening, the landing.
+ * Changed from the original: ByTune's mark and wordmark and their motion, the darkening, the landing.
  * A linked stylesheet in <head>, so it applies before anything paints. public/intro.js turns it on
  * (html.intro) except in the miniplayer's window.
  */
@@ -30,7 +30,7 @@ html.intro #intro {
   -webkit-app-region: drag;
 }
 
-/* Glass while the shell pops, then the window's own ground (main.ts, body), as in Arkemis Cut: a layer of its
+/* Glass while the shell pops, then the window's own ground (main.ts, body): a layer of its
    own that fades in, and out again at the hand-over, by opacity alone, so neither redraws the screen. It fades
    in to 99.9%, not 100%: Chromium skips drawing whatever a fully opaque layer covers, and the app is drawn
    under it before the glide (below). */
@@ -105,8 +105,8 @@ html.intro:not(.intro-wait) #intro {
   animation: intro-settle 0.65s linear 2.05s both;
 }
 
-/* ZCode's logo shell: 24px corners, black to graphite top to bottom, a 10% white outline (the gradient
-   spans it, as ZCode's does) and a soft shadow, popping in with ZCode's spring. Its own layer, so the
+/* The logo shell: 24px corners, black to graphite top to bottom, a 10% white outline (the gradient
+   spans it) and a soft shadow, popping in with its spring. Its own layer, so the
    spark at its centre shows at full strength as it pops and the exit can fade it and fly the mark alone. */
 .intro-tile::before {
   content: "";

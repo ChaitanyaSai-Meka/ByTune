@@ -1,0 +1,28 @@
+ByTune
+Copyright (C) 2026 Rishiteja Thabeti
+
+ByTune is free software, licensed under the GNU General Public License,
+version 3 (see LICENSE). The GPL covers the code, not the ByTune name or
+logo: forks and ports must use their own name and logo.
+
+
+Third-party code
+----------------
+
+ByTune includes code adapted from the projects below, under their licenses.
+ByTune's versions of it have been changed since 2026-09-18.
+
+BitChord (Android music player), GNU General Public License, version 3
+  Copyright the BitChord authors.
+  Adapted: the YouTube Music response parser and search filters
+  (electron/ytm.ts); the search and lyrics pipelines (electron/music-service.ts,
+  electron/lyrics.ts); the Canvas lookup (electron/canvas.ts, electron/spotify.ts,
+  electron/spotify-web.ts); parts of backups, local-music filtering and play
+  counting (electron/backup.ts, electron/local-library.ts, electron/stats.ts);
+  and the lyric loading phrases (src/lib/lyricsPhrases.ts).
+
+ZCode desktop app, Apache License, Version 2.0
+  (http://www.apache.org/licenses/LICENSE-2.0)
+  Copyright ZCode.
+  Adapted: closing to the tray (electron/close-to-tray.ts) and the startup
+  loader (index.html, public/intro.js, src/intro.css, src/intro.ts).

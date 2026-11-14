@@ -5,7 +5,7 @@
  *
  * Windows installs it from there with electron-updater, which reads the release's latest.yml: Update
  * downloads it, Restart to update installs it and opens ByTune again. Nothing installs without that
- * click (an install on quit can be cut off half way by a shutdown, as ZCode found).
+ * click (an install on quit can be cut off half way by a shutdown).
  *
  * A Mac can't install in place: macOS refuses an update to an app that isn't signed with an Apple
  * Developer ID, and ByTune's Mac builds are signed ad hoc. There, and whenever a Windows install

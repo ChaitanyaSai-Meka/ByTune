@@ -1,6 +1,6 @@
 /**
- * Raw InnerTube (YouTube Music) calls + a faithful port of BitChord mobile's
- * InnertubeParser (app/src/main/java/com/music/bitchord/data/innertube/InnertubeParser.kt).
+ * Raw InnerTube (YouTube Music) calls + a response parser adapted from
+ * GPL-3.0 code (see NOTICE).
  *
  * The mobile app reads the raw `musicResponsiveListItemRenderer` /
  * `musicCardShelfRenderer` JSON rather than youtubei.js's parsed classes, and
@@ -33,7 +33,7 @@ import { bestThumbUrl } from "./artwork";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-/** YouTube Music search filter chips — BitChord mobile's SearchFilter.params (Models.kt). */
+/** YouTube Music search filter chips and their params. */
 export const SEARCH_FILTER_PARAMS: Record<string, string | null> = {
   all: null,
   songs: "EgWKAQIIAWoKEAkQChAFEAMQBA==",
@@ -1193,7 +1193,7 @@ export function parseRemotePlaylistPage(response: any, playlistId: string, moreT
  * response — "Lana Del Rey • Born To Die • 2011 • 3:43", the line the player
  * is served regardless of how bare the row that queued it was. This is what
  * the lyrics lookup needs when a search row shipped no credit ("Unknown
- * artist", as the mixed All page prints), and what BitChord mobile's
+ * artist", as the mixed All page prints), and what the mobile app's
  * parseWatchQueue reads from the same renderer.
  */
 export function parseQueueCredits(

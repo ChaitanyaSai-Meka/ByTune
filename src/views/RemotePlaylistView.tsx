@@ -1,5 +1,5 @@
 /**
- * A remote (YouTube) playlist page — BitChord mobile's DetailScreen for a
+ * A remote (YouTube) playlist page — the detail screen for a
  * playlist browse: full-bleed cover hero with the curator/views credit line
  * and the "PLAYLIST • N TRACKS" metadata line, shuffle + play controls, then
  * the playlist's own numbered track rows.

@@ -1,5 +1,5 @@
 /**
- * Search results — BitChord mobile's SearchScreen, on the desktop.
+ * Search results.
  *
  * The rows come straight from YouTube Music (the same endpoint, filter params
  * and parser the phone uses), so the list is YouTube's own: its order, its
@@ -477,7 +477,7 @@ export function SearchView() {
   const pushSearch = useRecents((s) => s.pushSearch);
   const playQueue = usePlayer((s) => s.playQueue);
 
-  // BitChord mobile keeps an LRU of full result sets per (filter, query); a
+  // An LRU of full result sets per (filter, query): a
   // repeated search answers from it instantly, and a filter tab flip re-runs
   // rather than re-filtering (the tabs are different requests upstream).
   const cache = useRef(new Map<string, SearchPageResult>());
@@ -557,7 +557,7 @@ export function SearchView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trimmed, filter, retryNonce]);
 
-  // BitChord mobile's paging rule: fetch the next page when the list nears its
+  // Paging: fetch the next page when the list nears its
   // end (a sentinel 4 rows before the bottom), merging without duplicates.
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
